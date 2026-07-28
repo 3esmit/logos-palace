@@ -1,7 +1,31 @@
+#include "logos_test.h"
+
 #include "palace_sha256.h"
 #include "palace_storage.h"
 
-#include "logos_test.h"
+LOGOS_TEST(storage_cid_boundary_accepts_only_bounded_alphanumeric_ids) {
+    LOGOS_ASSERT_TRUE(palace::isSafePalaceCid("bafy1234"));
+    LOGOS_ASSERT_FALSE(palace::isSafePalaceCid("../bafy"));
+    LOGOS_ASSERT_FALSE(palace::isSafePalaceCid(std::string(129U, 'a')));
+}
+
+LOGOS_TEST(storage_upload_terminal_requires_correlated_session_and_safe_cid) {
+    const palace::StorageUploadTerminal success = palace::parseStorageUploadDone(
+        R"({"success":true,"sessionId":"session-1","cid":"bafy1234"})");
+    LOGOS_ASSERT_TRUE(success.accepted);
+    LOGOS_ASSERT_TRUE(success.succeeded);
+    LOGOS_ASSERT_EQ(success.sessionId, std::string("session-1"));
+    LOGOS_ASSERT_EQ(success.cid, std::string("bafy1234"));
+
+    const palace::StorageUploadTerminal failed = palace::parseStorageUploadDone(
+        R"({"success":false,"sessionId":"session-2","error":"offline"})");
+    LOGOS_ASSERT_TRUE(failed.accepted);
+    LOGOS_ASSERT_FALSE(failed.succeeded);
+    LOGOS_ASSERT_FALSE(palace::parseStorageUploadDone(
+        R"({"success":true,"sessionId":"session-3","cid":"../escape"})").accepted);
+    LOGOS_ASSERT_FALSE(palace::parseStorageUploadDone(
+        R"({"success":"yes","sessionId":"session-4","cid":"bafy1234"})").accepted);
+}
 
 namespace {
 

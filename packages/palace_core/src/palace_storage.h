@@ -9,6 +9,18 @@
 
 namespace palace {
 
+bool isSafePalaceCid(const std::string& value);
+
+struct StorageUploadTerminal {
+  bool accepted = false;
+  bool succeeded = false;
+  std::string sessionId;
+  std::string cid;
+};
+
+// Parses the Storage upload terminal event before it can update Palace state.
+StorageUploadTerminal parseStorageUploadDone(const std::string& payload);
+
 struct PendingStorageAsset {
   std::string operationId;
   AssetRefV1 reference;

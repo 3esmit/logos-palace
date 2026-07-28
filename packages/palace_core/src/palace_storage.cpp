@@ -1,6 +1,9 @@
 #include "palace_storage.h"
 
-#include <cctype>
+#include <QByteArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include <limits>
 
 namespace palace {
@@ -22,18 +25,47 @@ bool isLowerHexDigest(const std::string &value) {
   return true;
 }
 
-bool isSafeCid(const std::string &value) {
+} // namespace
+
+bool isSafePalaceCid(const std::string &value) {
   if (value.size() < 2U || value.size() > 128U)
     return false;
   for (const unsigned char character : value) {
-    if (!std::isalnum(character))
+    if (!((character >= '0' && character <= '9')
+          || (character >= 'A' && character <= 'Z')
+          || (character >= 'a' && character <= 'z')))
       return false;
   }
   return true;
 }
 
+StorageUploadTerminal parseStorageUploadDone(const std::string &payload) {
+  const QJsonDocument document =
+      QJsonDocument::fromJson(QByteArray::fromStdString(payload));
+  if (!document.isObject())
+    return {};
+
+  const QJsonObject object = document.object();
+  const QJsonValue success = object.value(QStringLiteral("success"));
+  const QJsonValue session = object.value(QStringLiteral("sessionId"));
+  if (!success.isBool() || !session.isString())
+    return {};
+  const std::string sessionId = session.toString().toStdString();
+  if (sessionId.empty() || sessionId.size() > 256U)
+    return {};
+
+  if (!success.toBool())
+    return {true, false, sessionId, {}};
+  const QJsonValue cid = object.value(QStringLiteral("cid"));
+  if (!cid.isString() || !isSafePalaceCid(cid.toString().toStdString()))
+    return {};
+  return {true, true, sessionId, cid.toString().toStdString()};
+}
+
+namespace {
+
 bool isExpectedPng(const AssetRefV1 &reference) {
-  if (!isSafeCid(reference.sourceCid) || !isSafeCid(reference.derivativeCid) ||
+  if (!isSafePalaceCid(reference.sourceCid) || !isSafePalaceCid(reference.derivativeCid) ||
       reference.byteLength == 0U || reference.byteLength > kMaxEncodedBytes ||
       reference.mediaType != "image/png" ||
       reference.technicalProfile != "palace-png-v1" ||

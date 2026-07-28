@@ -9,6 +9,7 @@
 #include <QImageReader>
 #include <QSaveFile>
 
+#include <algorithm>
 #include <utility>
 
 namespace palace {
@@ -27,6 +28,15 @@ bool hasSafeDecodedSize(const QSize& size)
     if (size.width() <= 0 || size.height() <= 0)
         return false;
     return static_cast<qint64>(size.width()) * size.height() <= kMaxDecodedPixels;
+}
+
+bool isLowerHexDigest(const std::string& value)
+{
+    return value.size() == 64U
+        && std::all_of(value.begin(), value.end(), [](unsigned char character) {
+               return (character >= '0' && character <= '9')
+                   || (character >= 'a' && character <= 'f');
+           });
 }
 
 class QtPngDecoder final : public BoundedRasterDecoder {
@@ -119,6 +129,34 @@ VerifiedAsset VerifiedAssetStore::stagePngDerivative(const AssetRefV1& reference
         return reject("asset-atomic-stage-failed");
     }
     return verified;
+}
+
+std::optional<std::string> VerifiedAssetStore::verifiedPngPath(const std::string& handle) const
+{
+    if (m_instancePersistencePath.empty() || m_directory.empty() || !isLowerHexDigest(handle))
+        return std::nullopt;
+
+    const QString instanceRoot = QString::fromStdString(m_instancePersistencePath);
+    const QString assetDirectory = QDir(QString::fromStdString(m_directory)).canonicalPath();
+    if (!isUnder(assetDirectory, instanceRoot))
+        return std::nullopt;
+
+    const QFileInfo candidate(assetDirectory + QLatin1Char('/')
+                              + QString::fromStdString(handle) + QStringLiteral(".png"));
+    const QString canonicalPath = candidate.canonicalFilePath();
+    if (candidate.isSymLink() || !candidate.isFile() || !isUnder(canonicalPath, assetDirectory))
+        return std::nullopt;
+
+    QFile input(canonicalPath);
+    if (!input.open(QIODevice::ReadOnly))
+        return std::nullopt;
+    const QByteArray encoded = input.read(10 * 1024 * 1024 + 1);
+    if (!input.atEnd() || encoded.size() > 10 * 1024 * 1024)
+        return std::nullopt;
+    const std::string bytes(encoded.constData(), static_cast<std::size_t>(encoded.size()));
+    if (crypto::sha256Hex(bytes) != handle)
+        return std::nullopt;
+    return canonicalPath.toStdString();
 }
 
 const std::string& VerifiedAssetStore::directory() const

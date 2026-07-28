@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "palace_asset.h"
@@ -15,6 +16,9 @@ public:
 
     VerifiedAsset stagePngDerivative(const AssetRefV1& reference,
                                      const std::string& encoded) const;
+    // Resolves a digest handle only after rechecking containment, file type,
+    // and bytes. Callers never receive a path derived from a CID or QML input.
+    std::optional<std::string> verifiedPngPath(const std::string& handle) const;
     const std::string& directory() const;
 
 private:

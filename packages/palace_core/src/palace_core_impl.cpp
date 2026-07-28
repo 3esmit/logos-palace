@@ -133,6 +133,8 @@ void PalaceCoreImpl::onContextReady()
     m_verifiedAssetStore = std::make_unique<palace::VerifiedAssetStore>(instancePersistencePath());
     modules().storage_module.onStorageStart(
         [this](const std::string& payload) { storageStartFinished(payload); });
+    modules().storage_module.onStorageUploadDone(
+        [this](const std::string& payload) { storageUploadFinished(payload); });
     modules().storage_module.onStorageDownloadDoneV2(
         [this](const std::string& payload) { storageDownloadFinished(payload); });
     if (!m_projectionStore->load(m_projection)) {
@@ -315,6 +317,36 @@ std::string PalaceCoreImpl::assetStatus(const std::string& derivativeCid) const
     return found == m_assetStatus.end() ? "unknown" : found->second;
 }
 
+std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
+{
+    if (!isContextReady() || !m_verifiedAssetStore || !m_storageRunning)
+        return "rejected=storage-not-running";
+    const auto existing = m_publicationStatus.find(handle);
+    if (existing != m_publicationStatus.end()
+        && (existing->second == "publishing" || existing->second.rfind("published;cid=", 0) == 0)) {
+        return "ok;asset=" + existing->second;
+    }
+
+    const auto path = m_verifiedAssetStore->verifiedPngPath(handle);
+    if (!path.has_value())
+        return "rejected=unverified-asset-handle";
+    const StdLogosResult accepted = modules().storage_module.uploadUrl(*path, 65536);
+    if (!accepted.success || accepted.value.empty())
+        return "rejected=storage-upload;" + accepted.error;
+    if (!m_storagePublicationBySession.emplace(accepted.value, handle).second) {
+        modules().storage_module.uploadCancel(accepted.value);
+        return "rejected=duplicate-storage-session";
+    }
+    m_publicationStatus[handle] = "publishing";
+    return "ok;asset=publishing";
+}
+
+std::string PalaceCoreImpl::publicationStatus(const std::string& handle) const
+{
+    const auto found = m_publicationStatus.find(handle);
+    return found == m_publicationStatus.end() ? "unknown" : found->second;
+}
+
 std::string PalaceCoreImpl::roomTitle() const
 {
     return m_projection.currentRoomTitle();
@@ -432,6 +464,24 @@ void PalaceCoreImpl::storageStartFinished(const std::string& payload)
 {
     m_storageStartRequested = false;
     m_storageRunning = jsonSuccess(payload);
+}
+
+void PalaceCoreImpl::storageUploadFinished(const std::string& payload)
+{
+    const palace::StorageUploadTerminal result = palace::parseStorageUploadDone(payload);
+    if (!result.accepted)
+        return;
+    const auto pending = m_storagePublicationBySession.find(result.sessionId);
+    if (pending == m_storagePublicationBySession.end())
+        return;
+    const std::string handle = pending->second;
+    m_storagePublicationBySession.erase(pending);
+
+    if (!result.succeeded) {
+        m_publicationStatus[handle] = "publish-failed";
+        return;
+    }
+    m_publicationStatus[handle] = "published;cid=" + result.cid;
 }
 
 void PalaceCoreImpl::storageDownloadFinished(const std::string& payload)

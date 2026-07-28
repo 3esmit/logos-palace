@@ -82,3 +82,23 @@ LOGOS_TEST(verified_asset_store_does_not_create_a_file_for_an_invalid_reference)
     LOGOS_ASSERT_EQ(rejected.reason, std::string("byte-length-or-digest-mismatch"));
     LOGOS_ASSERT_FALSE(QDir(QString::fromStdString(store.directory())).exists());
 }
+
+LOGOS_TEST(verified_asset_store_resolves_only_untampered_digest_handles) {
+    QTemporaryDir temporary;
+    LOGOS_ASSERT_TRUE(temporary.isValid());
+    const QString instanceRoot = temporary.path() + QStringLiteral("/instance");
+    LOGOS_ASSERT_TRUE(QDir().mkpath(instanceRoot));
+
+    palace::VerifiedAssetStore store(instanceRoot.toStdString());
+    const std::string encoded = encodedPng();
+    const palace::VerifiedAsset staged = store.stagePngDerivative(assetRef(encoded), encoded);
+    LOGOS_ASSERT_TRUE(staged.accepted);
+    LOGOS_ASSERT_TRUE(store.verifiedPngPath(staged.handle).has_value());
+    LOGOS_ASSERT_FALSE(store.verifiedPngPath("../escape").has_value());
+
+    QFile output(QString::fromStdString(store.directory() + "/" + staged.handle + ".png"));
+    LOGOS_ASSERT_TRUE(output.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    LOGOS_ASSERT_EQ(output.write("tampered"), static_cast<qint64>(8));
+    output.close();
+    LOGOS_ASSERT_FALSE(store.verifiedPngPath(staged.handle).has_value());
+}

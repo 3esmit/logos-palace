@@ -32,6 +32,8 @@ public:
                                    std::uint32_t width,
                                    std::uint32_t height);
     std::string assetStatus(const std::string& derivativeCid) const;
+    std::string publishVerifiedPng(const std::string& handle);
+    std::string publicationStatus(const std::string& handle) const;
     std::string roomTitle() const;
     std::string syncHealth() const;
     std::string localProjection() const;
@@ -52,6 +54,7 @@ private:
     void persistProjection();
     void persistActionJournal();
     void storageStartFinished(const std::string& payload);
+    void storageUploadFinished(const std::string& payload);
     void storageDownloadFinished(const std::string& payload);
     // Observer and Delivery callbacks use these internally. They remain hidden
     // from UI modules so a local caller cannot forge a durable lifecycle stage.
@@ -72,6 +75,8 @@ private:
     std::unique_ptr<palace::VerifiedAssetStore> m_verifiedAssetStore;
     palace::StorageAssetQueue m_storageAssets;
     std::map<std::string, std::string> m_assetStatus;
+    std::map<std::string, std::string> m_storagePublicationBySession;
+    std::map<std::string, std::string> m_publicationStatus;
     bool m_deliveryNodeCreated = false;
     bool m_storageNodeCreated = false;
     bool m_storageStartRequested = false;
