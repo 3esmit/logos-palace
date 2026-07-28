@@ -8,6 +8,7 @@
 
 #include "palace_action_journal.h"
 #include "palace_projection.h"
+#include "palace_verified_asset_store.h"
 
 // Palace Core is the sole future owner of LEZ, Delivery, Storage, VM, local
 // projection, and recovery composition. This initial API exposes the durable
@@ -41,5 +42,6 @@ private:
     palace::ActionJournal m_actionJournal;
     palace::PalaceProjection m_projection;
     std::unique_ptr<palace::ProjectionStore> m_projectionStore;
+    std::unique_ptr<palace::VerifiedAssetStore> m_verifiedAssetStore;
     bool m_deliveryNodeCreated = false;
 };

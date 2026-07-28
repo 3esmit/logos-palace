@@ -19,6 +19,7 @@ void PalaceCoreImpl::onContextReady()
     if (instancePersistencePath().empty())
         return;
     m_projectionStore = std::make_unique<palace::ProjectionStore>(instancePersistencePath());
+    m_verifiedAssetStore = std::make_unique<palace::VerifiedAssetStore>(instancePersistencePath());
     if (!m_projectionStore->load(m_projection)) {
         m_projection.setSyncHealth(palace::SyncHealth::Degraded);
         persistProjection();

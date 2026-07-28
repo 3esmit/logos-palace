@@ -6,6 +6,7 @@ if(NOT DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
 endif()
 include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
 find_package(OpenSSL REQUIRED)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
 string(JSON MODULE_NAME GET ${METADATA_JSON} name)
@@ -25,6 +26,8 @@ logos_module(
         src/palace_projection.cpp
         src/palace_asset.h
         src/palace_asset.cpp
+        src/palace_verified_asset_store.h
+        src/palace_verified_asset_store.cpp
         src/palace_identity.h
         src/palace_identity.cpp
         src/palace_action_journal.h
@@ -34,4 +37,4 @@ logos_module(
     INCLUDE_DIRS src
 )
 
-target_link_libraries(${MODULE_NAME}_module_plugin PRIVATE OpenSSL::Crypto)
+target_link_libraries(${MODULE_NAME}_module_plugin PRIVATE OpenSSL::Crypto Qt6::Core Qt6::Gui)
