@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cctype>
 #include <optional>
+#include <vector>
 
 #include <QDir>
 #include <QFile>
@@ -12,6 +13,7 @@
 #include <QJsonObject>
 
 #include "logos_sdk.h"
+#include "logos_json.h"
 
 #include "palace_delivery.h"
 #include "palace_lez.h"
@@ -107,15 +109,15 @@ std::optional<palace::PalaceLezInstructionV1> parseTransition(const std::string&
     return instruction;
 }
 
-QByteArray encodeLezWords(const std::vector<std::uint32_t>& words)
+std::vector<std::uint8_t> encodeLezWords(const std::vector<std::uint32_t>& words)
 {
-    QByteArray bytes;
-    bytes.reserve(static_cast<int>(words.size() * sizeof(std::uint32_t)));
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(words.size() * sizeof(std::uint32_t));
     for (const std::uint32_t word : words) {
-        bytes.append(static_cast<char>(word & 0xffU));
-        bytes.append(static_cast<char>((word >> 8U) & 0xffU));
-        bytes.append(static_cast<char>((word >> 16U) & 0xffU));
-        bytes.append(static_cast<char>((word >> 24U) & 0xffU));
+        bytes.push_back(static_cast<std::uint8_t>(word & 0xffU));
+        bytes.push_back(static_cast<std::uint8_t>((word >> 8U) & 0xffU));
+        bytes.push_back(static_cast<std::uint8_t>((word >> 16U) & 0xffU));
+        bytes.push_back(static_cast<std::uint8_t>((word >> 24U) & 0xffU));
     }
     return bytes;
 }
@@ -359,22 +361,26 @@ std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
     if (!wire.accepted)
         return "rejected=invalid-palace-wire;reason=" + wire.reason;
 
-    const QStringList accounts {
-        QString::fromStdString(request.stateAccountIdHex),
-        QString::fromStdString(request.callerAccountIdHex),
+    const std::vector<std::string> accounts {
+        request.stateAccountIdHex,
+        request.callerAccountIdHex,
     };
-    const QVariantList signers {false, true};
+    const LogosList signers = LogosList::array({false, true});
+    // The universal LEZ proxy declares instruction as CBOR `any`. Binary JSON
+    // preserves the LEZ little-endian RISC Zero words as a CBOR byte string;
+    // arrays of words are not carried through the universal module boundary.
+    const LogosMap instructionBytes = LogosMap::binary(encodeLezWords(wire.words));
     logos::CallError callError;
-    const QString response = modules().lez_core.send_generic_public_transaction(
+    const std::string response = modules().lez_core.send_generic_public_transaction(
         accounts,
         signers,
-        QVariant::fromValue(encodeLezWords(wire.words)),
-        QString::fromStdString(request.programIdHex),
+        instructionBytes,
+        request.programIdHex,
         &callError);
     if (!callError.ok())
         return "rejected=lez-submit-call-failed";
     const palace::PalaceLezSubmissionResult submitted =
-        palace::PalaceLezCodec::parseSubmissionResult(response.toStdString());
+        palace::PalaceLezCodec::parseSubmissionResult(response);
     if (!submitted.accepted)
         return "rejected=lez-submit;reason=" + submitted.reason;
     if (!m_actionJournal.markSubmittedToLez(actionId, submitted.transactionHash))

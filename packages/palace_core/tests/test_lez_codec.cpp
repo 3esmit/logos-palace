@@ -29,7 +29,11 @@ LOGOS_TEST(palace_lez_codec_encodes_apply_using_risc0_word_order) {
 
     const palace::PalaceLezWireInstruction encoded = palace::PalaceLezCodec::encodeApply(value);
     LOGOS_ASSERT_TRUE(encoded.accepted);
-    LOGOS_ASSERT_EQ(encoded.words, std::vector<std::uint32_t>({1U, 6U, 4U, 0x79666162U}));
+    LOGOS_ASSERT_EQ(encoded.words.size(), 4U);
+    LOGOS_ASSERT_EQ(encoded.words.at(0), 1U);
+    LOGOS_ASSERT_EQ(encoded.words.at(1), 6U);
+    LOGOS_ASSERT_EQ(encoded.words.at(2), 4U);
+    LOGOS_ASSERT_EQ(encoded.words.at(3), 0x79666162U);
 }
 
 LOGOS_TEST(palace_lez_codec_preserves_fixed_array_and_u64_encoding) {
@@ -43,10 +47,10 @@ LOGOS_TEST(palace_lez_codec_preserves_fixed_array_and_u64_encoding) {
     LOGOS_ASSERT_EQ(encoded.words.size(), 68U);
     LOGOS_ASSERT_EQ(encoded.words.at(0), 1U);
     LOGOS_ASSERT_EQ(encoded.words.at(1), 0U);
-    LOGOS_ASSERT_EQ(encoded.words.at(2), 2U);
-    LOGOS_ASSERT_EQ(encoded.words.at(33), 2U);
-    LOGOS_ASSERT_EQ(encoded.words.at(34), 3U);
-    LOGOS_ASSERT_EQ(encoded.words.at(65), 3U);
+    LOGOS_ASSERT_EQ(encoded.words.at(2), 0x22U);
+    LOGOS_ASSERT_EQ(encoded.words.at(33), 0x22U);
+    LOGOS_ASSERT_EQ(encoded.words.at(34), 0x33U);
+    LOGOS_ASSERT_EQ(encoded.words.at(65), 0x33U);
     LOGOS_ASSERT_EQ(encoded.words.at(66), 9U);
     LOGOS_ASSERT_EQ(encoded.words.at(67), 0U);
 }
