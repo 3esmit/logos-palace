@@ -48,12 +48,14 @@ mod palace {
         #[account(mut, owner = self_program_id, pda = literal("palace-state"))]
         state: AccountWithMetadata,
         #[account(signer)] caller: AccountWithMetadata,
+        ordered_action_id: u64,
         instruction: palace_program::core::PalaceInstruction,
     ) -> SpelResult {
         let mut palace_state = read_state(&state)?;
         palace_program::execute(
             &mut palace_state,
             caller.account_id.into_value(),
+            ordered_action_id,
             instruction,
         )
         .map_err(palace_error)?;
@@ -208,7 +210,8 @@ mod tests {
         let output = palace::apply(
             context(),
             state,
-            owner,
+            owner.clone(),
+            1,
             palace_program::core::PalaceInstruction::PublishManifest {
                 cid: "bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             },
@@ -219,7 +222,24 @@ mod tests {
         )
         .expect("updated state");
         assert_eq!(stored.revision, 1);
+        assert_eq!(stored.last_ordered_action_id, 1);
         assert_eq!(stored.manifests.len(), 1);
+
+        let replay_error = palace::apply(
+            context(),
+            AccountWithMetadata {
+                account: output.post_states[0].account().clone(),
+                is_authorized: false,
+                account_id: canonical,
+            },
+            owner,
+            1,
+            palace_program::core::PalaceInstruction::PublishManifest {
+                cid: "bafybeibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            },
+        )
+        .expect_err("consumed ordered action ID must not replay");
+        assert_eq!(replay_error.error_code(), 6_013);
 
         let error = palace::apply(
             context(),
@@ -229,6 +249,7 @@ mod tests {
                 account_id: canonical,
             },
             account(CALLER_ID, true),
+            2,
             palace_program::core::PalaceInstruction::PublishManifest {
                 cid: "bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             },
@@ -240,11 +261,12 @@ mod tests {
     #[test]
     fn guest_instruction_wire_matches_the_core_submit_codec_fixture() {
         let words = risc0_zkvm::serde::to_vec(&palace_program::GuestInstruction::Apply {
+            ordered_action_id: 0x0000_0002_0000_0001,
             instruction: palace_program::core::PalaceInstruction::PublishManifest {
                 cid: "bafy".into(),
             },
         })
         .expect("guest instruction serializes");
-        assert_eq!(words, vec![1, 6, 4, 0x7966_6162]);
+        assert_eq!(words, vec![1, 1, 2, 6, 4, 0x7966_6162]);
     }
 }

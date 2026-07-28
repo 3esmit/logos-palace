@@ -8,6 +8,10 @@ owned by the program thereafter.
 LEZ and SPEL are runtime dependencies only; all Palace state, instruction,
 guest, and image-build sources live in this repository.
 
+State schema v2 adds a strictly increasing `ordered_action_id` to every
+transition. Schema-v1 account bytes are intentionally incompatible; reinitialize
+Palace testnet state after deploying the schema-v2 guest image.
+
 Run deterministic contract checks:
 
 ```sh

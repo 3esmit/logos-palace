@@ -13,8 +13,9 @@ pub use palace_program_core as core;
 /// LEZ-facing instruction envelope.
 ///
 /// `Initialize` creates the one canonical public Palace state account. `Apply`
-/// carries an already-versioned Palace transition, which the guest runs only
-/// after LEZ has authenticated the caller and verified state-account ownership.
+/// carries the next ordered action ID and an already-versioned Palace
+/// transition, which the guest runs only after LEZ has authenticated the caller
+/// and verified state-account ownership.
 #[derive(Clone, Debug, Eq, PartialEq, BorshDeserialize, BorshSerialize, Deserialize, Serialize)]
 pub enum GuestInstruction {
     Initialize {
@@ -22,6 +23,7 @@ pub enum GuestInstruction {
         rooms: Vec<core::Room>,
     },
     Apply {
+        ordered_action_id: u64,
         instruction: core::PalaceInstruction,
     },
 }
@@ -37,9 +39,10 @@ pub fn initialize(
 pub fn execute(
     state: &mut core::PalaceState,
     authenticated_caller: core::AccountId,
+    ordered_action_id: u64,
     instruction: core::PalaceInstruction,
 ) -> Result<(), core::PalaceError> {
-    state.apply(authenticated_caller, instruction)
+    state.apply(authenticated_caller, ordered_action_id, instruction)
 }
 
 #[cfg(test)]
@@ -69,6 +72,7 @@ mod tests {
             execute(
                 &mut state,
                 owner,
+                1,
                 core::PalaceInstruction::PublishManifest {
                     cid: "bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 },
@@ -80,6 +84,7 @@ mod tests {
     #[test]
     fn lez_instruction_envelope_round_trips_without_schema_loss() {
         let instruction = GuestInstruction::Apply {
+            ordered_action_id: 9,
             instruction: core::PalaceInstruction::SetRoomLocked {
                 room_id: "lounge".into(),
                 locked: true,

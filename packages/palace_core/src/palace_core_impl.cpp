@@ -364,6 +364,9 @@ std::string PalaceCoreImpl::localProjection() const
 
 std::string PalaceCoreImpl::submitIntent(const std::string& actionId)
 {
+    std::uint64_t orderedActionId = 0;
+    if (!palace::PalaceLezCodec::parseOrderedActionId(actionId, orderedActionId))
+        return "rejected=invalid-ordered-action-id";
     const bool changed = m_actionJournal.createDraft(actionId) && m_actionJournal.queue(actionId);
     if (changed)
         persistActionJournal();
@@ -381,10 +384,14 @@ std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
     if (m_actionJournal.status(actionId).durableStage != palace::DurableActionStage::Queued)
         return "rejected=action-not-queued";
 
+    std::uint64_t orderedActionId = 0;
+    if (!palace::PalaceLezCodec::parseOrderedActionId(actionId, orderedActionId))
+        return "rejected=invalid-ordered-action-id";
     const auto instruction = parseTransition(transitionJson);
     if (!instruction.has_value())
         return "rejected=invalid-palace-transition";
     palace::PalaceLezSubmitRequestV1 request;
+    request.orderedActionId = orderedActionId;
     request.stateAccountIdHex = stateAccountIdHex;
     request.callerAccountIdHex = callerAccountIdHex;
     request.programIdHex = programIdHex;

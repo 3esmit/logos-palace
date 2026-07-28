@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u16 = 1;
+pub const SCHEMA_VERSION: u16 = 2;
 pub type AccountId = [u8; 32];
 pub type DeliveryKey = [u8; 32];
 
@@ -38,6 +38,7 @@ pub struct PalaceState {
     pub manifests: BTreeSet<String>,
     pub shared_spot_revisions: BTreeMap<(String, String), u64>,
     pub revision: u64,
+    pub last_ordered_action_id: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, BorshDeserialize, BorshSerialize, Deserialize, Serialize)]
@@ -89,6 +90,7 @@ pub enum PalaceError {
     OwnerCannotBeBanned,
     SpotRevisionNotAdvanced,
     RevisionExhausted,
+    OrderedActionIdOutOfSequence,
 }
 
 impl PalaceError {
@@ -108,6 +110,7 @@ impl PalaceError {
             Self::OwnerCannotBeBanned => 10,
             Self::SpotRevisionNotAdvanced => 11,
             Self::RevisionExhausted => 12,
+            Self::OrderedActionIdOutOfSequence => 13,
         }
     }
 }
@@ -144,19 +147,33 @@ impl PalaceState {
             manifests: BTreeSet::new(),
             shared_spot_revisions: BTreeMap::new(),
             revision: 0,
+            last_ordered_action_id: 0,
         })
     }
 
+    /// Apply exactly the next ordered action.
+    ///
+    /// Failed transitions leave both revision counters unchanged, so the same
+    /// ordered action ID may be retried with a corrected transition.
     pub fn apply(
         &mut self,
         caller: AccountId,
+        ordered_action_id: u64,
         instruction: PalaceInstruction,
     ) -> Result<(), PalaceError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(PalaceError::UnsupportedSchema);
         }
-        if self.revision == u64::MAX {
-            return Err(PalaceError::RevisionExhausted);
+        let next_revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(PalaceError::RevisionExhausted)?;
+        let next_ordered_action_id = self
+            .last_ordered_action_id
+            .checked_add(1)
+            .ok_or(PalaceError::OrderedActionIdOutOfSequence)?;
+        if ordered_action_id != next_ordered_action_id {
+            return Err(PalaceError::OrderedActionIdOutOfSequence);
         }
 
         match instruction {
@@ -252,7 +269,8 @@ impl PalaceState {
                 self.shared_spot_revisions.insert(key, revision);
             }
         }
-        self.revision += 1;
+        self.revision = next_revision;
+        self.last_ordered_action_id = ordered_action_id;
         Ok(())
     }
 
@@ -353,6 +371,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 BOB,
+                1,
                 PalaceInstruction::BindDeliveryKey {
                     subject: BOB,
                     delivery_key: [8; 32],
@@ -362,12 +381,17 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            state.apply(ALICE, PalaceInstruction::DelegateModerator { subject: BOB }),
+            state.apply(
+                ALICE,
+                2,
+                PalaceInstruction::DelegateModerator { subject: BOB }
+            ),
             Ok(())
         );
         assert_eq!(
             state.apply(
                 BOB,
+                3,
                 PalaceInstruction::SetRoomLocked {
                     room_id: "lounge".into(),
                     locked: true,
@@ -377,6 +401,7 @@ mod tests {
         );
         assert!(state.locked_rooms.contains("lounge"));
         assert_eq!(state.revision, 3);
+        assert_eq!(state.last_ordered_action_id, 3);
     }
 
     #[test]
@@ -385,6 +410,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 CAROL,
+                1,
                 PalaceInstruction::BanUser {
                     subject: BOB,
                     room_id: "atrium".into(),
@@ -394,6 +420,7 @@ mod tests {
         );
         assert!(state.user_bans.is_empty());
         assert_eq!(state.revision, 0);
+        assert_eq!(state.last_ordered_action_id, 0);
     }
 
     #[test]
@@ -402,6 +429,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 BOB,
+                1,
                 PalaceInstruction::BindDeliveryKey {
                     subject: BOB,
                     delivery_key: [8; 32],
@@ -413,6 +441,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 BOB,
+                2,
                 PalaceInstruction::BindDeliveryKey {
                     subject: BOB,
                     delivery_key: [7; 32],
@@ -424,6 +453,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 ALICE,
+                2,
                 PalaceInstruction::SetSharedSpotRevision {
                     room_id: "atrium".into(),
                     spot_id: "door".into(),
@@ -435,6 +465,7 @@ mod tests {
         assert_eq!(
             state.apply(
                 ALICE,
+                3,
                 PalaceInstruction::SetSharedSpotRevision {
                     room_id: "atrium".into(),
                     spot_id: "door".into(),
@@ -488,10 +519,140 @@ mod tests {
         assert_eq!(
             state.apply(
                 ALICE,
+                1,
                 PalaceInstruction::PublishManifest { cid: "ba".into() }
             ),
             Err(PalaceError::UnsupportedSchema)
         );
         assert_eq!(state.revision, 0);
+        assert_eq!(state.last_ordered_action_id, 0);
+    }
+
+    #[test]
+    fn ordered_action_ids_reject_replays_gaps_and_competing_transitions() {
+        let mut state = state();
+        let initial = state.clone();
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                2,
+                PalaceInstruction::PublishManifest { cid: "bafy".into() }
+            ),
+            Err(PalaceError::OrderedActionIdOutOfSequence)
+        );
+        assert_eq!(state, initial);
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                1,
+                PalaceInstruction::PublishManifest { cid: "bafy".into() }
+            ),
+            Ok(())
+        );
+        let after_first = state.clone();
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                1,
+                PalaceInstruction::PublishManifest {
+                    cid: "bafysecond".into()
+                }
+            ),
+            Err(PalaceError::OrderedActionIdOutOfSequence)
+        );
+        assert_eq!(state, after_first);
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.last_ordered_action_id, 1);
+        assert!(!state.manifests.contains("bafysecond"));
+    }
+
+    #[test]
+    fn rejected_transition_does_not_consume_the_ordered_action_id() {
+        let mut state = state();
+        let initial = state.clone();
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                1,
+                PalaceInstruction::PublishManifest { cid: "!".into() }
+            ),
+            Err(PalaceError::InvalidCid)
+        );
+        assert_eq!(state, initial);
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                1,
+                PalaceInstruction::PublishManifest { cid: "bafy".into() }
+            ),
+            Ok(())
+        );
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.last_ordered_action_id, 1);
+    }
+
+    #[test]
+    fn ordered_action_id_overflow_fails_closed() {
+        let mut state = state();
+        state.last_ordered_action_id = u64::MAX;
+        let exhausted = state.clone();
+
+        assert_eq!(
+            state.apply(
+                ALICE,
+                u64::MAX,
+                PalaceInstruction::PublishManifest { cid: "bafy".into() }
+            ),
+            Err(PalaceError::OrderedActionIdOutOfSequence)
+        );
+        assert_eq!(state, exhausted);
+        assert_eq!(PalaceError::OrderedActionIdOutOfSequence.code(), 13);
+    }
+
+    #[test]
+    fn schema_v2_state_bytes_reject_the_v1_layout() {
+        #[derive(BorshSerialize)]
+        struct PalaceStateV1 {
+            schema_version: u16,
+            owner: AccountId,
+            rooms: Vec<Room>,
+            users: BTreeMap<AccountId, UserRecord>,
+            moderators: BTreeSet<AccountId>,
+            locked_rooms: BTreeSet<String>,
+            user_bans: BTreeSet<(AccountId, String)>,
+            asset_bans: BTreeSet<(String, String)>,
+            manifests: BTreeSet<String>,
+            shared_spot_revisions: BTreeMap<(String, String), u64>,
+            revision: u64,
+        }
+
+        let state = state();
+        let legacy = PalaceStateV1 {
+            schema_version: 1,
+            owner: state.owner,
+            rooms: state.rooms.clone(),
+            users: state.users.clone(),
+            moderators: state.moderators.clone(),
+            locked_rooms: state.locked_rooms.clone(),
+            user_bans: state.user_bans.clone(),
+            asset_bans: state.asset_bans.clone(),
+            manifests: state.manifests.clone(),
+            shared_spot_revisions: state.shared_spot_revisions.clone(),
+            revision: state.revision,
+        };
+        let v1_bytes = borsh::to_vec(&legacy).expect("schema v1 fixture serializes");
+        assert!(PalaceState::try_from_slice(&v1_bytes).is_err());
+
+        let v2_bytes = borsh::to_vec(&state).expect("schema v2 state serializes");
+        let decoded =
+            PalaceState::try_from_slice(&v2_bytes).expect("schema v2 state must deserialize");
+        assert_eq!(decoded, state);
+        assert_eq!(decoded.schema_version, 2);
+        assert_eq!(decoded.last_ordered_action_id, 0);
     }
 }

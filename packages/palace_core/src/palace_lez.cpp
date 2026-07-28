@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 
 #include <QByteArray>
 #include <QJsonDocument>
@@ -90,8 +91,29 @@ bool hasSubmissionShape(const QJsonObject& result)
 
 } // namespace
 
+bool PalaceLezCodec::parseOrderedActionId(const std::string& value, std::uint64_t& output)
+{
+    if (value.empty() || value == "0" || (value.size() > 1U && value.front() == '0')
+        || !std::all_of(value.begin(), value.end(), [](unsigned char character) {
+            return character >= '0' && character <= '9';
+        })) {
+        return false;
+    }
+
+    std::uint64_t parsed = 0;
+    const auto [cursor, error] =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc() || cursor != value.data() + value.size())
+        return false;
+    output = parsed;
+    return true;
+}
+
 PalaceLezWireInstruction PalaceLezCodec::encodeApply(const PalaceLezSubmitRequestV1& request)
 {
+    if (request.orderedActionId == 0)
+        return {false, "invalid-ordered-action-id", {}};
+
     std::array<unsigned char, 32> stateAccountId{};
     std::array<unsigned char, 32> callerAccountId{};
     std::array<unsigned char, 32> programId{};
@@ -152,6 +174,7 @@ PalaceLezWireInstruction PalaceLezCodec::encodeApply(const PalaceLezSubmitReques
     std::vector<std::uint32_t> words;
     words.reserve(128U);
     words.push_back(1U); // GuestInstruction::Apply
+    writeU64(words, request.orderedActionId);
     words.push_back(static_cast<std::uint32_t>(request.instruction.kind));
     switch (request.instruction.kind) {
     case PalaceLezInstructionKind::BindDeliveryKey:

@@ -32,6 +32,7 @@ struct PalaceLezInstructionV1 {
 };
 
 struct PalaceLezSubmitRequestV1 {
+    std::uint64_t orderedActionId = 0;
     std::string stateAccountIdHex;
     std::string callerAccountIdHex;
     std::string programIdHex;
@@ -55,6 +56,7 @@ struct PalaceLezSubmissionResult {
 // test contains a matching serializer fixture.
 class PalaceLezCodec {
 public:
+    static bool parseOrderedActionId(const std::string& value, std::uint64_t& output);
     static PalaceLezWireInstruction encodeApply(const PalaceLezSubmitRequestV1& request);
     static PalaceLezSubmissionResult parseSubmissionResult(const std::string& responseJson);
 };
