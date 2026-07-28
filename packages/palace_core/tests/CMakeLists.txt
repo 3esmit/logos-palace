@@ -12,6 +12,7 @@ logos_test(
         ../src/palace_sha256.cpp
         ../src/palace_authority.cpp
         ../src/palace_delivery.cpp
+        ../src/palace_delivery_session.cpp
         ../src/palace_projection.cpp
         ../src/palace_asset.cpp
         ../src/palace_storage.cpp
@@ -24,6 +25,7 @@ logos_test(
         main.cpp
         test_availability.cpp
         test_authority_delivery.cpp
+        test_delivery_session.cpp
         test_projection_store.cpp
         test_asset_covenant.cpp
         test_storage_asset_queue.cpp

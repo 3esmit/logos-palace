@@ -61,6 +61,7 @@ struct DeliveryPolicy {
     std::int64_t maxLifetimeSeconds = 300;
     std::int64_t minMotionIntervalSeconds = 0;
     std::size_t maxPayloadBytes = 1024;
+    std::size_t maxTrackedSenders = 512;
     std::map<std::string, std::string> allowedProps;
     const AuthorityProjection* authority = nullptr;
 };
@@ -84,6 +85,10 @@ struct DeliveryPublication {
     std::uint64_t sequence = 0;
 };
 
+struct DeliverySequenceStateV1 {
+    std::map<std::string, std::uint64_t> lastSequence;
+};
+
 std::string canonicalDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope);
 std::string encodeDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope);
 DeliveryEnvelopeDecode decodeDeliveryEnvelope(const std::string& encoded);
@@ -100,6 +105,10 @@ public:
                                const PalaceDeliveryEnvelopeV1& envelope,
                                const DeliveryPolicy& policy,
                                const DeliverySignatureVerifier& verifier);
+
+    DeliverySequenceStateV1 sequenceState() const;
+    bool restoreSequenceState(const DeliverySequenceStateV1& state,
+                              std::size_t maxTrackedSenders);
 
 private:
     std::map<std::string, std::uint64_t> m_lastSequence;
@@ -119,6 +128,10 @@ public:
                                 std::int64_t lifetimeSeconds,
                                 const DeliverySignatureSigner& signer,
                                 const DeliverySignatureVerifier& verifier);
+
+    DeliverySequenceStateV1 sequenceState() const;
+    bool restoreSequenceState(const DeliverySequenceStateV1& state,
+                              std::size_t maxTrackedSenders);
 
 private:
     DeliveryIngress m_preflight;

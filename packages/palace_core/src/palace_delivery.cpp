@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <limits>
 #include <sstream>
+#include <utility>
 
 namespace palace {
 namespace {
@@ -25,6 +27,32 @@ bool isIdentifier(const std::string& value)
     return std::all_of(value.begin(), value.end(), [](unsigned char character) {
         return std::isalnum(character) != 0 || character == '_' || character == '-';
     });
+}
+
+bool isSenderStateKey(const std::string& value)
+{
+    if (value.empty() || value.size() > 96U)
+        return false;
+    const std::size_t separator = value.rfind('@');
+    if (separator == std::string::npos || separator == 0U || separator + 1U >= value.size())
+        return false;
+    if (!isIdentifier(value.substr(0, separator)))
+        return false;
+    std::int64_t keyEpoch = -1;
+    const char* first = value.data() + separator + 1U;
+    const char* last = value.data() + value.size();
+    const auto parsed = std::from_chars(first, last, keyEpoch);
+    return parsed.ec == std::errc() && parsed.ptr == last && keyEpoch >= 0;
+}
+
+bool validSequenceState(const DeliverySequenceStateV1& state, std::size_t maxTrackedSenders)
+{
+    if (maxTrackedSenders == 0U || state.lastSequence.size() > maxTrackedSenders)
+        return false;
+    return std::all_of(state.lastSequence.begin(), state.lastSequence.end(),
+        [](const auto& entry) {
+            return isSenderStateKey(entry.first) && entry.second > 0U;
+        });
 }
 
 bool isText(const std::string& value, std::size_t limit)
@@ -236,7 +264,8 @@ DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
                                              const DeliverySignatureVerifier& verifier)
 {
     if (policy.authority == nullptr || policy.now <= 0 || policy.networkId.empty()
-        || policy.palaceId.empty() || policy.roomId.empty()) {
+        || policy.palaceId.empty() || policy.roomId.empty()
+        || policy.maxTrackedSenders == 0U) {
         return reject("invalid-policy");
     }
     if (envelope.protocolVersion != 1 || envelope.networkId != policy.networkId
@@ -274,6 +303,10 @@ DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
     const auto previous = m_lastSequence.find(key);
     if (previous != m_lastSequence.end() && envelope.senderSequence <= previous->second)
         return reject("duplicate-or-replayed-sequence");
+    if (previous == m_lastSequence.end()
+        && m_lastSequence.size() >= policy.maxTrackedSenders) {
+        return reject("replay-state-capacity-exceeded");
+    }
     if (envelope.kind == DeliveryKind::Motion && policy.minMotionIntervalSeconds > 0) {
         const auto lastMotion = m_lastMotionAt.find(key);
         if (lastMotion != m_lastMotionAt.end()
@@ -288,6 +321,21 @@ DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
     return {true, "accepted"};
 }
 
+DeliverySequenceStateV1 DeliveryIngress::sequenceState() const
+{
+    return {m_lastSequence};
+}
+
+bool DeliveryIngress::restoreSequenceState(const DeliverySequenceStateV1& state,
+                                           std::size_t maxTrackedSenders)
+{
+    if (!validSequenceState(state, maxTrackedSenders))
+        return false;
+    m_lastSequence = state.lastSequence;
+    m_lastMotionAt.clear();
+    return true;
+}
+
 DeliveryPublication DeliveryEgress::prepare(const DeliveryPolicy& policy,
                                              const std::string& senderUserId,
                                              std::int64_t senderKeyEpoch,
@@ -299,7 +347,8 @@ DeliveryPublication DeliveryEgress::prepare(const DeliveryPolicy& policy,
                                              const DeliverySignatureVerifier& verifier)
 {
     if (policy.authority == nullptr || senderUserId.empty() || senderKeyEpoch < 0
-        || createdAt <= 0 || lifetimeSeconds <= 0) {
+        || createdAt <= 0 || lifetimeSeconds <= 0
+        || createdAt > std::numeric_limits<std::int64_t>::max() - lifetimeSeconds) {
         return {false, "invalid-egress-request", {}, {}, 0U};
     }
     const std::string publicKey = signer.publicKey();
@@ -308,6 +357,10 @@ DeliveryPublication DeliveryEgress::prepare(const DeliveryPolicy& policy,
     }
     const std::string senderKey = senderUserId + "@" + std::to_string(senderKeyEpoch);
     const auto previous = m_lastSequence.find(senderKey);
+    if (previous == m_lastSequence.end()
+        && m_lastSequence.size() >= policy.maxTrackedSenders) {
+        return {false, "egress-state-capacity-exceeded", {}, {}, 0U};
+    }
     const std::uint64_t sequence = previous == m_lastSequence.end() ? 1U : previous->second + 1U;
     if (sequence == 0U)
         return {false, "sequence-exhausted", {}, {}, 0U};
@@ -337,6 +390,25 @@ DeliveryPublication DeliveryEgress::prepare(const DeliveryPolicy& policy,
     m_lastSequence[senderKey] = sequence;
     const std::string encoded = encodeDeliveryEnvelope(envelope);
     return {true, "accepted", topic, std::vector<std::uint8_t>(encoded.begin(), encoded.end()), sequence};
+}
+
+DeliverySequenceStateV1 DeliveryEgress::sequenceState() const
+{
+    return {m_lastSequence};
+}
+
+bool DeliveryEgress::restoreSequenceState(const DeliverySequenceStateV1& state,
+                                          std::size_t maxTrackedSenders)
+{
+    if (!validSequenceState(state, maxTrackedSenders))
+        return false;
+
+    DeliveryIngress restoredPreflight;
+    if (!restoredPreflight.restoreSequenceState(state, maxTrackedSenders))
+        return false;
+    m_lastSequence = state.lastSequence;
+    m_preflight = std::move(restoredPreflight);
+    return true;
 }
 
 } // namespace palace

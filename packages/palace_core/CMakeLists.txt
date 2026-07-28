@@ -22,6 +22,8 @@ logos_module(
         src/palace_authority.cpp
         src/palace_delivery.h
         src/palace_delivery.cpp
+        src/palace_delivery_session.h
+        src/palace_delivery_session.cpp
         src/palace_projection.h
         src/palace_projection.cpp
         src/palace_asset.h
