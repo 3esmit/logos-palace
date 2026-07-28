@@ -1,5 +1,6 @@
 #include "palace_action_journal.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -18,8 +19,9 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr const char* kJournalFileName = "action-journal-v1";
-constexpr const char* kTemporaryFileName = "action-journal-v1.next";
+constexpr const char* kJournalFileName = "action-journal-v2";
+constexpr const char* kLegacyJournalFileName = "action-journal-v1";
+constexpr const char* kTemporaryFileName = "action-journal-v2.next";
 constexpr char kHexDigits[] = "0123456789abcdef";
 
 bool flushFile(const fs::path& path)
@@ -116,6 +118,13 @@ bool parseStage(const std::string& value, DurableActionStage& stage)
     return true;
 }
 
+bool isCanonicalTransactionHash(const std::string& value)
+{
+    return value.size() == 64U && std::all_of(value.begin(), value.end(), [](unsigned char character) {
+        return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+    });
+}
+
 std::string serializeRecord(const ActionJournal& journal)
 {
     const std::string state = journal.canonicalState();
@@ -151,12 +160,15 @@ bool ActionJournal::queue(const std::string& actionId)
     return true;
 }
 
-bool ActionJournal::markSubmittedToLez(const std::string& actionId)
+bool ActionJournal::markSubmittedToLez(const std::string& actionId, const std::string& transactionHash)
 {
     const auto found = m_actions.find(actionId);
-    if (found == m_actions.end() || found->second.durableStage != DurableActionStage::Queued)
+    if (found == m_actions.end() || found->second.durableStage != DurableActionStage::Queued
+        || !isCanonicalTransactionHash(transactionHash)) {
         return false;
+    }
     found->second.durableStage = DurableActionStage::SubmittedToLez;
+    found->second.transactionHash = transactionHash;
     return true;
 }
 
@@ -237,40 +249,70 @@ ActionStatus ActionJournal::status(const std::string& actionId) const
 std::string ActionJournal::canonicalState() const
 {
     std::ostringstream state;
-    state << "version=1\n";
+    state << "version=2\n";
     for (const auto& [actionId, status] : m_actions) {
         state << hexEncode(actionId) << ';'
               << static_cast<unsigned int>(status.durableStage) << ';'
-              << (status.deliveryPublished ? '1' : '0') << '\n';
+              << (status.deliveryPublished ? '1' : '0') << ';'
+              << (status.transactionHash.empty() ? "-" : status.transactionHash) << '\n';
     }
     return state.str();
 }
 
 bool ActionJournal::restoreCanonicalState(const std::string& serialized)
 {
-    static constexpr const char* kPrefix = "version=1\n";
-    if (serialized.rfind(kPrefix, 0) != 0)
+    static constexpr const char* kVersionOnePrefix = "version=1\n";
+    static constexpr const char* kVersionTwoPrefix = "version=2\n";
+    const bool legacyVersion = serialized.rfind(kVersionOnePrefix, 0) == 0;
+    const bool currentVersion = serialized.rfind(kVersionTwoPrefix, 0) == 0;
+    if (!legacyVersion && !currentVersion)
         return false;
 
     std::map<std::string, ActionStatus> restored;
-    std::istringstream input(serialized.substr(std::char_traits<char>::length(kPrefix)));
+    const char* prefix = legacyVersion ? kVersionOnePrefix : kVersionTwoPrefix;
+    std::istringstream input(serialized.substr(std::char_traits<char>::length(prefix)));
     std::string line;
     while (std::getline(input, line)) {
         if (line.empty())
             return false;
         const std::size_t first = line.find(';');
         const std::size_t second = first == std::string::npos ? std::string::npos : line.find(';', first + 1U);
+        const std::size_t third = second == std::string::npos ? std::string::npos : line.find(';', second + 1U);
         if (first == std::string::npos || second == std::string::npos
-            || line.find(';', second + 1U) != std::string::npos) {
+            || (!legacyVersion && third == std::string::npos)
+            || (legacyVersion && third != std::string::npos)
+            || (!legacyVersion && line.find(';', third + 1U) != std::string::npos)) {
             return false;
         }
         std::string actionId;
         DurableActionStage stage = DurableActionStage::LocalDraft;
-        const std::string delivery = line.substr(second + 1U);
+        const std::string delivery = line.substr(second + 1U,
+                                                 (legacyVersion ? line.size() : third) - second - 1U);
+        std::string transactionHash;
+        if (!legacyVersion) {
+            transactionHash = line.substr(third + 1U);
+            if (transactionHash == "-")
+                transactionHash.clear();
+        }
         if (!hexDecode(line.substr(0, first), actionId)
             || !parseStage(line.substr(first + 1U, second - first - 1U), stage)
             || (delivery != "0" && delivery != "1")
-            || !restored.emplace(actionId, ActionStatus{stage, delivery == "1"}).second) {
+            || (!transactionHash.empty() && !isCanonicalTransactionHash(transactionHash))) {
+            return false;
+        }
+        if (legacyVersion && (stage == DurableActionStage::SubmittedToLez
+                              || stage == DurableActionStage::Observed
+                              || stage == DurableActionStage::Finalized
+                              || stage == DurableActionStage::Expired)) {
+            stage = DurableActionStage::Orphaned;
+        }
+        const bool hashRequired = stage == DurableActionStage::SubmittedToLez
+            || stage == DurableActionStage::Observed
+            || stage == DurableActionStage::Finalized
+            || stage == DurableActionStage::Expired;
+        if ((hashRequired && transactionHash.empty())
+            || !restored.emplace(actionId,
+                                  ActionStatus{stage, delivery == "1", transactionHash}).second) {
             return false;
         }
     }
@@ -316,6 +358,10 @@ bool ActionJournalStore::load(ActionJournal& journal) const
     if (m_directory.empty())
         return false;
     std::ifstream input(fs::path(m_directory) / kJournalFileName, std::ios::binary);
+    if (!input) {
+        input.clear();
+        input.open(fs::path(m_directory) / kLegacyJournalFileName, std::ios::binary);
+    }
     if (!input)
         return false;
     const std::string record((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
@@ -328,7 +374,12 @@ bool ActionJournalStore::exists() const
     if (m_directory.empty())
         return false;
     std::error_code error;
-    return fs::exists(fs::path(m_directory) / kJournalFileName, error) && !error;
+    const fs::path directory(m_directory);
+    const bool currentExists = fs::exists(directory / kJournalFileName, error);
+    if (error)
+        return false;
+    const bool legacyExists = fs::exists(directory / kLegacyJournalFileName, error);
+    return !error && (currentExists || legacyExists);
 }
 
 std::string actionStatusName(DurableActionStage stage)

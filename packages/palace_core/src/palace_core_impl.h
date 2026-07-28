@@ -55,7 +55,8 @@ private:
     void storageDownloadFinished(const std::string& payload);
     // Observer and Delivery callbacks use these internally. They remain hidden
     // from UI modules so a local caller cannot forge a durable lifecycle stage.
-    std::string markSubmittedToLez(const std::string& actionId);
+    std::string markSubmittedToLez(const std::string& actionId,
+                                   const std::string& transactionHash);
     std::string markObserved(const std::string& actionId);
     std::string markFinalized(const std::string& actionId);
     std::string markDeliveryPublished(const std::string& actionId);

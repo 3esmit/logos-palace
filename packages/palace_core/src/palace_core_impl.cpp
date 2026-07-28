@@ -377,16 +377,17 @@ std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
         palace::PalaceLezCodec::parseSubmissionResult(response.toStdString());
     if (!submitted.accepted)
         return "rejected=lez-submit;reason=" + submitted.reason;
-    if (!m_actionJournal.markSubmittedToLez(actionId))
+    if (!m_actionJournal.markSubmittedToLez(actionId, submitted.transactionHash))
         return "rejected=action-stage-changed";
     persistActionJournal();
     return "ok;tx_hash=" + submitted.transactionHash + ";"
         + palace::canonicalActionStatus(m_actionJournal.status(actionId));
 }
 
-std::string PalaceCoreImpl::markSubmittedToLez(const std::string& actionId)
+std::string PalaceCoreImpl::markSubmittedToLez(const std::string& actionId,
+                                                const std::string& transactionHash)
 {
-    const bool changed = m_actionJournal.markSubmittedToLez(actionId);
+    const bool changed = m_actionJournal.markSubmittedToLez(actionId, transactionHash);
     if (changed)
         persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));

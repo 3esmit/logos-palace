@@ -19,6 +19,7 @@ enum class DurableActionStage {
 struct ActionStatus {
     DurableActionStage durableStage = DurableActionStage::LocalDraft;
     bool deliveryPublished = false;
+    std::string transactionHash;
 };
 
 // Owns the user-visible durable-action lifecycle. Delivery publication is an
@@ -27,7 +28,7 @@ class ActionJournal {
 public:
     bool createDraft(const std::string& actionId);
     bool queue(const std::string& actionId);
-    bool markSubmittedToLez(const std::string& actionId);
+    bool markSubmittedToLez(const std::string& actionId, const std::string& transactionHash);
     bool markObserved(const std::string& actionId);
     bool markFinalized(const std::string& actionId);
     bool markRejected(const std::string& actionId);
