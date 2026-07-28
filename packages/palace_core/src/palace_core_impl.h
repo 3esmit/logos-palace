@@ -36,16 +36,28 @@ public:
     std::string syncHealth() const;
     std::string localProjection() const;
     std::string submitIntent(const std::string& actionId);
-    std::string markSubmittedToLez(const std::string& actionId);
-    std::string markObserved(const std::string& actionId);
-    std::string markFinalized(const std::string& actionId);
-    std::string markDeliveryPublished(const std::string& actionId);
+    // Submits a queued transition through LEZ. `transitionJson.kind` is one of
+    // bind_delivery_key, delegate_moderator, revoke_moderator, ban_user,
+    // ban_asset, set_room_locked, publish_manifest, or
+    // set_shared_spot_revision. Numeric key_epoch and revision fields are
+    // decimal strings, preventing JSON number precision loss.
+    std::string submitPalaceTransition(const std::string& actionId,
+                                       const std::string& stateAccountIdHex,
+                                       const std::string& callerAccountIdHex,
+                                       const std::string& programIdHex,
+                                       const std::string& transitionJson);
     std::string actionStatus(const std::string& actionId) const;
 
 private:
     void persistProjection();
     void storageStartFinished(const std::string& payload);
     void storageDownloadFinished(const std::string& payload);
+    // Observer and Delivery callbacks use these internally. They remain hidden
+    // from UI modules so a local caller cannot forge a durable lifecycle stage.
+    std::string markSubmittedToLez(const std::string& actionId);
+    std::string markObserved(const std::string& actionId);
+    std::string markFinalized(const std::string& actionId);
+    std::string markDeliveryPublished(const std::string& actionId);
 
 protected:
     void onContextReady() override;

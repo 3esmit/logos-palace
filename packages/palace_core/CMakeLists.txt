@@ -32,6 +32,8 @@ logos_module(
         src/palace_verified_asset_store.cpp
         src/palace_identity.h
         src/palace_identity.cpp
+        src/palace_lez.h
+        src/palace_lez.cpp
         src/palace_action_journal.h
         src/palace_action_journal.cpp
         src/palace_core_impl.h

@@ -17,6 +17,7 @@ logos_test(
         ../src/palace_storage.cpp
         ../src/palace_verified_asset_store.cpp
         ../src/palace_identity.cpp
+        ../src/palace_lez.cpp
         ../src/palace_action_journal.cpp
     TEST_SOURCES
         main.cpp
@@ -27,6 +28,7 @@ logos_test(
         test_storage_asset_queue.cpp
         test_verified_asset_store.cpp
         test_identity.cpp
+        test_lez_codec.cpp
         test_action_journal.cpp
     EXTRA_INCLUDES ../src
 )

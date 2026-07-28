@@ -1,5 +1,10 @@
 #include "palace_core_impl.h"
 
+#include <algorithm>
+#include <charconv>
+#include <cctype>
+#include <optional>
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,6 +14,7 @@
 #include "logos_sdk.h"
 
 #include "palace_delivery.h"
+#include "palace_lez.h"
 
 namespace {
 
@@ -28,6 +34,90 @@ bool jsonSuccess(const std::string& payload)
 {
     const QJsonDocument document = QJsonDocument::fromJson(QByteArray::fromStdString(payload));
     return document.isObject() && document.object().value(QStringLiteral("success")).toBool(false);
+}
+
+bool parseUnsigned(const QJsonValue& value, std::uint64_t& result)
+{
+    if (!value.isString())
+        return false;
+    const std::string text = value.toString().toStdString();
+    if (text.empty() || !std::all_of(text.begin(), text.end(), [](unsigned char character) {
+            return std::isdigit(character) != 0;
+        })) {
+        return false;
+    }
+    std::uint64_t parsed = 0;
+    const auto [cursor, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+    if (error != std::errc() || cursor != text.data() + text.size())
+        return false;
+    result = parsed;
+    return true;
+}
+
+std::optional<palace::PalaceLezInstructionV1> parseTransition(const std::string& transitionJson)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(QByteArray::fromStdString(transitionJson));
+    if (!document.isObject())
+        return std::nullopt;
+    const QJsonObject object = document.object();
+    const QJsonValue kindValue = object.value(QStringLiteral("kind"));
+    if (!kindValue.isString())
+        return std::nullopt;
+
+    palace::PalaceLezInstructionV1 instruction;
+    const std::string kind = kindValue.toString().toStdString();
+    if (kind == "bind_delivery_key") {
+        instruction.kind = palace::PalaceLezInstructionKind::BindDeliveryKey;
+        instruction.subjectAccountIdHex = object.value(QStringLiteral("subject_account_id_hex")).toString().toStdString();
+        instruction.deliveryKeyHex = object.value(QStringLiteral("delivery_key_hex")).toString().toStdString();
+        if (!parseUnsigned(object.value(QStringLiteral("key_epoch")), instruction.keyEpoch))
+            return std::nullopt;
+    } else if (kind == "delegate_moderator") {
+        instruction.kind = palace::PalaceLezInstructionKind::DelegateModerator;
+        instruction.subjectAccountIdHex = object.value(QStringLiteral("subject_account_id_hex")).toString().toStdString();
+    } else if (kind == "revoke_moderator") {
+        instruction.kind = palace::PalaceLezInstructionKind::RevokeModerator;
+        instruction.subjectAccountIdHex = object.value(QStringLiteral("subject_account_id_hex")).toString().toStdString();
+    } else if (kind == "ban_user") {
+        instruction.kind = palace::PalaceLezInstructionKind::BanUser;
+        instruction.subjectAccountIdHex = object.value(QStringLiteral("subject_account_id_hex")).toString().toStdString();
+        instruction.roomId = object.value(QStringLiteral("room_id")).toString().toStdString();
+    } else if (kind == "ban_asset") {
+        instruction.kind = palace::PalaceLezInstructionKind::BanAsset;
+        instruction.cid = object.value(QStringLiteral("cid")).toString().toStdString();
+        instruction.roomId = object.value(QStringLiteral("room_id")).toString().toStdString();
+    } else if (kind == "set_room_locked") {
+        if (!object.value(QStringLiteral("locked")).isBool())
+            return std::nullopt;
+        instruction.kind = palace::PalaceLezInstructionKind::SetRoomLocked;
+        instruction.roomId = object.value(QStringLiteral("room_id")).toString().toStdString();
+        instruction.locked = object.value(QStringLiteral("locked")).toBool();
+    } else if (kind == "publish_manifest") {
+        instruction.kind = palace::PalaceLezInstructionKind::PublishManifest;
+        instruction.cid = object.value(QStringLiteral("cid")).toString().toStdString();
+    } else if (kind == "set_shared_spot_revision") {
+        instruction.kind = palace::PalaceLezInstructionKind::SetSharedSpotRevision;
+        instruction.roomId = object.value(QStringLiteral("room_id")).toString().toStdString();
+        instruction.spotId = object.value(QStringLiteral("spot_id")).toString().toStdString();
+        if (!parseUnsigned(object.value(QStringLiteral("revision")), instruction.revision))
+            return std::nullopt;
+    } else {
+        return std::nullopt;
+    }
+    return instruction;
+}
+
+QByteArray encodeLezWords(const std::vector<std::uint32_t>& words)
+{
+    QByteArray bytes;
+    bytes.reserve(static_cast<int>(words.size() * sizeof(std::uint32_t)));
+    for (const std::uint32_t word : words) {
+        bytes.append(static_cast<char>(word & 0xffU));
+        bytes.append(static_cast<char>((word >> 8U) & 0xffU));
+        bytes.append(static_cast<char>((word >> 16U) & 0xffU));
+        bytes.append(static_cast<char>((word >> 24U) & 0xffU));
+    }
+    return bytes;
 }
 
 } // namespace
@@ -231,6 +321,53 @@ std::string PalaceCoreImpl::submitIntent(const std::string& actionId)
 {
     const bool changed = m_actionJournal.createDraft(actionId) && m_actionJournal.queue(actionId);
     return result(changed, m_actionJournal.status(actionId));
+}
+
+std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
+                                                    const std::string& stateAccountIdHex,
+                                                    const std::string& callerAccountIdHex,
+                                                    const std::string& programIdHex,
+                                                    const std::string& transitionJson)
+{
+    if (!isContextReady())
+        return "rejected=lez-not-ready";
+    if (m_actionJournal.status(actionId).durableStage != palace::DurableActionStage::Queued)
+        return "rejected=action-not-queued";
+
+    const auto instruction = parseTransition(transitionJson);
+    if (!instruction.has_value())
+        return "rejected=invalid-palace-transition";
+    palace::PalaceLezSubmitRequestV1 request;
+    request.stateAccountIdHex = stateAccountIdHex;
+    request.callerAccountIdHex = callerAccountIdHex;
+    request.programIdHex = programIdHex;
+    request.instruction = *instruction;
+    const palace::PalaceLezWireInstruction wire = palace::PalaceLezCodec::encodeApply(request);
+    if (!wire.accepted)
+        return "rejected=invalid-palace-wire;reason=" + wire.reason;
+
+    const QStringList accounts {
+        QString::fromStdString(request.stateAccountIdHex),
+        QString::fromStdString(request.callerAccountIdHex),
+    };
+    const QVariantList signers {false, true};
+    logos::CallError callError;
+    const QString response = modules().lez_core.send_generic_public_transaction(
+        accounts,
+        signers,
+        QVariant::fromValue(encodeLezWords(wire.words)),
+        QString::fromStdString(request.programIdHex),
+        &callError);
+    if (!callError.ok())
+        return "rejected=lez-submit-call-failed";
+    const palace::PalaceLezSubmissionResult submitted =
+        palace::PalaceLezCodec::parseSubmissionResult(response.toStdString());
+    if (!submitted.accepted)
+        return "rejected=lez-submit;reason=" + submitted.reason;
+    if (!m_actionJournal.markSubmittedToLez(actionId))
+        return "rejected=action-stage-changed";
+    return "ok;tx_hash=" + submitted.transactionHash + ";"
+        + palace::canonicalActionStatus(m_actionJournal.status(actionId));
 }
 
 std::string PalaceCoreImpl::markSubmittedToLez(const std::string& actionId)

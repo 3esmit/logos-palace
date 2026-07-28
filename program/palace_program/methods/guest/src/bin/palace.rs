@@ -236,4 +236,15 @@ mod tests {
         .expect_err("non-owner must not mutate Palace state");
         assert_eq!(error.error_code(), 6_006);
     }
+
+    #[test]
+    fn guest_instruction_wire_matches_the_core_submit_codec_fixture() {
+        let words = risc0_zkvm::serde::to_vec(&palace_program::GuestInstruction::Apply {
+            instruction: palace_program::core::PalaceInstruction::PublishManifest {
+                cid: "bafy".into(),
+            },
+        })
+        .expect("guest instruction serializes");
+        assert_eq!(words, vec![1, 6, 4, 0x7966_6162]);
+    }
 }
