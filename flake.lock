@@ -3,16 +3,16 @@
     "basecamp": {
       "flake": false,
       "locked": {
-        "lastModified": 1785268233,
-        "narHash": "sha256-BGXZFZ5FStBUNwEpPfgpfGLy7huS7C7pINslvTLJr5w=",
+        "lastModified": 1785276167,
+        "narHash": "sha256-PWBkSZvQOUoDW5AaB/Ay4+pmlUsB7TyMM9AvxA2ZJeI=",
         "owner": "3esmit",
         "repo": "logos-basecamp",
-        "rev": "69c18c88345a65bd31433bca80b213961e06677b",
+        "rev": "92cef7a979d17bfdd686c41573e6c2b21e234576",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
-        "ref": "69c18c8",
+        "ref": "92cef7a",
         "repo": "logos-basecamp",
         "type": "github"
       }

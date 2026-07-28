@@ -6,7 +6,7 @@
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
-    basecamp.url = "github:3esmit/logos-basecamp/69c18c8";
+    basecamp.url = "github:3esmit/logos-basecamp/92cef7a";
     basecamp.flake = false;
     delivery_module.url = "github:3esmit/logos-delivery-module";
     storage_module.url = "github:3esmit/logos-storage-module";
@@ -40,6 +40,15 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in {
       packages = forAllSystems (system: {
+        acceptance-tools =
+          let pkgs = import nixpkgs { inherit system; };
+          in pkgs.symlinkJoin {
+            name = "logos-palace-acceptance-tools";
+            paths = [ pkgs.coreutils pkgs.findutils pkgs.jq pkgs.nodejs ];
+          };
+        delivery-module-lgx-portable = inputs.delivery_module.packages.${system}.lgx-portable;
+        storage-module-lgx-portable = inputs.storage_module.packages.${system}.lgx-portable;
+        lez-core-lgx-portable = inputs.lez_core.packages.${system}.lgx-portable;
         palace-vm = palaceVm.packages.${system}.default;
         palace-vm-lgx = palaceVm.packages.${system}.lgx;
         palace-vm-lgx-portable = palaceVm.packages.${system}.lgx-portable;

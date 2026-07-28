@@ -3,5 +3,6 @@ result-*
 build
 build-*
 generated_code
+.artifacts
 program/target
 program/**/target
