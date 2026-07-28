@@ -8,7 +8,7 @@ void LogosPalaceUiBackend::onContextReady()
     setSyncHealth(modules().palace_core.syncHealth());
 }
 
-QString LogosPalaceUiBackend::enterRoom(const QString& roomId)
+QString LogosPalaceUiBackend::enterRoom(QString roomId)
 {
     if (!isContextReady())
         return QStringLiteral("rejected=core-not-ready");
@@ -20,7 +20,7 @@ QString LogosPalaceUiBackend::enterRoom(const QString& roomId)
     return result;
 }
 
-QString LogosPalaceUiBackend::useSpot(const QString& spotId)
+QString LogosPalaceUiBackend::useSpot(QString spotId)
 {
     if (!isContextReady())
         return QStringLiteral("rejected=core-not-ready");

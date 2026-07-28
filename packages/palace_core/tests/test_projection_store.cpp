@@ -18,7 +18,7 @@ LOGOS_TEST(projection_store_restores_room_and_explicit_offline_health) {
     LOGOS_ASSERT_TRUE(store.load(restored));
     LOGOS_ASSERT_EQ(restored.currentRoomId(), std::string("lounge"));
     LOGOS_ASSERT_EQ(restored.currentRoomTitle(), std::string("Lounge"));
-    LOGOS_ASSERT_EQ(restored.syncHealth(), palace::SyncHealth::Offline);
+    LOGOS_ASSERT_EQ(palace::syncHealthName(restored.syncHealth()), std::string("offline"));
 }
 
 LOGOS_TEST(projection_rejects_bad_local_state_without_partial_mutation) {
@@ -26,6 +26,6 @@ LOGOS_TEST(projection_rejects_bad_local_state_without_partial_mutation) {
     projection.setSyncHealth(palace::SyncHealth::Degraded);
     LOGOS_ASSERT_FALSE(projection.restoreCanonicalLocalState("version=1;room=lounge;sync=unsafe"));
     LOGOS_ASSERT_EQ(projection.currentRoomId(), std::string("atrium"));
-    LOGOS_ASSERT_EQ(projection.syncHealth(), palace::SyncHealth::Degraded);
+    LOGOS_ASSERT_EQ(palace::syncHealthName(projection.syncHealth()), std::string("degraded"));
     LOGOS_ASSERT_FALSE(projection.enterRoom("outside"));
 }

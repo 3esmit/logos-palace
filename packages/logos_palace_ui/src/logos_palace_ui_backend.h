@@ -7,8 +7,8 @@ class LogosPalaceUiBackend : public LogosPalaceUiSimpleSource,
                              public LogosUiPluginContext
 {
 public:
-    QString enterRoom(const QString& roomId) override;
-    QString useSpot(const QString& spotId) override;
+    QString enterRoom(QString roomId) override;
+    QString useSpot(QString spotId) override;
 
 protected:
     void onContextReady() override;
