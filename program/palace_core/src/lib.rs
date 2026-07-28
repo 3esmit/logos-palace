@@ -40,7 +40,7 @@ pub struct PalaceState {
     pub revision: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, BorshDeserialize, BorshSerialize, Deserialize, Serialize)]
 pub enum PalaceInstruction {
     BindDeliveryKey {
         subject: AccountId,
@@ -89,6 +89,27 @@ pub enum PalaceError {
     OwnerCannotBeBanned,
     SpotRevisionNotAdvanced,
     RevisionExhausted,
+}
+
+impl PalaceError {
+    /// Stable Palace-specific rejection code for LEZ guest and client handling.
+    #[must_use]
+    pub const fn code(&self) -> u32 {
+        match self {
+            Self::UnsupportedSchema => 1,
+            Self::InvalidRooms => 2,
+            Self::InvalidIdentifier => 3,
+            Self::InvalidCid => 4,
+            Self::InvalidDeliveryKey => 5,
+            Self::Unauthorized => 6,
+            Self::UnknownUser => 7,
+            Self::UnknownRoom => 8,
+            Self::KeyEpochNotAdvanced => 9,
+            Self::OwnerCannotBeBanned => 10,
+            Self::SpotRevisionNotAdvanced => 11,
+            Self::RevisionExhausted => 12,
+        }
+    }
 }
 
 impl PalaceState {

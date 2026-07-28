@@ -5,7 +5,34 @@
 //! independently testable and prevents UI or Delivery events from bypassing
 //! durable authority checks.
 
+use borsh::{BorshDeserialize, BorshSerialize};
+use serde::{Deserialize, Serialize};
+
 pub use palace_program_core as core;
+
+/// LEZ-facing instruction envelope.
+///
+/// `Initialize` creates the one canonical public Palace state account. `Apply`
+/// carries an already-versioned Palace transition, which the guest runs only
+/// after LEZ has authenticated the caller and verified state-account ownership.
+#[derive(Clone, Debug, Eq, PartialEq, BorshDeserialize, BorshSerialize, Deserialize, Serialize)]
+pub enum GuestInstruction {
+    Initialize {
+        owner_delivery_key: core::DeliveryKey,
+        rooms: Vec<core::Room>,
+    },
+    Apply {
+        instruction: core::PalaceInstruction,
+    },
+}
+
+pub fn initialize(
+    authenticated_owner: core::AccountId,
+    owner_delivery_key: core::DeliveryKey,
+    rooms: Vec<core::Room>,
+) -> Result<core::PalaceState, core::PalaceError> {
+    core::PalaceState::create(authenticated_owner, owner_delivery_key, rooms)
+}
 
 pub fn execute(
     state: &mut core::PalaceState,
@@ -47,6 +74,22 @@ mod tests {
                 },
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn lez_instruction_envelope_round_trips_without_schema_loss() {
+        let instruction = GuestInstruction::Apply {
+            instruction: core::PalaceInstruction::SetRoomLocked {
+                room_id: "lounge".into(),
+                locked: true,
+            },
+        };
+
+        let bytes = borsh::to_vec(&instruction).expect("instruction must serialize");
+        assert_eq!(
+            GuestInstruction::try_from_slice(&bytes).expect("instruction must deserialize"),
+            instruction
         );
     }
 }
