@@ -10,6 +10,9 @@
 namespace palace {
 namespace {
 
+constexpr std::size_t kMaxEncodedEnvelopeBytes = 4096U;
+constexpr std::size_t kMaxLengthEncodedFieldBytes = 2048U;
+
 std::string lengthEncoded(const std::string& value)
 {
     return std::to_string(value.size()) + ":" + value;
@@ -65,6 +68,71 @@ DeliveryValidation reject(const std::string& reason)
     return {false, reason};
 }
 
+DeliveryEnvelopeDecode decodeReject(const std::string& reason)
+{
+    return {false, reason, {}};
+}
+
+bool readLiteral(const std::string& encoded, std::size_t& cursor, const std::string& literal)
+{
+    if (encoded.compare(cursor, literal.size(), literal) != 0)
+        return false;
+    cursor += literal.size();
+    return true;
+}
+
+template <typename Integer>
+bool readInteger(const std::string& encoded, std::size_t& cursor, Integer& value)
+{
+    const std::size_t delimiter = encoded.find(';', cursor);
+    if (delimiter == std::string::npos || delimiter == cursor)
+        return false;
+    const char* first = encoded.data() + cursor;
+    const char* last = encoded.data() + delimiter;
+    const auto parsed = std::from_chars(first, last, value);
+    if (parsed.ec != std::errc() || parsed.ptr != last)
+        return false;
+    cursor = delimiter + 1U;
+    return true;
+}
+
+bool readLengthEncoded(const std::string& encoded, std::size_t& cursor, std::string& value)
+{
+    const std::size_t colon = encoded.find(':', cursor);
+    if (colon == std::string::npos || colon == cursor)
+        return false;
+    std::size_t length = 0U;
+    const char* first = encoded.data() + cursor;
+    const char* last = encoded.data() + colon;
+    const auto parsed = std::from_chars(first, last, length);
+    if (parsed.ec != std::errc() || parsed.ptr != last || length > kMaxLengthEncodedFieldBytes)
+        return false;
+    cursor = colon + 1U;
+    if (length > encoded.size() - cursor)
+        return false;
+    value.assign(encoded, cursor, length);
+    cursor += length;
+    return true;
+}
+
+bool readFieldSeparator(const std::string& encoded, std::size_t& cursor)
+{
+    if (cursor >= encoded.size() || encoded[cursor] != ';')
+        return false;
+    ++cursor;
+    return true;
+}
+
+bool readLengthField(const std::string& encoded,
+                     std::size_t& cursor,
+                     const std::string& name,
+                     std::string& value)
+{
+    return readLiteral(encoded, cursor, name + "=")
+        && readLengthEncoded(encoded, cursor, value)
+        && readFieldSeparator(encoded, cursor);
+}
+
 bool payloadAllowed(const PalaceDeliveryEnvelopeV1& envelope, const DeliveryPolicy& policy)
 {
     switch (envelope.kind) {
@@ -105,6 +173,51 @@ std::string canonicalDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope)
         + ";created=" + std::to_string(envelope.createdAt)
         + ";expires=" + std::to_string(envelope.expiresAt)
         + ";payload=" + lengthEncoded(envelope.payload);
+}
+
+std::string encodeDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope)
+{
+    return canonicalDeliveryEnvelope(envelope) + ";signature=" + lengthEncoded(envelope.signature);
+}
+
+DeliveryEnvelopeDecode decodeDeliveryEnvelope(const std::string& encoded)
+{
+    if (encoded.empty() || encoded.size() > kMaxEncodedEnvelopeBytes)
+        return decodeReject("invalid-envelope-size");
+
+    PalaceDeliveryEnvelopeV1 envelope;
+    std::size_t cursor = 0U;
+    int kind = -1;
+    if (!readLiteral(encoded, cursor, "version=")
+        || !readInteger(encoded, cursor, envelope.protocolVersion)
+        || !readLengthField(encoded, cursor, "network", envelope.networkId)
+        || !readLengthField(encoded, cursor, "palace", envelope.palaceId)
+        || !readLengthField(encoded, cursor, "room", envelope.roomId)
+        || !readLiteral(encoded, cursor, "epoch=")
+        || !readInteger(encoded, cursor, envelope.roomEpoch)
+        || !readLiteral(encoded, cursor, "kind=")
+        || !readInteger(encoded, cursor, kind)
+        || !readLengthField(encoded, cursor, "sender", envelope.senderUserId)
+        || !readLiteral(encoded, cursor, "key_epoch=")
+        || !readInteger(encoded, cursor, envelope.senderKeyEpoch)
+        || !readLiteral(encoded, cursor, "sequence=")
+        || !readInteger(encoded, cursor, envelope.senderSequence)
+        || !readLiteral(encoded, cursor, "created=")
+        || !readInteger(encoded, cursor, envelope.createdAt)
+        || !readLiteral(encoded, cursor, "expires=")
+        || !readInteger(encoded, cursor, envelope.expiresAt)
+        || !readLengthField(encoded, cursor, "payload", envelope.payload)
+        || !readLiteral(encoded, cursor, "signature=")
+        || !readLengthEncoded(encoded, cursor, envelope.signature)
+        || cursor != encoded.size()) {
+        return decodeReject("invalid-envelope-encoding");
+    }
+    if (kind < static_cast<int>(DeliveryKind::PresenceHello)
+        || kind > static_cast<int>(DeliveryKind::AuthorityRefreshNotice)) {
+        return decodeReject("invalid-envelope-kind");
+    }
+    envelope.kind = static_cast<DeliveryKind>(kind);
+    return {true, "accepted", std::move(envelope)};
 }
 
 std::string deriveRoomTopic(const std::string& networkId,
@@ -173,6 +286,57 @@ DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
     if (envelope.kind == DeliveryKind::Motion)
         m_lastMotionAt[key] = envelope.createdAt;
     return {true, "accepted"};
+}
+
+DeliveryPublication DeliveryEgress::prepare(const DeliveryPolicy& policy,
+                                             const std::string& senderUserId,
+                                             std::int64_t senderKeyEpoch,
+                                             DeliveryKind kind,
+                                             const std::string& payload,
+                                             std::int64_t createdAt,
+                                             std::int64_t lifetimeSeconds,
+                                             const DeliverySignatureSigner& signer,
+                                             const DeliverySignatureVerifier& verifier)
+{
+    if (policy.authority == nullptr || senderUserId.empty() || senderKeyEpoch < 0
+        || createdAt <= 0 || lifetimeSeconds <= 0) {
+        return {false, "invalid-egress-request", {}, {}, 0U};
+    }
+    const std::string publicKey = signer.publicKey();
+    if (publicKey.empty() || policy.authority->deliveryKeyFor(senderUserId, senderKeyEpoch) != publicKey) {
+        return {false, "unbound-delivery-key", {}, {}, 0U};
+    }
+    const std::string senderKey = senderUserId + "@" + std::to_string(senderKeyEpoch);
+    const auto previous = m_lastSequence.find(senderKey);
+    const std::uint64_t sequence = previous == m_lastSequence.end() ? 1U : previous->second + 1U;
+    if (sequence == 0U)
+        return {false, "sequence-exhausted", {}, {}, 0U};
+
+    PalaceDeliveryEnvelopeV1 envelope;
+    envelope.networkId = policy.networkId;
+    envelope.palaceId = policy.palaceId;
+    envelope.roomId = policy.roomId;
+    envelope.roomEpoch = policy.roomEpoch;
+    envelope.kind = kind;
+    envelope.senderUserId = senderUserId;
+    envelope.senderKeyEpoch = senderKeyEpoch;
+    envelope.senderSequence = sequence;
+    envelope.createdAt = createdAt;
+    envelope.expiresAt = createdAt + lifetimeSeconds;
+    envelope.payload = payload;
+    envelope.signature = signer.sign(canonicalDeliveryEnvelope(envelope));
+    if (envelope.signature.empty())
+        return {false, "signing-failed", {}, {}, 0U};
+
+    const std::string topic = deriveRoomTopic(policy.networkId, policy.palaceId, policy.roomId,
+                                               policy.roomEpoch);
+    const DeliveryValidation checked = m_preflight.receive(topic, envelope, policy, verifier);
+    if (!checked.accepted)
+        return {false, "preflight=" + checked.reason, {}, {}, 0U};
+
+    m_lastSequence[senderKey] = sequence;
+    const std::string encoded = encodeDeliveryEnvelope(envelope);
+    return {true, "accepted", topic, std::vector<std::uint8_t>(encoded.begin(), encoded.end()), sequence};
 }
 
 } // namespace palace

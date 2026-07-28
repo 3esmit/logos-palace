@@ -116,6 +116,16 @@ std::string Ed25519KeyPair::signHex(const std::string& message) const
     return encodeHex(signature.data(), signatureLength);
 }
 
+std::string Ed25519KeyPair::publicKey() const
+{
+    return publicKeyHex();
+}
+
+std::string Ed25519KeyPair::sign(const std::string& canonicalEnvelope) const
+{
+    return signHex(canonicalEnvelope);
+}
+
 bool Ed25519EnvelopeVerifier::verify(const std::string& publicKey,
                                      const std::string& canonicalEnvelope,
                                      const std::string& signature) const

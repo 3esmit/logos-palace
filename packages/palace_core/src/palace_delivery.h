@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "palace_authority.h"
 
@@ -43,6 +44,13 @@ public:
                         const std::string& signature) const = 0;
 };
 
+class DeliverySignatureSigner {
+public:
+    virtual ~DeliverySignatureSigner() = default;
+    virtual std::string publicKey() const = 0;
+    virtual std::string sign(const std::string& canonicalEnvelope) const = 0;
+};
+
 struct DeliveryPolicy {
     std::string networkId;
     std::string palaceId;
@@ -62,7 +70,23 @@ struct DeliveryValidation {
     std::string reason;
 };
 
+struct DeliveryEnvelopeDecode {
+    bool accepted = false;
+    std::string reason;
+    PalaceDeliveryEnvelopeV1 envelope;
+};
+
+struct DeliveryPublication {
+    bool accepted = false;
+    std::string reason;
+    std::string contentTopic;
+    std::vector<std::uint8_t> payload;
+    std::uint64_t sequence = 0;
+};
+
 std::string canonicalDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope);
+std::string encodeDeliveryEnvelope(const PalaceDeliveryEnvelopeV1& envelope);
+DeliveryEnvelopeDecode decodeDeliveryEnvelope(const std::string& encoded);
 std::string deriveRoomTopic(const std::string& networkId,
                             const std::string& palaceId,
                             const std::string& roomId,
@@ -80,6 +104,25 @@ public:
 private:
     std::map<std::string, std::uint64_t> m_lastSequence;
     std::map<std::string, std::int64_t> m_lastMotionAt;
+};
+
+// Egress has the same policy and signature checks as ingress before any bytes
+// reach Delivery. It increments a sequence only after this preflight accepts.
+class DeliveryEgress {
+public:
+    DeliveryPublication prepare(const DeliveryPolicy& policy,
+                                const std::string& senderUserId,
+                                std::int64_t senderKeyEpoch,
+                                DeliveryKind kind,
+                                const std::string& payload,
+                                std::int64_t createdAt,
+                                std::int64_t lifetimeSeconds,
+                                const DeliverySignatureSigner& signer,
+                                const DeliverySignatureVerifier& verifier);
+
+private:
+    DeliveryIngress m_preflight;
+    std::map<std::string, std::uint64_t> m_lastSequence;
 };
 
 } // namespace palace
