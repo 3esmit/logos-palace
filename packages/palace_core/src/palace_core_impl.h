@@ -50,6 +50,7 @@ public:
 
 private:
     void persistProjection();
+    void persistActionJournal();
     void storageStartFinished(const std::string& payload);
     void storageDownloadFinished(const std::string& payload);
     // Observer and Delivery callbacks use these internally. They remain hidden
@@ -64,6 +65,7 @@ protected:
 
 private:
     palace::ActionJournal m_actionJournal;
+    std::unique_ptr<palace::ActionJournalStore> m_actionJournalStore;
     palace::PalaceProjection m_projection;
     std::unique_ptr<palace::ProjectionStore> m_projectionStore;
     std::unique_ptr<palace::VerifiedAssetStore> m_verifiedAssetStore;

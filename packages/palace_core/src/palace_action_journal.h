@@ -36,8 +36,27 @@ public:
     bool markDeliveryPublished(const std::string& actionId);
     ActionStatus status(const std::string& actionId) const;
 
+    // Versioned deterministic state used only behind the core-owned durable
+    // journal boundary. Failed restores leave the current journal untouched.
+    std::string canonicalState() const;
+    bool restoreCanonicalState(const std::string& serialized);
+
 private:
     std::map<std::string, ActionStatus> m_actions;
+};
+
+// File boundary for private durable action state. Records are checksummed,
+// flushed, atomically renamed, and parsed before replacing live journal state.
+class ActionJournalStore {
+public:
+    explicit ActionJournalStore(std::string directory);
+
+    bool save(const ActionJournal& journal) const;
+    bool load(ActionJournal& journal) const;
+    bool exists() const;
+
+private:
+    std::string m_directory;
 };
 
 std::string actionStatusName(DurableActionStage stage);

@@ -127,6 +127,7 @@ void PalaceCoreImpl::onContextReady()
     if (instancePersistencePath().empty())
         return;
     m_projectionStore = std::make_unique<palace::ProjectionStore>(instancePersistencePath());
+    m_actionJournalStore = std::make_unique<palace::ActionJournalStore>(instancePersistencePath());
     m_verifiedAssetStore = std::make_unique<palace::VerifiedAssetStore>(instancePersistencePath());
     modules().storage_module.onStorageStart(
         [this](const std::string& payload) { storageStartFinished(payload); });
@@ -136,12 +137,22 @@ void PalaceCoreImpl::onContextReady()
         m_projection.setSyncHealth(palace::SyncHealth::Degraded);
         persistProjection();
     }
+    if (!m_actionJournalStore->load(m_actionJournal) && m_actionJournalStore->exists()) {
+        m_projection.setSyncHealth(palace::SyncHealth::Degraded);
+        persistProjection();
+    }
 }
 
 void PalaceCoreImpl::persistProjection()
 {
     if (m_projectionStore)
         m_projectionStore->save(m_projection);
+}
+
+void PalaceCoreImpl::persistActionJournal()
+{
+    if (m_actionJournalStore)
+        m_actionJournalStore->save(m_actionJournal);
 }
 
 std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
@@ -320,6 +331,8 @@ std::string PalaceCoreImpl::localProjection() const
 std::string PalaceCoreImpl::submitIntent(const std::string& actionId)
 {
     const bool changed = m_actionJournal.createDraft(actionId) && m_actionJournal.queue(actionId);
+    if (changed)
+        persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));
 }
 
@@ -366,6 +379,7 @@ std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
         return "rejected=lez-submit;reason=" + submitted.reason;
     if (!m_actionJournal.markSubmittedToLez(actionId))
         return "rejected=action-stage-changed";
+    persistActionJournal();
     return "ok;tx_hash=" + submitted.transactionHash + ";"
         + palace::canonicalActionStatus(m_actionJournal.status(actionId));
 }
@@ -373,24 +387,32 @@ std::string PalaceCoreImpl::submitPalaceTransition(const std::string& actionId,
 std::string PalaceCoreImpl::markSubmittedToLez(const std::string& actionId)
 {
     const bool changed = m_actionJournal.markSubmittedToLez(actionId);
+    if (changed)
+        persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));
 }
 
 std::string PalaceCoreImpl::markObserved(const std::string& actionId)
 {
     const bool changed = m_actionJournal.markObserved(actionId);
+    if (changed)
+        persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));
 }
 
 std::string PalaceCoreImpl::markFinalized(const std::string& actionId)
 {
     const bool changed = m_actionJournal.markFinalized(actionId);
+    if (changed)
+        persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));
 }
 
 std::string PalaceCoreImpl::markDeliveryPublished(const std::string& actionId)
 {
     const bool changed = m_actionJournal.markDeliveryPublished(actionId);
+    if (changed)
+        persistActionJournal();
     return result(changed, m_actionJournal.status(actionId));
 }
 
