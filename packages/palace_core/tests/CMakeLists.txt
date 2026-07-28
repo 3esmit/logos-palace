@@ -16,6 +16,7 @@ logos_test(
         ../src/palace_asset.cpp
         ../src/palace_storage.cpp
         ../src/palace_verified_asset_store.cpp
+        ../src/palace_room_backgrounds.cpp
         ../src/palace_identity.cpp
         ../src/palace_lez.cpp
         ../src/palace_action_journal.cpp
@@ -27,6 +28,7 @@ logos_test(
         test_asset_covenant.cpp
         test_storage_asset_queue.cpp
         test_verified_asset_store.cpp
+        test_room_backgrounds.cpp
         test_identity.cpp
         test_lez_codec.cpp
         test_action_journal.cpp

@@ -131,6 +131,7 @@ void PalaceCoreImpl::onContextReady()
     m_projectionStore = std::make_unique<palace::ProjectionStore>(instancePersistencePath());
     m_actionJournalStore = std::make_unique<palace::ActionJournalStore>(instancePersistencePath());
     m_verifiedAssetStore = std::make_unique<palace::VerifiedAssetStore>(instancePersistencePath());
+    m_roomBackgrounds.stageBuiltInFixtures(*m_verifiedAssetStore);
     modules().storage_module.onStorageStart(
         [this](const std::string& payload) { storageStartFinished(payload); });
     modules().storage_module.onStorageUploadDone(
@@ -350,6 +351,11 @@ std::string PalaceCoreImpl::publicationStatus(const std::string& handle) const
 std::string PalaceCoreImpl::roomTitle() const
 {
     return m_projection.currentRoomTitle();
+}
+
+std::string PalaceCoreImpl::roomBackgroundHandle() const
+{
+    return m_roomBackgrounds.handleForRoom(m_projection.currentRoomId());
 }
 
 std::string PalaceCoreImpl::syncHealth() const

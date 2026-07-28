@@ -9,6 +9,7 @@
 
 #include "palace_action_journal.h"
 #include "palace_projection.h"
+#include "palace_room_backgrounds.h"
 #include "palace_storage.h"
 #include "palace_verified_asset_store.h"
 
@@ -35,8 +36,10 @@ public:
     std::string publishVerifiedPng(const std::string& handle);
     std::string publicationStatus(const std::string& handle) const;
     std::string roomTitle() const;
+    std::string roomBackgroundHandle() const;
     std::string syncHealth() const;
     std::string localProjection() const;
+    // `actionId` is a canonical positive decimal u64 shared with the guest.
     std::string submitIntent(const std::string& actionId);
     // Submits a queued transition through LEZ. `transitionJson.kind` is one of
     // bind_delivery_key, delegate_moderator, revoke_moderator, ban_user,
@@ -71,6 +74,7 @@ private:
     palace::ActionJournal m_actionJournal;
     std::unique_ptr<palace::ActionJournalStore> m_actionJournalStore;
     palace::PalaceProjection m_projection;
+    palace::RoomBackgroundCatalog m_roomBackgrounds;
     std::unique_ptr<palace::ProjectionStore> m_projectionStore;
     std::unique_ptr<palace::VerifiedAssetStore> m_verifiedAssetStore;
     palace::StorageAssetQueue m_storageAssets;

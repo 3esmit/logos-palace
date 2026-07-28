@@ -5,6 +5,7 @@
 void LogosPalaceUiBackend::onContextReady()
 {
     setRoomTitle(modules().palace_core.roomTitle());
+    setRoomBackgroundHandle(modules().palace_core.roomBackgroundHandle());
     setSyncHealth(modules().palace_core.syncHealth());
 }
 
@@ -15,6 +16,7 @@ QString LogosPalaceUiBackend::enterRoom(QString roomId)
     const QString result = modules().palace_core.enterRoom(roomId);
     if (result.startsWith(QStringLiteral("ok;"))) {
         setRoomTitle(modules().palace_core.roomTitle());
+        setRoomBackgroundHandle(modules().palace_core.roomBackgroundHandle());
         setSyncHealth(modules().palace_core.syncHealth());
     }
     return result;
@@ -27,6 +29,7 @@ QString LogosPalaceUiBackend::useSpot(QString spotId)
     const QString result = modules().palace_core.useSpot(spotId);
     if (result.startsWith(QStringLiteral("ok;"))) {
         setRoomTitle(modules().palace_core.roomTitle());
+        setRoomBackgroundHandle(modules().palace_core.roomBackgroundHandle());
         setSyncHealth(modules().palace_core.syncHealth());
     }
     return result;

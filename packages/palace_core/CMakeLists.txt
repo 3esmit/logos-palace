@@ -30,6 +30,8 @@ logos_module(
         src/palace_storage.cpp
         src/palace_verified_asset_store.h
         src/palace_verified_asset_store.cpp
+        src/palace_room_backgrounds.h
+        src/palace_room_backgrounds.cpp
         src/palace_identity.h
         src/palace_identity.cpp
         src/palace_lez.h

@@ -6,6 +6,7 @@ Item {
     id: root
     readonly property var backend: logos.module("logos_palace_ui")
     readonly property string roomTitle: backend ? backend.roomTitle : "Connecting..."
+    readonly property string roomBackgroundHandle: backend ? backend.roomBackgroundHandle : ""
     readonly property string syncHealth: backend ? backend.syncHealth : "recovering"
     property bool ready: false
 
@@ -29,10 +30,35 @@ Item {
             id: roomCanvas
             anchors.fill: parent
             anchors.margins: 28
-            color: root.roomTitle === "Lounge" ? "#39495b" : "#796549"
+            color: "#312a24"
             radius: 8
             border.color: "#d5b77a"
             border.width: 3
+
+            Image {
+                id: roomBackground
+                objectName: "palaceRoomBackground"
+                anchors.fill: parent
+                source: root.roomBackgroundHandle.length === 64
+                    ? "image://basecamp-verified/" + root.roomBackgroundHandle
+                    : ""
+                fillMode: Image.PreserveAspectCrop
+                smooth: false
+            }
+
+            Rectangle {
+                objectName: "palaceRoomBackgroundPlaceholder"
+                anchors.fill: parent
+                color: "#312a24"
+                visible: roomBackground.status !== Image.Ready
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Verified room art unavailable"
+                    color: "#f3c36b"
+                    font.pixelSize: 16
+                }
+            }
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
