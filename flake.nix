@@ -2,13 +2,14 @@
   description = "Logos Palace public two-room Basecamp MVP";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.5";
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
     basecamp.url = "github:3esmit/logos-basecamp/92cef7a";
     basecamp.flake = false;
-    delivery_module.url = "github:3esmit/logos-delivery-module";
+    delivery_module.url = "github:3esmit/logos-delivery-module/891c43b";
+    delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
     storage_module.url = "github:3esmit/logos-storage-module";
     lez_core.url = "github:3esmit/logos-execution-zone-module";
   };
