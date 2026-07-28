@@ -2,6 +2,11 @@
 members = ["palace_core", "palace_program"]
 resolver = "2"
 
+[workspace.package]
+authors = ["Ricardo Guilherme Schmidt"]
+license = "MIT"
+repository = "https://github.com/3esmit/logos-palace"
+
 [workspace.dependencies]
 borsh = { version = "1.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
