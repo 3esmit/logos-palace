@@ -26,6 +26,8 @@ logos_module(
         src/palace_projection.cpp
         src/palace_asset.h
         src/palace_asset.cpp
+        src/palace_storage.h
+        src/palace_storage.cpp
         src/palace_verified_asset_store.h
         src/palace_verified_asset_store.cpp
         src/palace_identity.h

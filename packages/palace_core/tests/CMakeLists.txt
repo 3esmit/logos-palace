@@ -14,6 +14,7 @@ logos_test(
         ../src/palace_delivery.cpp
         ../src/palace_projection.cpp
         ../src/palace_asset.cpp
+        ../src/palace_storage.cpp
         ../src/palace_verified_asset_store.cpp
         ../src/palace_identity.cpp
         ../src/palace_action_journal.cpp
@@ -23,6 +24,7 @@ logos_test(
         test_authority_delivery.cpp
         test_projection_store.cpp
         test_asset_covenant.cpp
+        test_storage_asset_queue.cpp
         test_verified_asset_store.cpp
         test_identity.cpp
         test_action_journal.cpp
