@@ -1,6 +1,7 @@
 {
   "name": "palace_core",
   "display_name": "Palace Core",
+  "author": "Ricardo Guilherme Schmidt",
   "version": "0.1.0",
   "type": "core",
   "interface": "universal",

@@ -100,6 +100,18 @@ The resulting `.lgx` packages are Nix build outputs. Clean Basecamp
 installation and multi-instance runtime acceptance remain release gates; a
 successful package build alone is not an MVP acceptance result.
 
+Run the compiled Gate 1 acceptance test:
+
+```sh
+./scripts/run-basecamp-gate1.sh
+```
+
+The script builds the exact locked Basecamp, package manager, runtime modules,
+and Palace LGXs; installs all six packages into a clean user directory; renders
+both verified room backgrounds; exercises the door; restarts Basecamp; and
+verifies the checksummed restored projection. Its ignored evidence bundle is
+written to `.artifacts/basecamp-gate1/`.
+
 ## Security and limitations
 
 This is testnet software. Key custody, network availability, LEZ finality,

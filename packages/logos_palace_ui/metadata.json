@@ -1,6 +1,7 @@
 {
   "name": "logos_palace_ui",
   "display_name": "Logos Palace",
+  "author": "Ricardo Guilherme Schmidt",
   "version": "0.1.0",
   "type": "ui_qml",
   "interface": "universal",

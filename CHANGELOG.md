@@ -23,6 +23,12 @@ after its first published release.
   validation.
 - Checksummed atomic projection and durable action-journal persistence,
   including submitted transaction hashes and legacy orphan migration.
+- Two deterministic room backgrounds rendered only through Basecamp's
+  verified-asset provider, with a visible degraded fallback.
+- Reproducible compiled Gate 1 acceptance covering clean six-package
+  installation, room navigation, verified handles, and restart restoration.
+- Schema-v2 ordered LEZ action IDs with replay, gap, and competing-submission
+  rejection across the Rust guest and C++ wire boundary.
 
 ### Security
 

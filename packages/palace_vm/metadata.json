@@ -1,6 +1,7 @@
 {
   "name": "palace_vm",
   "display_name": "Palace VM",
+  "author": "Ricardo Guilherme Schmidt",
   "version": "0.1.0",
   "type": "core",
   "interface": "universal",

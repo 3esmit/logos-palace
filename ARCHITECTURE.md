@@ -101,3 +101,8 @@ isolated instances, redundant Storage, live Delivery, deployed Palace LEZ
 program, restart reconstruction, creator removal, hostile inputs, and recorded
 latency/resource measurements. Unit tests support those seams but do not
 replace runtime evidence.
+
+`scripts/run-basecamp-gate1.sh` covers only the first compiled slice: exact
+package installation, module loading, verified room images, door navigation,
+and projection restart. Later gate reports must extend this evidence rather
+than treating Gate 1 as full MVP acceptance.
