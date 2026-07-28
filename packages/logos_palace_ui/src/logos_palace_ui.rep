@@ -1,0 +1,7 @@
+class LogosPalaceUi
+{
+    SLOT(QString enterRoom(QString roomId))
+    SLOT(QString useSpot(QString spotId))
+    PROP(QString roomTitle="Atrium" READONLY)
+    PROP(QString syncHealth="recovering" READONLY)
+}
