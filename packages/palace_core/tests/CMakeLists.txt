@@ -7,6 +7,7 @@ find_package(OpenSSL REQUIRED)
 logos_test(
     NAME palace_core_contract_tests
     MODULE_SOURCES
+        ../src/palace_availability.cpp
         ../src/palace_sha256.cpp
         ../src/palace_authority.cpp
         ../src/palace_delivery.cpp
@@ -16,6 +17,7 @@ logos_test(
         ../src/palace_action_journal.cpp
     TEST_SOURCES
         main.cpp
+        test_availability.cpp
         test_authority_delivery.cpp
         test_projection_store.cpp
         test_asset_covenant.cpp

@@ -13,6 +13,8 @@ string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 logos_module(
     NAME ${MODULE_NAME}
     SOURCES
+        src/palace_availability.h
+        src/palace_availability.cpp
         src/palace_sha256.h
         src/palace_sha256.cpp
         src/palace_authority.h
