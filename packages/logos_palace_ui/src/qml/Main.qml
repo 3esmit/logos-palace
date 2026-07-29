@@ -379,9 +379,13 @@ Item {
     }
 
     function watchAction(pendingCall, onAccepted) {
-        invocationError = ""
         logos.watch(pendingCall, function (value) {
             var receipt = String(value)
+            // Preserve a local rejection until this asynchronous action has
+            // reached its terminal receipt. Otherwise a new call briefly
+            // exposes a stale backend receipt as if it belonged to the
+            // current action.
+            invocationError = ""
             if (receipt.indexOf("rejected=") !== 0 && onAccepted)
                 onAccepted(receipt)
             ++invocationSequence
