@@ -1,23 +1,34 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import {
+  access,
   chmod,
-  link,
+  constants,
   lstat,
   mkdir,
   open,
   readFile,
+  readdir,
   realpath,
   rename,
   unlink,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+  completionRecord,
+  createClaimLifecycle,
+  releaseProgramId,
+  releaseRootId,
+  sha256,
+  validateProcessScopeNames,
+} from "./basecamp_claim_lifecycle.mjs";
+import {
+  legacyClaimBoundProcesses,
+} from "./basecamp_active_scope_preflight.mjs";
+import { cgroupProcesses } from "./basecamp_owned_processes.mjs";
+import { verifyReleaseLock } from "./basecamp_release_lock.mjs";
+import { retireScopeSlice } from "./basecamp_scope.mjs";
 
-const releaseProgramId =
-  "e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61";
-const releaseRootId =
-  "12ff117a38d756f132cf616cea36fa007653c3c99727c1b475503caa345cbf2a";
 const [
   command,
   runArgument,
@@ -29,10 +40,19 @@ const [
   snapshotRunnerSha256Argument,
   runtimeManifestArgument,
   runtimeManifestSha256Argument,
-] =
-  process.argv.slice(2);
+  processScopeSliceArgument,
+  processScopePrefixArgument,
+] = process.argv.slice(2);
+const commands = new Set([
+  "acquire-or-roll-forward",
+  "verify",
+  "enter-gate3",
+  "complete",
+  "state",
+  "completion",
+]);
 if (
-  !["acquire", "verify", "complete", "state", "completion"].includes(command)
+  !commands.has(command)
   || !runArgument
   || !snapshotArgument
   || !gcRootArgument
@@ -42,11 +62,18 @@ if (
   || !snapshotRunnerSha256Argument
   || !runtimeManifestArgument
   || !runtimeManifestSha256Argument
+  || !processScopeSliceArgument
+  || !processScopePrefixArgument
 ) {
   throw new Error(
-    "usage: node tests/basecamp_active_run_claim.mjs <acquire|verify|complete|state|completion> <run-dir> <snapshot> <gc-root> <git-commit> <snapshot-nar-hash> <snapshot-nar-size> <snapshot-runner-sha256> <runtime-manifest> <runtime-manifest-sha256>",
+    "usage: node tests/basecamp_active_run_claim.mjs "
+    + "<acquire-or-roll-forward|verify|enter-gate3|complete|state|completion> "
+    + "<run-dir> <snapshot> <gc-root> <git-commit> <snapshot-nar-hash> "
+    + "<snapshot-nar-size> <snapshot-runner-sha256> <runtime-manifest> "
+    + "<runtime-manifest-sha256> <process-scope-slice> <process-scope-prefix>",
   );
 }
+
 const snapshotNarSize = Number(snapshotNarSizeArgument);
 if (
   !/^[0-9a-f]{40}$/.test(sourceCommitArgument)
@@ -59,25 +86,57 @@ if (
 ) {
   throw new Error("active-run immutable source identity is invalid");
 }
+validateProcessScopeNames(
+  processScopeSliceArgument,
+  processScopePrefixArgument,
+);
 
 const uid = process.getuid?.();
 if (!Number.isSafeInteger(uid) || uid < 0) {
   throw new Error("active-run claim requires a numeric Unix UID");
 }
 
-async function canonicalDirectory(path, mode) {
-  const canonical = await realpath(path);
+async function canonicalOwnerDirectory(path, mode) {
   const metadata = await lstat(path);
   if (
-    canonical !== path
-    || metadata.isSymbolicLink()
+    metadata.isSymbolicLink()
     || !metadata.isDirectory()
     || metadata.uid !== uid
     || (metadata.mode & 0o777) !== mode
+    || await realpath(path) !== path
   ) {
     throw new Error(`${path} is not a canonical owner directory`);
   }
-  return canonical;
+  return path;
+}
+
+async function secureFile(path, maximum, description) {
+  const metadata = await lstat(path);
+  if (
+    metadata.isSymbolicLink()
+    || !metadata.isFile()
+    || metadata.uid !== uid
+    || (metadata.mode & 0o777) !== 0o600
+    || metadata.size <= 0
+    || metadata.size > maximum
+    || await realpath(path) !== path
+  ) {
+    throw new Error(`${description} is not a secure regular file`);
+  }
+  const bytes = await readFile(path);
+  if (bytes.length !== metadata.size) {
+    throw new Error(`${description} changed while being read`);
+  }
+  return bytes;
+}
+
+async function syncDirectory(path) {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 const varTmp = "/var/tmp";
@@ -93,28 +152,24 @@ try {
   if (error?.code !== "EEXIST") throw error;
 }
 if (claimDirectoryCreated) await chmod(claimDirectory, 0o700);
-await canonicalDirectory(claimDirectory, 0o700);
+await canonicalOwnerDirectory(claimDirectory, 0o700);
 
 const runDirectory = resolve(runArgument);
-await canonicalDirectory(runDirectory, 0o700);
+await canonicalOwnerDirectory(runDirectory, 0o700);
 const runtimeManifestPath = resolve(runtimeManifestArgument);
-const runtimeManifestMetadata = await lstat(runtimeManifestPath);
-const runtimeManifestBytes = await readFile(runtimeManifestPath);
+const runtimeManifestBytes = await secureFile(
+  runtimeManifestPath,
+  128 * 1024,
+  "active-run runtime manifest",
+);
 if (
   dirname(runtimeManifestPath) !== runDirectory
   || basename(runtimeManifestPath) !== "runtime-output-manifest.json"
-  || runtimeManifestMetadata.isSymbolicLink()
-  || !runtimeManifestMetadata.isFile()
-  || runtimeManifestMetadata.uid !== uid
-  || (runtimeManifestMetadata.mode & 0o777) !== 0o600
-  || runtimeManifestMetadata.size <= 0
-  || runtimeManifestMetadata.size > 128 * 1024
-  || await realpath(runtimeManifestPath) !== runtimeManifestPath
-  || createHash("sha256").update(runtimeManifestBytes).digest("hex")
-    !== runtimeManifestSha256Argument
+  || sha256(runtimeManifestBytes) !== runtimeManifestSha256Argument
 ) {
   throw new Error("active-run runtime manifest is invalid");
 }
+
 const productSnapshot = resolve(snapshotArgument);
 const snapshotMetadata = await lstat(productSnapshot);
 if (
@@ -127,11 +182,24 @@ if (
 ) {
   throw new Error("active-run product snapshot is not one immutable store path");
 }
+const snapshotRunner = join(productSnapshot, "scripts/run-basecamp-mvp.sh");
+const snapshotRunnerMetadata = await lstat(snapshotRunner);
+const snapshotRunnerBytes = await readFile(snapshotRunner);
+if (
+  snapshotRunnerMetadata.isSymbolicLink()
+  || !snapshotRunnerMetadata.isFile()
+  || snapshotRunnerMetadata.size <= 0
+  || snapshotRunnerMetadata.size > 1024 * 1024
+  || sha256(snapshotRunnerBytes) !== snapshotRunnerSha256Argument
+) {
+  throw new Error("active-run immutable runner identity is invalid");
+}
+
 const gcRootPath = resolve(gcRootArgument);
 const gcRootsParent = join(claimDirectory, "gc-roots");
-await canonicalDirectory(gcRootsParent, 0o700);
+await canonicalOwnerDirectory(gcRootsParent, 0o700);
 const runRootsDirectory = join(gcRootsParent, basename(runDirectory));
-await canonicalDirectory(runRootsDirectory, 0o700);
+await canonicalOwnerDirectory(runRootsDirectory, 0o700);
 const gcRootMetadata = await lstat(gcRootPath);
 if (
   dirname(gcRootPath) !== runRootsDirectory
@@ -148,7 +216,7 @@ const claimPath = join(
 );
 const common = {
   schema: "logos.palace.basecamp-active-run-claim",
-  version: 1,
+  version: 2,
   uid,
   releaseProgramId,
   releaseRootId,
@@ -162,125 +230,138 @@ const common = {
   snapshotRunnerSha256: snapshotRunnerSha256Argument,
   runtimeManifestPath,
   runtimeManifestSha256: runtimeManifestSha256Argument,
+  processScopeSlice: processScopeSliceArgument,
+  processScopePrefix: processScopePrefixArgument,
 };
 
-async function syncDirectory(path) {
-  const handle = await open(path, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function writeNewClaim(value) {
-  const temporary = join(
+async function assertReleaseLockHeld() {
+  const expected = join(
     claimDirectory,
-    `.claim-${process.pid}-${Date.now()}.tmp`,
+    `release-${releaseProgramId}-${releaseRootId}.lock`,
   );
-  let handle;
-  try {
-    handle = await open(temporary, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await link(temporary, claimPath);
-    await unlink(temporary);
-    await syncDirectory(claimDirectory);
-  } catch (error) {
-    await handle?.close().catch(() => {});
-    await unlink(temporary).catch((unlinkError) => {
-      if (unlinkError?.code !== "ENOENT") throw unlinkError;
-    });
-    throw error;
+  const supervisorPid = Number(
+    process.env.PALACE_MVP_LOCK_SUPERVISOR_PID,
+  );
+  const supervisorStartTimeTicks = Number(
+    process.env.PALACE_MVP_LOCK_SUPERVISOR_START_TIME_TICKS,
+  );
+  if (
+    process.env.PALACE_MVP_LOCK_FD !== undefined
+    || process.env.PALACE_MVP_LOCK_SUPERVISED !== "1"
+    || process.env.PALACE_MVP_LOCK_PATH !== expected
+    || !Number.isSafeInteger(supervisorPid)
+    || supervisorPid <= 1
+    || !Number.isSafeInteger(supervisorStartTimeTicks)
+    || supervisorStartTimeTicks <= 0
+  ) {
+    throw new Error("claim roll-forward requires exact release lock state");
   }
+
+  const flock = join(dirname(process.argv0), "flock");
+  await access(flock, constants.X_OK);
+  await verifyReleaseLock({
+    lockPath: expected,
+    flock,
+    supervisorPid,
+    supervisorStartTimeTicks,
+    snapshotRunner,
+    runsRoot: dirname(runDirectory),
+    runDirectory,
+  });
 }
 
-async function readClaim() {
-  const metadata = await lstat(claimPath);
-  if (
-    metadata.isSymbolicLink()
-    || !metadata.isFile()
-    || metadata.uid !== uid
-    || (metadata.mode & 0o777) !== 0o600
-    || metadata.size <= 0
-    || metadata.size > 64 * 1024
-    || await realpath(claimPath) !== claimPath
-  ) {
-    throw new Error("persistent active-run claim is not a secure regular file");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(await readFile(claimPath, "utf8"));
-  } catch {
-    throw new Error("persistent active-run claim is not valid JSON");
-  }
-  for (const [field, value] of Object.entries(common)) {
-    if (parsed?.[field] !== value) {
-      if (field === "runDirectory" && typeof parsed?.runDirectory === "string") {
-        throw new Error(
-          `another active run owns this release; resume exact: ${parsed.runDirectory}`,
-        );
+async function findCgroupSlice(slice) {
+  const root = "/sys/fs/cgroup";
+  const queue = [{ path: root, depth: 0 }];
+  const matches = [];
+  let visited = 0;
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth > 16) {
+      throw new Error("process cgroup hierarchy exceeds depth bound");
+    }
+    const entries = await readdir(current.path, { withFileTypes: true });
+    visited += entries.length;
+    if (visited > 65_536) {
+      throw new Error("process cgroup hierarchy exceeds entry bound");
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const child = join(current.path, entry.name);
+      if (entry.name === slice) {
+        const controlGroup = child.slice(root.length);
+        if (!controlGroup.startsWith("/")) {
+          throw new Error("recorded process slice escaped cgroup root");
+        }
+        matches.push(controlGroup);
       }
-      throw new Error(`persistent active-run claim differs at ${field}`);
+      queue.push({ path: child, depth: current.depth + 1 });
     }
   }
+  if (matches.length > 1) {
+    throw new Error("recorded process slice is ambiguous");
+  }
+  return matches[0];
+}
+
+async function scanClaimBoundProcesses(input) {
+  if (input.legacy) {
+    return legacyClaimBoundProcesses({
+      claimPath: input.claimPath,
+      uid,
+    });
+  }
+  const cgroupPath = await findCgroupSlice(input.processScopeSlice);
+  if (!cgroupPath) return [];
+  return cgroupProcesses({
+    cgroupPath,
+  });
+}
+
+async function retirePredecessorScope(input) {
+  if (input.legacy) return;
+  const systemctl = join(dirname(process.argv0), "systemctl");
+  await access(systemctl, constants.X_OK);
+  await retireScopeSlice({
+    slice: input.processScopeSlice,
+    systemctl,
+  });
+}
+
+async function validateImmutableSnapshot(predecessor) {
+  const snapshot = predecessor.productSnapshot;
+  const metadata = await lstat(snapshot);
   if (
-    !["active", "completed"].includes(parsed.status)
-    || !Number.isSafeInteger(parsed.createdAtUnixMs)
-    || parsed.createdAtUnixMs <= 0
-    || (
-      parsed.status === "active"
-      && (
-        Object.hasOwn(parsed, "completedAtUnixMs")
-        || Object.hasOwn(parsed, "compiledReportSha256")
-      )
-    )
-    || (
-      parsed.status === "completed"
-      && (
-        !Number.isSafeInteger(parsed.completedAtUnixMs)
-        || parsed.completedAtUnixMs < parsed.createdAtUnixMs
-        || !/^[0-9a-f]{64}$/.test(parsed.compiledReportSha256)
-      )
+    metadata.isSymbolicLink()
+    || !metadata.isDirectory()
+    || await realpath(snapshot) !== snapshot
+    || !/^\/nix\/store\/[0-9abcdfghijklmnpqrsvwxyz]{32}-[^/]+$/.test(
+      snapshot,
     )
   ) {
-    throw new Error("persistent active-run claim state is invalid");
+    throw new Error("predecessor snapshot is not immutable");
   }
-  return parsed;
-}
-
-async function durableReplaceClaim(value) {
-  const temporary = join(
-    claimDirectory,
-    `.claim-${process.pid}-${Date.now()}.tmp`,
-  );
-  let handle;
-  try {
-    handle = await open(temporary, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await rename(temporary, claimPath);
-    await syncDirectory(claimDirectory);
-  } catch (error) {
-    await handle?.close().catch(() => {});
-    await unlink(temporary).catch((unlinkError) => {
-      if (unlinkError?.code !== "ENOENT") throw unlinkError;
-    });
-    throw error;
+  const runner = join(snapshot, "scripts/run-basecamp-mvp.sh");
+  const runnerMetadata = await lstat(runner);
+  const runnerBytes = await readFile(runner);
+  if (
+    runnerMetadata.isSymbolicLink()
+    || !runnerMetadata.isFile()
+    || runnerMetadata.size <= 0
+    || runnerMetadata.size > 1024 * 1024
+    || sha256(runnerBytes) !== predecessor.snapshotRunnerSha256
+  ) {
+    throw new Error("predecessor immutable runner differs");
   }
 }
 
-async function compiledReportSha256() {
-  const compiledReportPath = join(
-    runDirectory,
-    "compiled-mvp-report.json",
+async function completedReportSha256() {
+  const compiledReportPath = join(runDirectory, "compiled-mvp-report.json");
+  const bytes = await secureFile(
+    compiledReportPath,
+    4 * 1024 * 1024,
+    "completed claim report",
   );
-  const metadata = await lstat(compiledReportPath);
-  const bytes = await readFile(compiledReportPath);
   let parsed;
   try {
     parsed = JSON.parse(bytes);
@@ -288,14 +369,7 @@ async function compiledReportSha256() {
     throw new Error("completed claim report is not valid JSON");
   }
   if (
-    metadata.isSymbolicLink()
-    || !metadata.isFile()
-    || metadata.uid !== uid
-    || (metadata.mode & 0o777) !== 0o600
-    || metadata.size <= 0
-    || metadata.size > 4 * 1024 * 1024
-    || await realpath(compiledReportPath) !== compiledReportPath
-    || parsed?.schema !== "logos.palace.basecamp-mvp-compiled-report"
+    parsed?.schema !== "logos.palace.basecamp-mvp-compiled-report"
     || parsed?.version !== 1
     || parsed?.status !== "passed"
     || parsed?.fullMvp !== "passed"
@@ -312,15 +386,19 @@ async function compiledReportSha256() {
   ) {
     throw new Error("completed claim report identity is invalid");
   }
-  return createHash("sha256").update(bytes).digest("hex");
+  return sha256(bytes);
 }
 
 async function writeCompletionRecord(claim) {
-  const currentCompiledSha256 = await compiledReportSha256();
+  const currentCompiledSha256 = await completedReportSha256();
   if (currentCompiledSha256 !== claim.compiledReportSha256) {
     throw new Error("completed claim report digest changed");
   }
-  const claimBytes = await readFile(claimPath);
+  const claimBytes = await secureFile(
+    claimPath,
+    64 * 1024,
+    "completed active-run claim",
+  );
   const completionPath = join(
     runDirectory,
     "active-claim-completion.json",
@@ -329,21 +407,13 @@ async function writeCompletionRecord(claim) {
     runDirectory,
     `.active-claim-completion-${process.pid}-${Date.now()}.tmp`,
   );
-  const record = {
-    schema: "logos.palace.basecamp-active-run-completion",
-    version: 1,
-    status: "completed",
+  const record = completionRecord({
+    claim,
+    claimBytes,
+    compiledReportSha256: currentCompiledSha256,
+    common,
     completedAtUnixMs: claim.completedAtUnixMs,
-    activeClaimSha256:
-      createHash("sha256").update(claimBytes).digest("hex"),
-    compiledReportSha256: claim.compiledReportSha256,
-    productSnapshot,
-    sourceCommit: sourceCommitArgument,
-    productSnapshotNarHash: snapshotNarHashArgument,
-    productSnapshotNarSize: snapshotNarSize,
-    snapshotRunnerSha256: snapshotRunnerSha256Argument,
-    runtimeOutputManifestSha256: runtimeManifestSha256Argument,
-  };
+  });
   let handle;
   try {
     handle = await open(temporary, "wx", 0o600);
@@ -363,52 +433,17 @@ async function writeCompletionRecord(claim) {
   return completionPath;
 }
 
-let claim;
-try {
-  claim = await readClaim();
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
-}
-
-if (command === "acquire") {
-  if (!claim) {
-    claim = {
-      ...common,
-      status: "active",
-      createdAtUnixMs: Date.now(),
-    };
-    try {
-      await writeNewClaim(claim);
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      claim = await readClaim();
-    }
-  }
-} else if (command === "verify" || command === "complete") {
-  if (!claim || claim.status !== "active") {
-    throw new Error("exact active-run claim is not active");
-  }
-  if (command === "complete") {
-    const reportSha256 = await compiledReportSha256();
-    claim = {
-      ...claim,
-      status: "completed",
-      completedAtUnixMs: Date.now(),
-      compiledReportSha256: reportSha256,
-    };
-    await durableReplaceClaim(claim);
-  }
-} else if (!claim) {
-  throw new Error("exact active-run claim does not exist");
-}
-
-if (command === "state") {
-  process.stdout.write(`${claim.status}\n`);
-} else if (command === "completion") {
-  if (claim.status !== "completed") {
-    throw new Error("exact active-run claim is not completed");
-  }
-  process.stdout.write(`${await writeCompletionRecord(claim)}\n`);
-} else {
-  process.stdout.write(`${claimPath}\n`);
-}
+const lifecycle = createClaimLifecycle({
+  uid,
+  claimDirectory,
+  claimPath,
+  common,
+  assertReleaseLockHeld,
+  scanClaimBoundProcesses,
+  retirePredecessorScope,
+  validateImmutableSnapshot,
+  completedReportSha256,
+  writeCompletionRecord,
+});
+const result = await lifecycle.execute(command);
+process.stdout.write(`${result.output}\n`);

@@ -25,7 +25,12 @@ for forbidden_override in \
   PALACE_KEEP_GATE1_WORK \
   PALACE_KEEP_GATE2_WORK \
   PALACE_KEEP_GATE3_WORK \
-  PALACE_KEEP_GATE4_WORK; do
+  PALACE_KEEP_GATE4_WORK \
+  PALACE_MVP_CLAIM_PATH \
+  PALACE_MVP_PROCESS_CGROUP \
+  PALACE_MVP_PROCESS_SCOPE_PREFIX \
+  PALACE_MVP_PROCESS_SCOPE_SLICE \
+  PALACE_MVP_PROCESS_SCOPE_UNIT; do
   if [ "${!forbidden_override+x}" = "x" ]; then
     printf 'Official MVP runner forbids ambient override %s\n' \
       "${forbidden_override}" >&2
@@ -79,6 +84,14 @@ else
   run_dir="$(mktemp -d "${runs_root}/run.XXXXXXXX")"
   chmod 700 "${run_dir}"
 fi
+run_basename="$(basename "${run_dir}")"
+run_scope_id="${run_basename#run.}"
+if [[ ! "${run_scope_id}" =~ ^[A-Za-z0-9]{8}$ ]]; then
+  printf 'MVP run directory does not yield a safe scope identity\n' >&2
+  exit 1
+fi
+process_scope_prefix="logos-palace-run-${run_scope_id}"
+process_scope_slice="${process_scope_prefix}.slice"
 
 shared_state="${run_dir}/shared-state"
 compiled_report="${run_dir}/compiled-mvp-report.json"
@@ -90,17 +103,6 @@ tracked_paths="${run_dir}/source-tree-paths.nul"
 snapshot_evidence="${run_dir}/product-snapshot-evidence.json"
 runtime_manifest="${run_dir}/runtime-output-manifest.json"
 claim_completed=0
-
-if [ "${resuming}" -eq 1 ]; then
-  if [ -d "${public_evidence}" ] && [ ! -L "${public_evidence}" ]; then
-    printf 'MVP public evidence path is an unsafe directory\n' >&2
-    exit 1
-  fi
-  if [ -e "${public_evidence}" ] || [ -L "${public_evidence}" ]; then
-    unlink -- "${public_evidence}"
-    sync -f "${run_dir}"
-  fi
-fi
 
 if [ "${resuming}" -eq 0 ]; then
   if [ -n "$(git -C "${repo_root}" status --porcelain=v1 \
@@ -137,10 +139,16 @@ bootstrap_tools="$(
 )"
 bootstrap_jq="${bootstrap_tools}/bin/jq"
 bootstrap_flock="${bootstrap_tools}/bin/flock"
+bootstrap_setpriv="${bootstrap_tools}/bin/setpriv"
+bootstrap_bash="${bootstrap_tools}/bin/bash"
 bootstrap_sha256="${bootstrap_tools}/bin/sha256sum"
+bootstrap_systemctl="${bootstrap_tools}/bin/systemctl"
 if [ ! -x "${bootstrap_jq}" ] \
   || [ ! -x "${bootstrap_flock}" ] \
-  || [ ! -x "${bootstrap_sha256}" ]; then
+  || [ ! -x "${bootstrap_setpriv}" ] \
+  || [ ! -x "${bootstrap_bash}" ] \
+  || [ ! -x "${bootstrap_sha256}" ] \
+  || [ ! -x "${bootstrap_systemctl}" ]; then
   printf 'Could not build acceptance tools for MVP locking/archive\n' >&2
   exit 1
 fi
@@ -186,71 +194,41 @@ ensure_owner_directory "${runtime_gc_roots}"
 sandbox_test_gc_root="${run_dir}/gate0/sandbox-test-gc-root"
 expected_sandbox_test_output=""
 
-runtime_dir="/run/user/${current_uid}"
-canonical_runtime_dir="$(
-  "${bootstrap_tools}/bin/realpath" -e -- "${runtime_dir}" \
-    2>/dev/null || true
-)"
-if [ "${runtime_dir}" != "${canonical_runtime_dir}" ] \
-  || [ -L "${runtime_dir}" ] \
-  || [ ! -d "${runtime_dir}" ] \
-  || [ "$("${bootstrap_tools}/bin/stat" -c '%u' "${runtime_dir}")" \
-    != "${current_uid}" ] \
-  || [ "$("${bootstrap_tools}/bin/stat" -c '%a' "${runtime_dir}")" \
-    != "700" ]; then
-  runtime_dir="/tmp/logos-palace-runtime-${current_uid}"
-  if [ ! -e "${runtime_dir}" ]; then
-    "${bootstrap_tools}/bin/mkdir" -m 700 -- "${runtime_dir}"
-  fi
-  canonical_runtime_dir="$(
-    "${bootstrap_tools}/bin/realpath" -e -- "${runtime_dir}" \
-      2>/dev/null || true
-  )"
-  if [ "${runtime_dir}" != "${canonical_runtime_dir}" ] \
-    || [ -L "${runtime_dir}" ] \
-    || [ ! -d "${runtime_dir}" ] \
-    || [ "$("${bootstrap_tools}/bin/stat" -c '%u' "${runtime_dir}")" \
-      != "${current_uid}" ] \
-    || [ "$("${bootstrap_tools}/bin/stat" -c '%a' "${runtime_dir}")" \
-      != "700" ]; then
-    printf 'MVP deterministic lock directory is not owner-only state\n' >&2
-    exit 1
-  fi
-fi
-
 release_program_id="e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61"
 release_root_id="12ff117a38d756f132cf616cea36fa007653c3c99727c1b475503caa345cbf2a"
-mvp_lock_path="${runtime_dir}/logos-palace-${release_program_id}-${release_root_id}.lock"
+mvp_lock_path="${claim_directory}/release-${release_program_id}-${release_root_id}.lock"
 if [ -L "${mvp_lock_path}" ] \
   || { [ -e "${mvp_lock_path}" ] && [ ! -f "${mvp_lock_path}" ]; }; then
   printf 'MVP global lock path is not a secure regular file\n' >&2
   exit 1
 fi
-if [ "${immutable_runner}" = "1" ]; then
-  mvp_lock_fd="${PALACE_MVP_LOCK_FD:-}"
-  if [[ ! "${mvp_lock_fd}" =~ ^[0-9]+$ ]] \
-    || [ "${PALACE_MVP_LOCK_PATH:-}" != "${mvp_lock_path}" ] \
-    || [ "$(
-      "${bootstrap_tools}/bin/realpath" -e \
-        "/proc/${BASHPID}/fd/${mvp_lock_fd}" 2>/dev/null || true
-    )" != "${mvp_lock_path}" ]; then
-    printf 'Immutable MVP runner did not inherit exact release lock FD\n' >&2
+if [ "${PALACE_MVP_LOCK_FD+x}" = "x" ]; then
+  printf 'MVP runner and gates must not inherit the release lock FD\n' >&2
+  exit 1
+fi
+if [ "${immutable_runner}" = "0" ]; then
+  if [ "${PALACE_MVP_LOCK_SUPERVISED+x}" = "x" ] \
+    || [ "${PALACE_MVP_LOCK_PATH+x}" = "x" ] \
+    || [ "${PALACE_MVP_LOCK_SUPERVISOR_PID+x}" = "x" ] \
+    || [ "${PALACE_MVP_LOCK_SUPERVISOR_START_TIME_TICKS+x}" = "x" ]; then
+    printf 'Release-lock supervisor variables are reserved for handoff\n' >&2
     exit 1
   fi
-else
-  exec {mvp_lock_fd}>"${mvp_lock_path}"
+  (
+    umask 077
+    : >>"${mvp_lock_path}"
+  )
   chmod 600 "${mvp_lock_path}"
-  if [ "$(stat -c '%u' "${mvp_lock_path}")" != "${current_uid}" ] \
-    || [ "$(stat -c '%a' "${mvp_lock_path}")" != "600" ]; then
-    printf 'MVP global lock file is not owner-only state\n' >&2
-    exit 1
-  fi
-  if ! "${bootstrap_flock}" -n "${mvp_lock_fd}"; then
-    printf 'Another compiled MVP run owns the release program/root lock\n' >&2
-    exit 1
-  fi
-  export PALACE_MVP_LOCK_FD="${mvp_lock_fd}"
-  export PALACE_MVP_LOCK_PATH="${mvp_lock_path}"
+elif [ "${PALACE_MVP_LOCK_SUPERVISED:-}" != "1" ] \
+  || [ "${PALACE_MVP_LOCK_PATH:-}" != "${mvp_lock_path}" ]; then
+  printf 'Immutable MVP runner lacks exact release-lock supervision\n' >&2
+  exit 1
+fi
+if [ "$(stat -c '%u' "${mvp_lock_path}")" != "${current_uid}" ] \
+  || [ "$(stat -c '%a' "${mvp_lock_path}")" != "600" ] \
+  || [ "$(realpath -e -- "${mvp_lock_path}")" != "${mvp_lock_path}" ]; then
+  printf 'MVP global lock file is not owner-only state\n' >&2
+  exit 1
 fi
 
 if [ "${resuming}" -eq 1 ]; then
@@ -393,29 +371,295 @@ fail_run() {
 run_gate() {
   local gate="$1"
   shift
+  local cleanup_result
+  local cleanup_status
+  local launch_cleanup_result
+  local scope_attempt_file
+  local scope_attempt_id
+  local scope_attestation_status
+  local scope_evidence="${run_dir}/${gate}/process-scope.json"
+  local scope_history="${run_dir}/${gate}/process-scope-history"
+  local scope_launch="${run_dir}/${gate}/process-scope-launch.json"
+  local scope_transition_status
+  local scope_unit
   local gate_status
+  local recovery_result
+  local recovery_status
+
+  if [ -L "${scope_history}" ] \
+    || { [ -e "${scope_history}" ] && [ ! -d "${scope_history}" ]; }; then
+    fail_run "${gate}" \
+      "process scope history path is not a secure directory"
+  fi
+  "${acceptance_tools}/bin/mkdir" -p -- "${scope_history}"
+  "${acceptance_tools}/bin/chmod" 700 -- "${scope_history}"
+  if [ "$("${acceptance_tools}/bin/realpath" -e -- "${scope_history}")" \
+      != "${scope_history}" ] \
+    || [ "$("${acceptance_tools}/bin/stat" -c '%u:%a' -- \
+      "${scope_history}")" \
+      != "$("${acceptance_tools}/bin/id" -u):700" ]; then
+    fail_run "${gate}" \
+      "process scope history is not an owner-only canonical directory"
+  fi
+
+  if [ -L "${scope_launch}" ] \
+    || { [ -e "${scope_launch}" ] && [ ! -f "${scope_launch}" ]; }; then
+    fail_run "${gate}" \
+      "process scope launch evidence path is not a regular file"
+  fi
+  if [ -f "${scope_launch}" ]; then
+    set +e
+    launch_cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" recover \
+        "${scope_launch}" "${systemctl_bin}"
+    )"
+    cleanup_status=$?
+    set -e
+    if [ "${cleanup_status}" -ne 0 ]; then
+      fail_run "${gate}" \
+        "prior planned process scope could not be recovered"
+    fi
+    if [ "${launch_cleanup_result}" != "clean" ] \
+      && [ "${launch_cleanup_result}" != "residue-killed" ]; then
+      fail_run "${gate}" \
+        "prior planned process scope recovery result is invalid"
+    fi
+    if ! "${death_coupled_node[@]}" "${scope_control}" archive \
+      "${scope_launch}" "${scope_history}" >/dev/null; then
+      fail_run "${gate}" \
+        "recovered process scope launch could not be archived"
+    fi
+  fi
+  if [ -L "${scope_evidence}" ] \
+    || { [ -e "${scope_evidence}" ] \
+      && [ ! -f "${scope_evidence}" ]; }; then
+    fail_run "${gate}" \
+      "process scope evidence path is not a secure regular file"
+  fi
+  if [ -f "${scope_evidence}" ]; then
+    set +e
+    cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" cleanup \
+        "${scope_evidence}"
+    )"
+    cleanup_status=$?
+    set -e
+    if [ "${cleanup_status}" -ne 0 ]; then
+      fail_run "${gate}" \
+        "prior attested process scope could not be cleaned"
+    fi
+    if [ "${cleanup_result}" != "clean" ] \
+      && [ "${cleanup_result}" != "residue-killed" ]; then
+      fail_run "${gate}" \
+        "prior attested process scope recovery result is invalid"
+    fi
+    if ! "${death_coupled_node[@]}" "${scope_control}" archive \
+      "${scope_evidence}" "${scope_history}" >/dev/null; then
+      fail_run "${gate}" \
+        "recovered process scope evidence could not be archived"
+    fi
+  fi
+
+  scope_attempt_file="$(
+    "${acceptance_tools}/bin/mktemp" \
+      "${run_dir}/${gate}/.process-scope-attempt.XXXXXXXX"
+  )"
+  scope_attempt_id="${scope_attempt_file##*.}"
+  "${acceptance_tools}/bin/rm" -f -- "${scope_attempt_file}"
+  if [[ ! "${scope_attempt_id}" =~ ^[A-Za-z0-9]{8}$ ]]; then
+    fail_run "${gate}" "process scope attempt identity is invalid"
+  fi
+  scope_unit="${process_scope_prefix}-${gate}-${scope_attempt_id}.scope"
+  "${death_coupled_node[@]}" "${scope_control}" plan \
+    "${scope_unit}" "${process_scope_slice}" "${scope_launch}" \
+    >/dev/null
+
   printf 'Running compiled Basecamp %s\n' "${gate}"
-  "${acceptance_tools}/bin/setsid" --wait env "$@" &
+  active_gate_pid=""
+  active_scope_evidence="${scope_evidence}"
+  active_scope_launch="${scope_launch}"
+  active_scope_attested=0
+  "${systemd_run}" \
+    --user \
+    --scope \
+    --quiet \
+    --collect \
+    --expand-environment=no \
+    --slice="${process_scope_slice}" \
+    --unit="${scope_unit}" \
+    --property=KillMode=control-group \
+    "${acceptance_tools}/bin/setpriv" \
+      --pdeathsig TERM \
+    "${acceptance_tools}/bin/bash" \
+      -p \
+      -c 'expected_parent="$1"
+          shift
+          trap - TERM
+          if [ "$PPID" != "$expected_parent" ]; then
+            exit 125
+          fi
+          builtin kill -STOP "$$"
+          if [ "$PPID" != "$expected_parent" ]; then
+            exit 125
+          fi
+          builtin exec "$@"' \
+      palace-scope-barrier \
+      "$$" \
+      "${acceptance_tools}/bin/node" \
+      "${scope_guardian}" \
+      "${scope_unit}" \
+      "${process_scope_slice}" \
+      "${acceptance_tools}/bin/setsid" --wait \
+      "${acceptance_tools}/bin/env" \
+        "PALACE_MVP_PROCESS_SCOPE_PREFIX=${process_scope_prefix}" \
+        "PALACE_MVP_PROCESS_SCOPE_SLICE=${process_scope_slice}" \
+        "PALACE_MVP_PROCESS_SCOPE_UNIT=${scope_unit}" \
+      "$@" &
   active_gate_pid=$!
+  set +e
+  "${death_coupled_node[@]}" "${scope_control}" attest \
+    "${active_gate_pid}" \
+    "${scope_unit}" \
+    "${process_scope_slice}" \
+    "${scope_evidence}" \
+    "${systemctl_bin}" >/dev/null
+  scope_attestation_status=$?
+  set -e
+  if [ "${scope_attestation_status}" -ne 0 ]; then
+    set +e
+    recovery_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" recover \
+        "${scope_launch}" "${systemctl_bin}"
+    )"
+    recovery_status=$?
+    set -e
+    if [ "${recovery_status}" -ne 0 ] \
+      || { [ "${recovery_result}" != "clean" ] \
+        && [ "${recovery_result}" != "residue-killed" ]; }; then
+      printf \
+        'Gate %s scope attestation and exact recovery failed\n' \
+        "${gate}" >&2
+      exit 1
+    fi
+    fail_run "${gate}" "process scope attestation failed"
+  fi
+  active_scope_attested=1
+  set +e
+  "${death_coupled_node[@]}" "${scope_control}" finish-launch \
+    "${scope_launch}" "${scope_evidence}" >/dev/null
+  scope_transition_status=$?
+  set -e
+  if [ "${scope_transition_status}" -ne 0 ]; then
+    set +e
+    cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" cleanup \
+        "${scope_evidence}" 255
+    )"
+    cleanup_status=$?
+    set -e
+    if [ "${cleanup_status}" -ne 0 ] \
+      || { [ "${cleanup_result}" != "clean" ] \
+        && [ "${cleanup_result}" != "residue-killed" ]; }; then
+      printf \
+        'Gate %s scope transition and exact cleanup failed\n' \
+        "${gate}" >&2
+      exit 1
+    fi
+    fail_run "${gate}" "process scope launch transition failed"
+  fi
+  active_scope_launch=""
+  if ! "${death_coupled_node[@]}" "${scope_control}" release \
+      "${scope_evidence}" "${systemctl_bin}" >/dev/null; then
+    set +e
+    cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" cleanup \
+        "${scope_evidence}" 255
+    )"
+    cleanup_status=$?
+    set -e
+    if [ "${cleanup_status}" -ne 0 ] \
+      || { [ "${cleanup_result}" != "clean" ] \
+        && [ "${cleanup_result}" != "residue-killed" ]; }; then
+      printf \
+        'Gate %s scope release and exact cleanup failed\n' \
+        "${gate}" >&2
+      exit 1
+    fi
+    fail_run "${gate}" "process scope barrier release failed"
+  fi
   set +e
   wait "${active_gate_pid}"
   gate_status=$?
+  cleanup_result="$(
+    "${death_coupled_node[@]}" "${scope_control}" cleanup \
+      "${scope_evidence}" "${gate_status}"
+  )"
+  cleanup_status=$?
   set -e
+  if [ "${cleanup_status}" -ne 0 ] \
+    || { [ "${cleanup_result}" != "clean" ] \
+      && [ "${cleanup_result}" != "residue-killed" ]; }; then
+    printf \
+      'Gate %s post-command exact scope cleanup failed\n' \
+      "${gate}" >&2
+    exit 1
+  fi
   active_gate_pid=""
+  active_scope_evidence=""
+  active_scope_launch=""
+  active_scope_attested=0
   if [ "${gate_status}" -ne 0 ]; then
     fail_run "${gate}" "gate command exited with status ${gate_status}"
+  fi
+  if [ "${cleanup_result}" != "clean" ]; then
+    fail_run "${gate}" \
+      "gate retained processes that required cgroup.kill"
   fi
 }
 
 active_gate_pid=""
+active_scope_attested=0
+active_scope_evidence=""
+active_scope_launch=""
+
 handle_runner_signal() {
   local signal_name="$1"
+  local cleanup_result
+  local cleanup_status
   trap - HUP INT TERM
-  if [[ "${active_gate_pid}" =~ ^[0-9]+$ ]]; then
-    kill -TERM -- "-${active_gate_pid}" 2>/dev/null || true
-    wait "${active_gate_pid}" 2>/dev/null || true
-    active_gate_pid=""
+  if [ "${active_scope_attested}" -eq 1 ] \
+    && [ -n "${active_scope_evidence}" ]; then
+    set +e
+    cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" cleanup \
+        "${active_scope_evidence}" 255
+    )"
+    cleanup_status=$?
+    set -e
+  elif [ -n "${active_scope_launch}" ]; then
+    set +e
+    cleanup_result="$(
+      "${death_coupled_node[@]}" "${scope_control}" recover \
+        "${active_scope_launch}" "${systemctl_bin}"
+    )"
+    cleanup_status=$?
+    set -e
+  else
+    cleanup_result="clean"
+    cleanup_status=0
   fi
+  if [ "${cleanup_status}" -ne 0 ] \
+    || { [ "${cleanup_result}" != "clean" ] \
+      && [ "${cleanup_result}" != "residue-killed" ]; }; then
+    printf \
+      'Runner interrupted by %s; exact scope cleanup failed\n' \
+      "${signal_name}" >&2
+    exit 1
+  fi
+  active_gate_pid=""
+  active_scope_attested=0
+  active_scope_evidence=""
+  active_scope_launch=""
   fail_run "signal" "runner interrupted by ${signal_name}"
 }
 
@@ -660,12 +904,102 @@ invoked_runner="$(
 if [ "${immutable_runner}" = "0" ]; then
   export PALACE_MVP_IMMUTABLE_RUNNER=1
   export PALACE_MVP_RUNNER_SHA256="${snapshot_runner_sha256}"
-  exec "${snapshot_runner}" "${runs_root}" "${run_dir}"
+  export PALACE_MVP_LOCK_SUPERVISED=1
+  export PALACE_MVP_LOCK_PATH="${mvp_lock_path}"
+  exec "${bootstrap_flock}" \
+    --exclusive \
+    --nonblock \
+    --conflict-exit-code 75 \
+    --close \
+    -- \
+    "${mvp_lock_path}" \
+    "${bootstrap_setpriv}" --pdeathsig KILL \
+    "${bootstrap_bash}" -p \
+    "${snapshot_runner}" "${runs_root}" "${run_dir}"
 fi
 if [ "${invoked_runner}" != "${snapshot_runner}" ] \
   || [ "${PALACE_MVP_RUNNER_SHA256:-}" != "${snapshot_runner_sha256}" ]; then
   printf 'MVP gates must execute from exact immutable snapshot runner\n' >&2
   exit 1
+fi
+lock_attestation="$(
+  "${bootstrap_tools}/bin/node" \
+    "${product_snapshot}/tests/basecamp_release_lock.mjs" \
+    attest-parent \
+    "${mvp_lock_path}" \
+    "${bootstrap_flock}" \
+    "${snapshot_runner}" \
+    "${runs_root}" \
+    "${run_dir}" \
+    "$$"
+)"
+lock_supervisor_pid="$(
+  "${bootstrap_jq}" -er \
+    'select(
+       .schema == "logos.palace.release-lock-attestation"
+       and .version == 1
+     )
+     | .supervisorPid
+     | select(type == "number" and . > 1 and floor == .)' \
+    <<<"${lock_attestation}"
+)"
+lock_supervisor_start_time="$(
+  "${bootstrap_jq}" -er \
+    '.supervisorStartTimeTicks
+      | select(type == "number" and . > 0 and floor == .)' \
+    <<<"${lock_attestation}"
+)"
+export PALACE_MVP_LOCK_SUPERVISOR_PID="${lock_supervisor_pid}"
+export PALACE_MVP_LOCK_SUPERVISOR_START_TIME_TICKS="${lock_supervisor_start_time}"
+bootstrap_death_coupled_node=(
+  "${bootstrap_setpriv}"
+  --pdeathsig
+  KILL
+  "${bootstrap_bash}"
+  -p
+  -c
+  'expected_parent="$1"
+   shift
+   if [ "$PPID" != "$expected_parent" ]; then
+     exit 125
+   fi
+   exec "$@"'
+  palace-bootstrap-death-coupled-node
+  "$$"
+  "${bootstrap_tools}/bin/node"
+)
+active_scope_preflight="${product_snapshot}/tests/basecamp_active_scope_preflight.mjs"
+if [ -L "${active_scope_preflight}" ] \
+  || [ ! -f "${active_scope_preflight}" ]; then
+  printf 'Immutable active-scope preflight is missing\n' >&2
+  exit 1
+fi
+scope_preflight_result="$(
+  "${bootstrap_death_coupled_node[@]}" \
+    "${active_scope_preflight}" \
+    retire-before-release \
+    "${snapshot_runner}" \
+    "${runs_root}" \
+    "${run_dir}" \
+    "${bootstrap_systemctl}"
+)"
+case "${scope_preflight_result}" in
+  no-claim|legacy-clean|retired-clean|residue-killed)
+    ;;
+  *)
+    printf 'Active-scope preflight returned an invalid result\n' >&2
+    exit 1
+    ;;
+esac
+if [ "${resuming}" -eq 1 ]; then
+  if [ -d "${public_evidence}" ] && [ ! -L "${public_evidence}" ]; then
+    printf 'MVP public evidence path is an unsafe directory\n' >&2
+    exit 1
+  fi
+  if [ -e "${public_evidence}" ] || [ -L "${public_evidence}" ]; then
+    "${bootstrap_tools}/bin/unlink" -- "${public_evidence}"
+    "${bootstrap_tools}/bin/sync" -f "${run_dir}"
+  fi
 fi
 printf 'MVP product snapshot: %s\n' "${product_snapshot}"
 
@@ -680,8 +1014,46 @@ if ! valid_store_path "${acceptance_tools}"; then
 fi
 jq_bin="${acceptance_tools}/bin/jq"
 sha256_bin="${acceptance_tools}/bin/sha256sum"
-if [ ! -x "${jq_bin}" ] || [ ! -x "${sha256_bin}" ]; then
+systemd_run="${acceptance_tools}/bin/systemd-run"
+systemctl_bin="${acceptance_tools}/bin/systemctl"
+scope_control="${product_snapshot}/tests/basecamp_scope_control.mjs"
+scope_guardian="${product_snapshot}/tests/basecamp_scope_guardian.mjs"
+if [ ! -x "${jq_bin}" ] \
+  || [ ! -x "${sha256_bin}" ] \
+  || [ ! -x "${systemd_run}" ] \
+  || [ ! -x "${systemctl_bin}" ] \
+  || [ ! -x "${acceptance_tools}/bin/node" ] \
+  || [ ! -x "${acceptance_tools}/bin/setpriv" ] \
+  || [ ! -x "${acceptance_tools}/bin/setsid" ] \
+  || [ -L "${scope_control}" ] \
+  || [ ! -f "${scope_control}" ] \
+  || [ -L "${scope_guardian}" ] \
+  || [ ! -f "${scope_guardian}" ]; then
   printf 'Pinned acceptance tools are incomplete\n' >&2
+  exit 1
+fi
+death_coupled_node=(
+  "${acceptance_tools}/bin/setpriv"
+  --pdeathsig
+  KILL
+  "${acceptance_tools}/bin/bash"
+  -p
+  -c
+  'expected_parent="$1"
+   shift
+   if [ "$PPID" != "$expected_parent" ]; then
+     exit 125
+   fi
+   exec "$@"'
+  palace-death-coupled-node
+  "$$"
+  "${acceptance_tools}/bin/node"
+)
+if ! "${death_coupled_node[@]}" "${scope_control}" preflight \
+    >/dev/null \
+  || [ "$("${systemctl_bin}" --user is-system-running 2>/dev/null)" \
+    != "running" ]; then
+  printf 'Compiled MVP requires a running user manager and cgroup v2\n' >&2
   exit 1
 fi
 release_artifact="$(
@@ -993,7 +1365,7 @@ if [ -L "${accepted_submission_contract_source_terminal}" ] \
   || [ ! -f "${accepted_submission_contract_source_terminal}" ] \
   || [ -L "${accepted_submission_contract_source_repair}" ] \
   || [ ! -f "${accepted_submission_contract_source_repair}" ] \
-  || ! "${acceptance_tools}/bin/node" -e \
+  || ! "${death_coupled_node[@]}" -e \
     '
       const { readFileSync } = require("node:fs");
       for (let index = 1; index < process.argv.length; index += 2) {
@@ -1015,7 +1387,7 @@ cold_replay_contract_test_fails_closed="core_vm_finalized_replay_fails_closed_wi
 cold_replay_contract_source="${product_snapshot}/packages/palace_core/tests/test_core_vm_recovery.cpp"
 if [ -L "${cold_replay_contract_source}" ] \
   || [ ! -f "${cold_replay_contract_source}" ] \
-  || ! "${acceptance_tools}/bin/node" -e \
+  || ! "${death_coupled_node[@]}" -e \
     '
       const { readFileSync } = require("node:fs");
       const source = readFileSync(process.argv[1], "utf8");
@@ -1037,7 +1409,7 @@ palace_vm_contract_test_compatibility="untracked_finalized_compatibility_api_can
 palace_vm_contract_source="${product_snapshot}/packages/palace_vm/tests/test_vm_contract.cpp"
 if [ -L "${palace_vm_contract_source}" ] \
   || [ ! -f "${palace_vm_contract_source}" ] \
-  || ! "${acceptance_tools}/bin/node" -e \
+  || ! "${death_coupled_node[@]}" -e \
     '
       const { readFileSync } = require("node:fs");
       const source = readFileSync(process.argv[1], "utf8");
@@ -1058,11 +1430,13 @@ fi
 claim_tool="${product_snapshot}/tests/basecamp_active_run_claim.mjs"
 set +e
 active_claim_path="$(
-  "${acceptance_tools}/bin/node" "${claim_tool}" acquire \
+  "${death_coupled_node[@]}" "${claim_tool}" \
+    acquire-or-roll-forward \
     "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
     "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
     "${snapshot_runner_sha256}" "${runtime_manifest}" \
-    "${runtime_manifest_sha256}"
+    "${runtime_manifest_sha256}" \
+    "${process_scope_slice}" "${process_scope_prefix}"
 )"
 claim_status=$?
 set -e
@@ -1072,11 +1446,12 @@ if [ "${claim_status}" -ne 0 ]; then
 fi
 set +e
 claim_state="$(
-  "${acceptance_tools}/bin/node" "${claim_tool}" state \
+  "${death_coupled_node[@]}" "${claim_tool}" state \
     "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
     "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
     "${snapshot_runner_sha256}" "${runtime_manifest}" \
-    "${runtime_manifest_sha256}"
+    "${runtime_manifest_sha256}" \
+    "${process_scope_slice}" "${process_scope_prefix}"
 )"
 claim_state_status=$?
 set -e
@@ -1087,7 +1462,7 @@ if [ "${claim_state_status}" -ne 0 ]; then
 fi
 invalidate_public_evidence
 case "${claim_state}" in
-  active)
+  active-pre-gate3|gate3-entered)
     claim_completed=0
     ;;
   completed)
@@ -1127,6 +1502,39 @@ secure_gate_dir() {
     fail_run "run-scope" "gate artifact directory is not canonical"
   fi
   chmod 700 "${gate_dir}"
+}
+
+process_scope_evidence_passes() {
+  local gate="$1"
+  local report="$2"
+  local gate_dir
+  local evidence
+  local launch
+  local evidence_run
+  local evidence_run_id
+  local expected_slice
+
+  if [[ ! "${gate}" =~ ^gate[1-4]$ ]]; then
+    return 1
+  fi
+  gate_dir="$(dirname "${report}")"
+  evidence="${gate_dir}/process-scope.json"
+  launch="${gate_dir}/process-scope-launch.json"
+  evidence_run="$(dirname "${gate_dir}")"
+  evidence_run_id="$(basename "${evidence_run}")"
+  evidence_run_id="${evidence_run_id#run.}"
+  if [[ ! "${evidence_run_id}" =~ ^[A-Za-z0-9]{8}$ ]] \
+    || [ -L "${evidence}" ] \
+    || [ ! -f "${evidence}" ] \
+    || [ -e "${launch}" ] \
+    || [ -L "${launch}" ] \
+    || [ "$(stat -c '%u:%a' "${evidence}")" \
+      != "$(id -u):600" ]; then
+    return 1
+  fi
+  expected_slice="logos-palace-run-${evidence_run_id}.slice"
+  "${death_coupled_node[@]}" "${scope_control}" validate-cleaned \
+    "${evidence}" "${gate}" "${expected_slice}" >/dev/null 2>&1
 }
 
 gate0_report_passes() {
@@ -1235,6 +1643,7 @@ gate_report_passes() {
   fi
 
   if ! "${jq_bin}" -s -e \
+    -L "${product_snapshot}/tests" \
     --arg gate "${gate}" \
     --arg snapshot "${product_snapshot}" \
     --arg source_commit "${source_commit}" \
@@ -1246,6 +1655,8 @@ gate_report_passes() {
     --arg gate3_sha256 "${gate3_sha256}" \
     --argjson dependencies "${dependency_revisions}" \
     '
+      include "basecamp_application_metrics";
+
       def basecamp:
         if (.basecamp | type) == "object" then
           {
@@ -2473,12 +2884,10 @@ gate_report_passes() {
                   )
               )
           )
-          and .metrics.applicationRoundTrip.status == "passed"
-          and .metrics.applicationRoundTrip.samplesPerSize == 20
           and (
-            .metrics.applicationRoundTrip.measurements
-            | keys | sort
-          ) == ["0", "256", "4096"]
+            .metrics.applicationRoundTrip
+            | palace_valid_application_round_trip
+          )
           and (.metrics.recovery.fullRebuildMs
             | valid_nonnegative_integer)
           and (.metrics.recovery.coldHistoryStorageVmRebuildMs
@@ -2616,6 +3025,8 @@ gate_report_passes() {
               lezReadOrigin: "https://explorer.testnet.lez.logos.co"
             }
           }
+          and $gate4.releaseContract.network.lezModuleRevision
+            == $gate4.dependencyRevisions.lez_core.revision
           and ($gate4 | valid_screenshot_evidence)
           and ($gate4 | valid_gate4_behaviors);
 
@@ -2949,8 +3360,11 @@ gate_report_passes() {
     ' "${reports[@]}" >/dev/null 2>&1; then
     return 1
   fi
+  if ! process_scope_evidence_passes "${gate}" "${report}"; then
+    return 1
+  fi
   if [ "${gate}" = "gate4" ]; then
-    "${acceptance_tools}/bin/node" \
+    "${death_coupled_node[@]}" \
       "${product_snapshot}/tests/validate_gate4_artifacts.mjs" \
       "${report}" "$(dirname "${report}")" >/dev/null 2>&1
   fi
@@ -2982,6 +3396,10 @@ prior_run_complete() {
   local prior_gate2="${prior_run}/gate2/gate2-report.json"
   local prior_gate3="${prior_run}/gate3/gate3-report.json"
   local prior_gate4="${prior_run}/gate4/gate4-report.json"
+  local prior_gate1_scope="${prior_run}/gate1/process-scope.json"
+  local prior_gate2_scope="${prior_run}/gate2/process-scope.json"
+  local prior_gate3_scope="${prior_run}/gate3/process-scope.json"
+  local prior_gate4_scope="${prior_run}/gate4/process-scope.json"
   local prior_compiled="${prior_run}/compiled-mvp-report.json"
   local prior_runtime_manifest="${prior_run}/runtime-output-manifest.json"
   local prior_basecamp_revision
@@ -2992,6 +3410,10 @@ prior_run_complete() {
   local prior_gate2_sha256
   local prior_gate3_sha256
   local prior_gate4_sha256
+  local prior_gate1_scope_sha256
+  local prior_gate2_scope_sha256
+  local prior_gate3_scope_sha256
+  local prior_gate4_scope_sha256
   local prior_runtime_manifest_sha256
   local prior_dir
   local prior_file
@@ -3028,6 +3450,10 @@ prior_run_complete() {
     "${prior_gate2}" \
     "${prior_gate3}" \
     "${prior_gate4}" \
+    "${prior_gate1_scope}" \
+    "${prior_gate2_scope}" \
+    "${prior_gate3_scope}" \
+    "${prior_gate4_scope}" \
     "${prior_compiled}" \
     "${prior_runtime_manifest}"; do
     if [ -L "${prior_file}" ] || [ ! -f "${prior_file}" ]; then
@@ -3059,7 +3485,9 @@ prior_run_complete() {
   gate3_report="${prior_gate3}"
   product_snapshot="${prior_snapshot}"
   basecamp_rev="${prior_basecamp_revision}"
-  if ! gate_report_passes "gate3" "${prior_gate3}" \
+  if ! process_scope_evidence_passes "gate1" "${prior_gate1}" \
+    || ! process_scope_evidence_passes "gate2" "${prior_gate2}" \
+    || ! gate_report_passes "gate3" "${prior_gate3}" \
     || ! gate_report_passes "gate4" "${prior_gate4}"; then
     return 1
   fi
@@ -3069,6 +3497,10 @@ prior_run_complete() {
   prior_gate2_sha256="$(report_sha256 "${prior_gate2}")"
   prior_gate3_sha256="$(report_sha256 "${prior_gate3}")"
   prior_gate4_sha256="$(report_sha256 "${prior_gate4}")"
+  prior_gate1_scope_sha256="$(report_sha256 "${prior_gate1_scope}")"
+  prior_gate2_scope_sha256="$(report_sha256 "${prior_gate2_scope}")"
+  prior_gate3_scope_sha256="$(report_sha256 "${prior_gate3_scope}")"
+  prior_gate4_scope_sha256="$(report_sha256 "${prior_gate4_scope}")"
   prior_runtime_manifest_sha256="$(
     report_sha256 "${prior_runtime_manifest}"
   )"
@@ -3081,6 +3513,10 @@ prior_run_complete() {
     --arg gate2_sha256 "${prior_gate2_sha256}" \
     --arg gate3_sha256 "${prior_gate3_sha256}" \
     --arg gate4_sha256 "${prior_gate4_sha256}" \
+    --arg gate1_scope_sha256 "${prior_gate1_scope_sha256}" \
+    --arg gate2_scope_sha256 "${prior_gate2_scope_sha256}" \
+    --arg gate3_scope_sha256 "${prior_gate3_scope_sha256}" \
+    --arg gate4_scope_sha256 "${prior_gate4_scope_sha256}" \
     --arg runtime_manifest_sha256 "${prior_runtime_manifest_sha256}" \
     --slurpfile runtime_manifest "${prior_runtime_manifest}" \
     '
@@ -3506,16 +3942,36 @@ prior_run_complete() {
         and $compiled.gates.gate0.reportSha256 == $gate0_sha256
         and $compiled.gates.gate1.report == "gate1/gate1-report.json"
         and $compiled.gates.gate1.reportSha256 == $gate1_sha256
+        and $compiled.gates.gate1.processScope == {
+          evidence: "gate1/process-scope.json",
+          evidenceSha256: $gate1_scope_sha256
+        }
         and $compiled.gates.gate2.report == "gate2/gate2-report.json"
         and $compiled.gates.gate2.reportSha256 == $gate2_sha256
+        and $compiled.gates.gate2.processScope == {
+          evidence: "gate2/process-scope.json",
+          evidenceSha256: $gate2_scope_sha256
+        }
         and $compiled.gates.gate3.report == "gate3/gate3-report.json"
         and $compiled.gates.gate3.reportSha256 == $gate3_sha256
+        and $compiled.gates.gate3.processScope == {
+          evidence: "gate3/process-scope.json",
+          evidenceSha256: $gate3_scope_sha256
+        }
         and $compiled.gates.gate4.report == "gate4/gate4-report.json"
         and $compiled.gates.gate5.report == "gate4/gate4-report.json"
         and $compiled.gates.gate6.report == "gate4/gate4-report.json"
         and $compiled.gates.gate4.reportSha256 == $gate4_sha256
         and $compiled.gates.gate5.reportSha256 == $gate4_sha256
         and $compiled.gates.gate6.reportSha256 == $gate4_sha256
+        and $compiled.gates.gate4.processScope == {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: $gate4_scope_sha256
+        }
+        and $compiled.gates.gate5.processScope
+          == $compiled.gates.gate4.processScope
+        and $compiled.gates.gate6.processScope
+          == $compiled.gates.gate4.processScope
     ' \
     "${prior_gate0}" \
     "${prior_gate1}" \
@@ -3540,11 +3996,12 @@ finalize_completed_run() {
 
   set +e
   completion_path="$(
-    "${acceptance_tools}/bin/node" "${claim_tool}" completion \
+    "${death_coupled_node[@]}" "${claim_tool}" completion \
       "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
       "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
       "${snapshot_runner_sha256}" "${runtime_manifest}" \
-      "${runtime_manifest_sha256}"
+      "${runtime_manifest_sha256}" \
+      "${process_scope_slice}" "${process_scope_prefix}"
   )"
   completion_status=$?
   set -e
@@ -3556,7 +4013,7 @@ finalize_completed_run() {
   fi
 
   set +e
-  "${acceptance_tools}/bin/node" \
+  "${death_coupled_node[@]}" \
     "${product_snapshot}/tests/build_public_evidence.mjs" \
     "${run_dir}" "${public_evidence}"
   public_status=$?
@@ -3736,15 +4193,36 @@ sandbox_test_nar_size="$(
 secure_gate_dir "${gate1_dir}"
 run_or_skip_gate "gate1" "${gate1_report}" \
   "PALACE_GATE1_PRODUCT_SNAPSHOT=${product_snapshot}" \
-  bash "${product_snapshot}/scripts/run-basecamp-gate1.sh" \
+  "${acceptance_tools}/bin/bash" \
+  -p \
+  "${product_snapshot}/scripts/run-basecamp-gate1.sh" \
   "${gate1_dir}"
 
 secure_gate_dir "${gate2_dir}"
 run_or_skip_gate "gate2" "${gate2_report}" \
   "PALACE_GATE2_PRODUCT_SNAPSHOT=${product_snapshot}" \
   "PALACE_GATE2_ACCEPTANCE_CORE_LGX=${palace_core_acceptance_lgx}" \
-  bash "${product_snapshot}/scripts/run-basecamp-gate2.sh" \
+  "${acceptance_tools}/bin/bash" \
+  -p \
+  "${product_snapshot}/scripts/run-basecamp-gate2.sh" \
   "${gate2_dir}"
+
+set +e
+entered_gate3_claim="$(
+  "${death_coupled_node[@]}" "${claim_tool}" enter-gate3 \
+    "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
+    "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
+    "${snapshot_runner_sha256}" "${runtime_manifest}" \
+    "${runtime_manifest_sha256}" \
+    "${process_scope_slice}" "${process_scope_prefix}"
+)"
+entered_gate3_status=$?
+set -e
+if [ "${entered_gate3_status}" -ne 0 ] \
+  || [ "${entered_gate3_claim}" != "${active_claim_path}" ]; then
+  fail_run "gate3-claim-transition" \
+    "durable active-run claim did not enter Gate 3"
+fi
 
 if [ "${resuming}" -eq 1 ] \
   && ! gate_report_passes "gate3" "${gate3_report}"; then
@@ -3761,14 +4239,18 @@ run_or_skip_gate "gate3" "${gate3_report}" \
   "PALACE_GATE3_PRODUCT_SNAPSHOT=${product_snapshot}" \
   "PALACE_GATE3_STATE_DIR=${shared_state}" \
   "PALACE_GATE3_PRODUCTION_IDENTITIES=1" \
-  bash "${product_snapshot}/scripts/run-basecamp-gate3.sh" \
+  "${acceptance_tools}/bin/bash" \
+  -p \
+  "${product_snapshot}/scripts/run-basecamp-gate3.sh" \
   "${gate3_dir}"
 
 secure_gate_dir "${gate4_dir}"
 run_or_skip_gate "gate4" "${gate4_report}" \
   "PALACE_GATE4_PRODUCT_SNAPSHOT=${product_snapshot}" \
   "PALACE_GATE4_STATE_DIR=${shared_state}" \
-  bash "${product_snapshot}/scripts/run-basecamp-gate4.sh" \
+  "${acceptance_tools}/bin/bash" \
+  -p \
+  "${product_snapshot}/scripts/run-basecamp-gate4.sh" \
   "${gate4_dir}" \
   "${gate3_report}"
 
@@ -4027,6 +4509,18 @@ gate1_report_sha256="$(report_sha256 "${gate1_report}")"
 gate2_report_sha256="$(report_sha256 "${gate2_report}")"
 gate3_report_sha256="$(report_sha256 "${gate3_report}")"
 gate4_report_sha256="$(report_sha256 "${gate4_report}")"
+gate1_scope_sha256="$(
+  report_sha256 "${gate1_dir}/process-scope.json"
+)"
+gate2_scope_sha256="$(
+  report_sha256 "${gate2_dir}/process-scope.json"
+)"
+gate3_scope_sha256="$(
+  report_sha256 "${gate3_dir}/process-scope.json"
+)"
+gate4_scope_sha256="$(
+  report_sha256 "${gate4_dir}/process-scope.json"
+)"
 
 temporary_report="$(mktemp "${run_dir}/.compiled-mvp-report.XXXXXXXX")"
 "${jq_bin}" -n \
@@ -4041,6 +4535,10 @@ temporary_report="$(mktemp "${run_dir}/.compiled-mvp-report.XXXXXXXX")"
   --arg gate2_sha256 "${gate2_report_sha256}" \
   --arg gate3_sha256 "${gate3_report_sha256}" \
   --arg gate4_sha256 "${gate4_report_sha256}" \
+  --arg gate1_scope_sha256 "${gate1_scope_sha256}" \
+  --arg gate2_scope_sha256 "${gate2_scope_sha256}" \
+  --arg gate3_scope_sha256 "${gate3_scope_sha256}" \
+  --arg gate4_scope_sha256 "${gate4_scope_sha256}" \
   --arg active_claim "${active_claim_path}" \
   --arg snapshot_gc_root "${snapshot_gc_root}" \
   --arg runtime_manifest_sha256 "${runtime_manifest_sha256}" \
@@ -4156,32 +4654,56 @@ temporary_report="$(mktemp "${run_dir}/.compiled-mvp-report.XXXXXXXX")"
       gate1: {
         status: "passed",
         report: "gate1/gate1-report.json",
-        reportSha256: $gate1_sha256
+        reportSha256: $gate1_sha256,
+        processScope: {
+          evidence: "gate1/process-scope.json",
+          evidenceSha256: $gate1_scope_sha256
+        }
       },
       gate2: {
         status: "passed",
         report: "gate2/gate2-report.json",
-        reportSha256: $gate2_sha256
+        reportSha256: $gate2_sha256,
+        processScope: {
+          evidence: "gate2/process-scope.json",
+          evidenceSha256: $gate2_scope_sha256
+        }
       },
       gate3: {
         status: "passed",
         report: "gate3/gate3-report.json",
-        reportSha256: $gate3_sha256
+        reportSha256: $gate3_sha256,
+        processScope: {
+          evidence: "gate3/process-scope.json",
+          evidenceSha256: $gate3_scope_sha256
+        }
       },
       gate4: {
         status: "passed",
         report: "gate4/gate4-report.json",
-        reportSha256: $gate4_sha256
+        reportSha256: $gate4_sha256,
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: $gate4_scope_sha256
+        }
       },
       gate5: {
         status: "passed",
         report: "gate4/gate4-report.json",
-        reportSha256: $gate4_sha256
+        reportSha256: $gate4_sha256,
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: $gate4_scope_sha256
+        }
       },
       gate6: {
         status: "passed",
         report: "gate4/gate4-report.json",
-        reportSha256: $gate4_sha256
+        reportSha256: $gate4_sha256,
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: $gate4_scope_sha256
+        }
       }
     },
     metrics: {
@@ -4293,11 +4815,12 @@ invalidate_public_evidence
 claim_completed=1
 set +e
 completed_claim="$(
-  "${acceptance_tools}/bin/node" "${claim_tool}" complete \
+  "${death_coupled_node[@]}" "${claim_tool}" complete \
     "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
     "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
     "${snapshot_runner_sha256}" "${runtime_manifest}" \
-    "${runtime_manifest_sha256}"
+    "${runtime_manifest_sha256}" \
+    "${process_scope_slice}" "${process_scope_prefix}"
 )"
 claim_completion_status=$?
 set -e

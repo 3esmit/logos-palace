@@ -285,4 +285,9 @@ for (const spec of expected) {
   }
 }
 
-process.stdout.write("GATE4_ARTIFACTS=PASS\n");
+process.stdout.write(
+  "GATE4_ARTIFACTS=PASS\n"
+    + `GATE4_REPORT_SHA256=${
+      createHash("sha256").update(reportBytes).digest("hex")
+    }\n`,
+);

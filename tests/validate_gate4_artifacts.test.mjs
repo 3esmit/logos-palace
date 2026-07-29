@@ -124,7 +124,15 @@ test("reopens exact ten fully decoded PNG artifacts", async (t) => {
   t.after(() => rm(input.directory, { recursive: true, force: true }));
   const result = validate(input);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "GATE4_ARTIFACTS=PASS\n");
+  assert.equal(
+    result.stdout,
+    "GATE4_ARTIFACTS=PASS\n"
+      + `GATE4_REPORT_SHA256=${
+        createHash("sha256")
+          .update(await readFile(input.reportPath))
+          .digest("hex")
+      }\n`,
+  );
 });
 
 test("rejects corrupt PNG CRC even when report digest matches bytes", async (t) => {

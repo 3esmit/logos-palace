@@ -55,6 +55,18 @@ acceptance_tools="$(
   nix build --no-link --print-out-paths \
     "${product_ref}#acceptance-tools"
 )"
+if [ -z "${PALACE_MVP_PROCESS_SCOPE_UNIT:-}" ] \
+  || [ -z "${PALACE_MVP_PROCESS_SCOPE_SLICE:-}" ]; then
+  printf 'Gate 4 requires an attested process scope\n' >&2
+  exit 1
+fi
+PALACE_MVP_PROCESS_CGROUP="$(
+  "${acceptance_tools}/bin/node" \
+    "${product_snapshot}/tests/basecamp_scope_control.mjs" current \
+    "${PALACE_MVP_PROCESS_SCOPE_UNIT}" \
+    "${PALACE_MVP_PROCESS_SCOPE_SLICE}"
+)"
+export PALACE_MVP_PROCESS_CGROUP
 release_artifact="$(
   nix build --no-link --print-out-paths \
     "${product_ref}#palace-release-artifact"
@@ -79,80 +91,10 @@ if [ "${release_artifact}" != "${canonical_release_artifact}" ] \
 fi
 export PALACE_RELEASE_ARTIFACT="${canonical_release_artifact}"
 
-require_inherited_mvp_lock() {
-  local current_uid
-  local runtime_dir
-  local canonical_runtime_dir
-  local release_program_id
-  local release_root_id
-  local expected_lock_path
-  local canonical_lock_path
-  local inherited_lock_target
-  local lock_fd
-
-  current_uid="$("${acceptance_tools}/bin/id" -u)"
-  runtime_dir="/run/user/${current_uid}"
-  canonical_runtime_dir="$(
-    "${acceptance_tools}/bin/realpath" -e -- "${runtime_dir}" \
-      2>/dev/null || true
-  )"
-  if [ "${runtime_dir}" != "${canonical_runtime_dir}" ] \
-    || [ -L "${runtime_dir}" ] \
-    || [ ! -d "${runtime_dir}" ] \
-    || [ "$("${acceptance_tools}/bin/stat" -c '%u' "${runtime_dir}")" \
-      != "${current_uid}" ] \
-    || [ "$("${acceptance_tools}/bin/stat" -c '%a' "${runtime_dir}")" \
-      != "700" ]; then
-    runtime_dir="/tmp/logos-palace-runtime-${current_uid}"
-    canonical_runtime_dir="$(
-      "${acceptance_tools}/bin/realpath" -e -- "${runtime_dir}" \
-        2>/dev/null || true
-    )"
-    if [ "${runtime_dir}" != "${canonical_runtime_dir}" ] \
-      || [ -L "${runtime_dir}" ] \
-      || [ ! -d "${runtime_dir}" ] \
-      || [ "$("${acceptance_tools}/bin/stat" -c '%u' "${runtime_dir}")" \
-        != "${current_uid}" ] \
-      || [ "$("${acceptance_tools}/bin/stat" -c '%a' "${runtime_dir}")" \
-        != "700" ]; then
-      printf 'Inherited MVP lock directory is not deterministic/secure\n' >&2
-      return 1
-    fi
-  fi
-
-  release_program_id="e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61"
-  release_root_id="12ff117a38d756f132cf616cea36fa007653c3c99727c1b475503caa345cbf2a"
-  expected_lock_path="${runtime_dir}/logos-palace-${release_program_id}-${release_root_id}.lock"
-  lock_fd="${PALACE_MVP_LOCK_FD:-}"
-  if [ "${PALACE_MVP_LOCK_PATH:-}" != "${expected_lock_path}" ] \
-    || [[ ! "${lock_fd}" =~ ^([3-9]|[1-9][0-9]+)$ ]] \
-    || [ ! -e "/proc/$$/fd/${lock_fd}" ] \
-    || [ -L "${expected_lock_path}" ] \
-    || [ ! -f "${expected_lock_path}" ]; then
-    printf 'Gate 4 requires inherited MVP release lock\n' >&2
-    return 1
-  fi
-  canonical_lock_path="$(
-    "${acceptance_tools}/bin/realpath" -e -- "${expected_lock_path}" \
-      2>/dev/null || true
-  )"
-  inherited_lock_target="$(
-    "${acceptance_tools}/bin/realpath" -e -- "/proc/$$/fd/${lock_fd}" \
-      2>/dev/null || true
-  )"
-  if [ "${canonical_lock_path}" != "${expected_lock_path}" ] \
-    || [ "${inherited_lock_target}" != "${expected_lock_path}" ] \
-    || [ "$("${acceptance_tools}/bin/stat" -c '%u' \
-      "${expected_lock_path}")" != "${current_uid}" ] \
-    || [ "$("${acceptance_tools}/bin/stat" -c '%a' \
-      "${expected_lock_path}")" != "600" ] \
-    || ! "${acceptance_tools}/bin/flock" -n "${lock_fd}"; then
-    printf 'Inherited MVP release lock failed validation\n' >&2
-    return 1
-  fi
-}
-
-require_inherited_mvp_lock
+if [ "${PALACE_MVP_LOCK_FD+x}" = "x" ]; then
+  printf 'Gate 4 must not inherit the MVP release lock FD\n' >&2
+  exit 1
+fi
 run_dir="$("${acceptance_tools}/bin/realpath" -e -- \
   "$(dirname "${artifacts_dir}")")"
 verified_claim="$(
@@ -166,7 +108,9 @@ verified_claim="$(
     "${PALACE_PRODUCT_SNAPSHOT_NAR_SIZE:-}" \
     "${PALACE_MVP_RUNNER_SHA256:-}" \
     "${PALACE_RUNTIME_OUTPUT_MANIFEST:-}" \
-    "${PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256:-}"
+    "${PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256:-}" \
+    "${PALACE_MVP_PROCESS_SCOPE_SLICE:-}" \
+    "${PALACE_MVP_PROCESS_SCOPE_PREFIX:-}"
 )"
 if [ "${verified_claim}" != "${PALACE_MVP_CLAIM_PATH:-}" ]; then
   printf 'Gate 4 active-run claim differs\n' >&2
@@ -571,8 +515,13 @@ dependency_revisions="$(
 
 export LOGOS_QT_MCP="${qt_mcp}"
 export PALACE_BASECAMP_REV="${basecamp_rev}"
+export PALACE_PIDFD_SIGNAL="${acceptance_tools}/bin/palace-pidfd-signal"
 export PALACE_PRODUCT_SNAPSHOT="${product_snapshot}"
 export PALACE_GATE4_DEPENDENCY_REVISIONS="${dependency_revisions}"
+if [ ! -x "${PALACE_PIDFD_SIGNAL}" ]; then
+  printf 'Gate 4 pidfd signal helper is unavailable\n' >&2
+  exit 1
+fi
 set +e
 "${acceptance_tools}/bin/node" \
   "${product_snapshot}/tests/basecamp_gate4.mjs" \

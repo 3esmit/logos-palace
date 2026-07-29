@@ -66,6 +66,32 @@ else
   product_ref="path:${product_snapshot}"
 fi
 printf 'Gate 1 product snapshot secured: %s\n' "${product_snapshot}"
+if [ "${PALACE_MVP_PROCESS_SCOPE_UNIT+x}" \
+    != "${PALACE_MVP_PROCESS_SCOPE_SLICE+x}" ]; then
+  printf 'Gate 1 process scope unit and slice must be provided together\n' >&2
+  exit 1
+fi
+if [ "${PALACE_MVP_PROCESS_SCOPE_UNIT+x}" != "x" ]; then
+  set +e
+  "${acceptance_tools}/bin/bash" \
+    -p \
+    "${product_snapshot}/scripts/run-basecamp-standalone-scoped.sh" \
+    gate1 \
+    "${product_snapshot}" \
+    "${acceptance_tools}" \
+    "${artifacts_dir}" \
+    "${product_snapshot}/scripts/run-basecamp-gate1.sh"
+  standalone_status=$?
+  set -e
+  exit "${standalone_status}"
+fi
+PALACE_MVP_PROCESS_CGROUP="$(
+  "${acceptance_tools}/bin/node" \
+    "${product_snapshot}/tests/basecamp_scope_control.mjs" current \
+    "${PALACE_MVP_PROCESS_SCOPE_UNIT}" \
+    "${PALACE_MVP_PROCESS_SCOPE_SLICE}"
+)"
+export PALACE_MVP_PROCESS_CGROUP
 lock_file="${product_snapshot}/flake.lock"
 basecamp_owner="$(
   "${acceptance_tools}/bin/jq" -r '.nodes.basecamp.locked.owner' "${lock_file}"
@@ -162,10 +188,15 @@ fi
 
 export LOGOS_QT_MCP="${qt_mcp}"
 export PALACE_BASECAMP_REV="${basecamp_rev}"
+export PALACE_PIDFD_SIGNAL="${acceptance_tools}/bin/palace-pidfd-signal"
 export PALACE_PRODUCT_SNAPSHOT="${product_snapshot}"
 export QML_INSPECTOR_PORT="${PALACE_GATE1_INSPECTOR_PORT:-4768}"
-if [ "${PALACE_MVP_CLAIM_PATH+x}" != "${PALACE_MVP_LOCK_FD+x}" ]; then
-  printf 'PALACE_MVP_CLAIM_PATH and PALACE_MVP_LOCK_FD must be provided together\n' >&2
+if [ ! -x "${PALACE_PIDFD_SIGNAL}" ]; then
+  printf 'Gate 1 pidfd signal helper is unavailable\n' >&2
+  exit 1
+fi
+if [ "${PALACE_MVP_LOCK_FD+x}" = "x" ]; then
+  printf 'Gate 1 must not inherit the MVP release lock FD\n' >&2
   exit 1
 fi
 if [ "${PALACE_MVP_CLAIM_PATH+x}" = "x" ]; then

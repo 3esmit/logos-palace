@@ -33,11 +33,17 @@ import {
   stopKnownWorkers,
 } from "./basecamp_terminal_cleanup.mjs";
 import {
+  captureOwnedProcessIdentity,
   claimBoundProcesses,
   discoverOwnedBasecampProcesses,
+  ownedProcessIdentityExists,
   ownedProcessGroupMembers,
   requireOwnedProcessGroup,
 } from "./basecamp_owned_processes.mjs";
+import {
+  originalCreatorProcessExists,
+  validateCreatorProcessIdentity,
+} from "./basecamp_gate4_creator_identity.mjs";
 import {
   exactProcessInventoryContract,
   findStandalonePalaceServerMatches,
@@ -183,6 +189,8 @@ const basecampWrapperFallbackLoaderPaths = Object.freeze([
 ]);
 const releaseProgramId = palaceRelease.programIdHex;
 const releaseRootId = palaceRelease.rootAccountIdHex;
+const approvedLezModuleRevision =
+  "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f";
 const expectedObjectIds = [
   "background-atrium",
   "background-lounge",
@@ -285,17 +293,11 @@ await mkdir(artifactsDir, { recursive: true });
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 
-function childStdioWithInheritedMvpLock(baseStdio) {
-  const encoded = process.env.PALACE_MVP_LOCK_FD;
-  if (encoded === undefined) return baseStdio;
-  if (!/^(?:[3-9]|[1-9][0-9]{1,2})$/.test(encoded)) {
-    throw new Error("PALACE_MVP_LOCK_FD is invalid");
+function childStdioWithoutReleaseLock(baseStdio) {
+  if (process.env.PALACE_MVP_LOCK_FD !== undefined) {
+    throw new Error("PALACE_MVP_LOCK_FD must not be inherited");
   }
-  const lockFd = Number(encoded);
-  const stdio = [...baseStdio];
-  while (stdio.length <= lockFd) stdio.push("ignore");
-  stdio[lockFd] = lockFd;
-  return stdio;
+  return baseStdio;
 }
 
 async function durableReplace(path, contents) {
@@ -821,63 +823,6 @@ async function ephemeralTcpPorts(count, excluded = new Set()) {
   }
 }
 
-function signalProcessGroup(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
-async function terminateKnownBasecamp(pid, expectedUserDir) {
-  if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return;
-  let argv;
-  try {
-    argv = (await readFile(`/proc/${pid}/cmdline`))
-      .toString("utf8")
-      .split("\0")
-      .filter(Boolean);
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
-  }
-  const userDirIndex = argv.indexOf("--user-dir");
-  if (
-    argv.length === 0
-    || resolve(argv[0]) !== basecamp
-    || (
-      expectedUserDir
-      && (
-        userDirIndex < 0
-        || !argv[userDirIndex + 1]
-        || resolve(argv[userDirIndex + 1]) !== resolve(expectedUserDir)
-      )
-    )
-  ) {
-    throw new Error(`refusing to signal unexpected reused PID ${pid}`);
-  }
-  const signalGroup = (signal) => {
-    try {
-      process.kill(-pid, signal);
-    } catch (error) {
-      if (error?.code !== "ESRCH") process.kill(pid, signal);
-    }
-  };
-  signalGroup("SIGTERM");
-  for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
-    await sleep(100);
-  }
-  if (processExists(pid)) {
-    signalGroup("SIGKILL");
-    for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
-      await sleep(100);
-    }
-  }
-  if (processExists(pid)) {
-    throw new Error(`Basecamp process ${pid} survived cleanup`);
-  }
-}
-
 class WorkerClient {
   constructor(label, inspectorPort, generation) {
     this.label = label;
@@ -910,7 +855,7 @@ class WorkerClient {
           QML_INSPECTOR_PORT: String(inspectorPort),
         },
         detached: true,
-        stdio: childStdioWithInheritedMvpLock(["pipe", "pipe", "pipe"]),
+        stdio: childStdioWithoutReleaseLock(["pipe", "pipe", "pipe"]),
       },
     );
     this.child.stderr.pipe(this.stderr);
@@ -1012,11 +957,14 @@ class WorkerClient {
   }
 
   async stopImpl() {
+    let stopFailure;
     if (this.child.exitCode === null) {
       try {
         await this.call("shutdown", {}, 30_000);
-      } catch {
-        signalProcessGroup(this.child, "SIGTERM");
+      } catch (error) {
+        stopFailure = error instanceof Error
+          ? error
+          : new Error(String(error));
       }
       this.child.stdin.end();
       const stopped = await Promise.race([
@@ -1024,13 +972,15 @@ class WorkerClient {
         sleep(5_000).then(() => false),
       ]);
       if (!stopped) {
-        signalProcessGroup(this.child, "SIGKILL");
-        await this.exited;
+        throw new Error(
+          `worker ${this.processLabel} did not exit after graceful shutdown`,
+        );
       }
     }
     if (!this.stderr.writableEnded) this.stderr.end();
     await this.stderrFinished;
     await cleanupOwnedWorkerProcesses(this);
+    if (stopFailure) throw stopFailure;
   }
 }
 
@@ -1539,6 +1489,7 @@ function validatePreviousReportEnvelope(
   currentHashes,
   basecampDigest,
   gate3Digest,
+  dependencyRevisions,
 ) {
   const schemaAccepted =
     (
@@ -1561,7 +1512,7 @@ function validatePreviousReportEnvelope(
       !== process.env.PALACE_MVP_RUNNER_SHA256
     || previous.runtimeOutputManifestSha256
       !== process.env.PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256
-    || !exactJson(previous.dependencyRevisions, parseRevisions())
+    || !exactJson(previous.dependencyRevisions, dependencyRevisions)
     || previous.basecampRevision !== process.env.PALACE_BASECAMP_REV
     || previous.basecampBinarySha256 !== basecampDigest
     || !exactJson(
@@ -1680,6 +1631,15 @@ function validatePriorCreatorOfflineEvidence(previous, plan, creatorPid) {
 const currentPackageHashes = await packageHashes(lgxDir);
 const currentBasecampDigest = await sha256File(basecamp);
 const gate3ReportDigest = await sha256File(gate3ReportPath);
+const dependencyRevisions = parseRevisions();
+const lezModuleRevision = dependencyRevisions?.lez_core?.revision;
+if (
+  typeof lezModuleRevision !== "string"
+  || !/^[0-9a-f]{40}$/.test(lezModuleRevision)
+  || lezModuleRevision !== approvedLezModuleRevision
+) {
+  throw new Error("Gate 4 LEZ module revision is not approved");
+}
 const previousReport = await optionalJson(reportPath);
 if (previousReport) {
   validatePreviousReportEnvelope(
@@ -1687,6 +1647,7 @@ if (previousReport) {
     currentPackageHashes,
     currentBasecampDigest,
     gate3ReportDigest,
+    dependencyRevisions,
   );
 }
 const runStartedAt = performance.now();
@@ -1705,7 +1666,7 @@ const report = {
     process.env.PALACE_MVP_RUNNER_SHA256 ?? "unknown",
   runtimeOutputManifestSha256:
     process.env.PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256 ?? "unknown",
-  dependencyRevisions: parseRevisions(),
+  dependencyRevisions,
   basecampRevision: process.env.PALACE_BASECAMP_REV ?? "unknown",
   basecampBinarySha256: currentBasecampDigest,
   packageHashes: currentPackageHashes,
@@ -1806,9 +1767,6 @@ function requestTermination(signal) {
     });
     const cleanupFailures = await stopKnownWorkers(
       [...workers.values()],
-      processExists,
-      processGroupExists,
-      terminateOwnedProcessGroup,
       cleanupClaimBoundProcesses,
     );
     report.cleanup = {
@@ -4720,11 +4678,10 @@ function processGroupExists(processGroupId) {
   }
 }
 
-async function terminateOwnedProcessGroup(processGroupId) {
+async function requireOwnedProcessGroupEmpty(processGroupId) {
   if (
     !Number.isSafeInteger(processGroupId)
     || processGroupId <= 0
-    || !processGroupExists(processGroupId)
   ) {
     return;
   }
@@ -4732,24 +4689,17 @@ async function terminateOwnedProcessGroup(processGroupId) {
     processGroupId,
     claimPath: process.env.PALACE_MVP_CLAIM_PATH,
   });
-  if (members.length === 0 && !processGroupExists(processGroupId)) {
-    return;
-  }
+  if (members.length === 0) return;
   requireOwnedProcessGroup(members, processGroupId);
-  try {
-    process.kill(-processGroupId, "SIGKILL");
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
+  const survivors = [];
+  for (const member of members) {
+    if (await ownedProcessIdentityExists(member)) survivors.push(member);
   }
-  for (
-    let attempt = 0;
-    attempt < 50 && processGroupExists(processGroupId);
-    attempt += 1
-  ) {
-    await sleep(100);
-  }
-  if (processGroupExists(processGroupId)) {
-    throw new Error(`process group ${processGroupId} survived SIGKILL`);
+  if (survivors.length > 0) {
+    throw new Error(
+      `process group ${processGroupId} retained ${survivors.length} `
+      + "owned process; exact outer scope cleanup required",
+    );
   }
 }
 
@@ -4778,10 +4728,10 @@ async function cleanupClaimBoundProcesses() {
   ) {
     throw new Error("run-owned child remained in Gate 4 process group");
   }
-  for (const processGroupId of new Set(
-    workload.map(({ processGroupId }) => processGroupId),
-  )) {
-    await terminateOwnedProcessGroup(processGroupId);
+  if (workload.length > 0) {
+    throw new Error(
+      "run-owned processes require exact outer scope cleanup",
+    );
   }
   const remaining = claimWorkload(
     await claimBoundProcesses({ claimPath }),
@@ -4803,9 +4753,7 @@ async function cleanupOwnedWorkerProcesses(worker) {
   };
 
   if (Number.isSafeInteger(worker.basecampPid)) {
-    await attempt(() =>
-      terminateKnownBasecamp(worker.basecampPid, expectedUserDir));
-    await attempt(() => terminateOwnedProcessGroup(worker.basecampPid));
+    await attempt(() => requireOwnedProcessGroupEmpty(worker.basecampPid));
   }
   let discovered = [];
   await attempt(async () => {
@@ -4817,11 +4765,9 @@ async function cleanupOwnedWorkerProcesses(worker) {
   for (const process of discovered) {
     worker.basecampPid ??= process.pid;
     await attempt(() =>
-      terminateKnownBasecamp(process.pid, expectedUserDir));
-    await attempt(() =>
-      terminateOwnedProcessGroup(process.processGroupId));
+      requireOwnedProcessGroupEmpty(process.processGroupId));
   }
-  await attempt(() => terminateOwnedProcessGroup(worker.child.pid));
+  await attempt(() => requireOwnedProcessGroupEmpty(worker.child.pid));
   await attempt(async () => {
     const sessionIds = new Set(
       [worker.child.pid, worker.basecampPid].filter(
@@ -4836,7 +4782,7 @@ async function cleanupOwnedWorkerProcesses(worker) {
     for (const processGroupId of new Set(
       sessionProcesses.map(({ processGroupId }) => processGroupId),
     )) {
-      await terminateOwnedProcessGroup(processGroupId);
+      await requireOwnedProcessGroupEmpty(processGroupId);
     }
     const remaining = claimWorkload(
       await claimBoundProcesses({
@@ -5703,37 +5649,29 @@ try {
   const priorCreatorPid = Number(
     previousReport?.gate6?.creator?.pid,
   );
-  let recoveredCreatorProcess = false;
-  if (
-    resumeWithoutCreator
-    && Number.isSafeInteger(priorCreatorPid)
-    && priorCreatorPid > 0
-  ) {
-    if (processExists(priorCreatorPid)) {
-      await terminateKnownBasecamp(
-        priorCreatorPid,
-        join(usersDir, "a"),
-      );
-    }
-    await terminateOwnedProcessGroup(priorCreatorPid);
-    recoveredCreatorProcess = true;
-  }
-  if (
-    resumeWithoutCreator
-    && (
+  let creatorIdentity;
+  if (resumeWithoutCreator) {
+    if (
       previousReport?.gate5?.convergence?.status !== "passed"
       || !Number.isSafeInteger(priorCreatorPid)
       || priorCreatorPid <= 0
-      || processExists(priorCreatorPid)
-      || processGroupExists(priorCreatorPid)
-    )
-  ) {
-    throw new Error(
-      "creator-offline resume evidence is incomplete or creator still runs",
+    ) {
+      throw new Error(
+        "creator-offline resume evidence is incomplete",
+      );
+    }
+    creatorIdentity = validateCreatorProcessIdentity(
+      previousReport?.gate6?.creator?.processIdentity,
+      priorCreatorPid,
     );
+    if (await originalCreatorProcessExists(creatorIdentity)) {
+      throw new Error(
+        "persisted creator remains live after prior scope retirement",
+      );
+    }
   }
   report.gate6.resumeWithoutCreator = resumeWithoutCreator;
-  report.gate6.recoveredCreatorProcess = recoveredCreatorProcess;
+  delete report.gate6.recoveredCreatorProcess;
 
   phase = "initial-start";
   const initialLabels = resumeWithoutCreator ? ["b", "c"] : labels;
@@ -6724,7 +6662,7 @@ try {
   let creatorPid;
   if (resumeWithoutCreator) {
     creatorPid = priorCreatorPid;
-    if (processExists(creatorPid)) {
+    if (await originalCreatorProcessExists(creatorIdentity)) {
       throw new Error(`creator Basecamp process ${creatorPid} is not offline`);
     }
     report.gate6.creator = {
@@ -6741,9 +6679,14 @@ try {
   } else {
     const creator = workers.get("a");
     creatorPid = creator.basecampPid;
+    creatorIdentity = validateCreatorProcessIdentity(
+      await captureOwnedProcessIdentity({ pid: creatorPid }),
+      creatorPid,
+    );
     report.gate6.creator = {
       label: "a",
       pid: creatorPid,
+      processIdentity: creatorIdentity,
       memoryBeforeStop: await processMetrics(
         creatorPid,
         expectedTcpListeners("a", { delivery: true, storage: true }),
@@ -6762,7 +6705,7 @@ try {
     await creator.stop();
     workers.delete("a");
     await sleep(1_000);
-    if (processExists(creatorPid)) {
+    if (await originalCreatorProcessExists(creatorIdentity)) {
       throw new Error(`creator Basecamp process ${creatorPid} remained alive`);
     }
     report.gate6.creator.offline = true;
@@ -6913,7 +6856,7 @@ try {
     "c",
   );
   if (
-    processExists(creatorPid)
+    await originalCreatorProcessExists(creatorIdentity)
     || report.failureEvidence.coldClientRebuild?.status !== "removed"
   ) {
     throw new Error(
@@ -6971,7 +6914,7 @@ try {
   if (
     sourceRetainedAfterTransfer.mode !== "cache"
     || sourceRetainedAfterTransfer.nativeSource !== "cache"
-    || processExists(creatorPid)
+    || await originalCreatorProcessExists(creatorIdentity)
   ) {
     throw new Error(
       "Gate 6 retained source or creator-offline contract changed",
@@ -7107,7 +7050,7 @@ try {
     },
     60_000,
   );
-  if (processExists(creatorPid)) {
+  if (await originalCreatorProcessExists(creatorIdentity)) {
     throw new Error("creator restarted during Gate 6");
   }
   report.delivery.restartBehavior = {
@@ -7308,8 +7251,7 @@ try {
       storageNetworkId: storageNetworkIds[0],
       lezNetworkId: "logos-lez-testnet-v0.2.0",
       lezModuleApiVersion: "0.4.0-alpha.2",
-      lezModuleRevision:
-        "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
+      lezModuleRevision,
       lezRuntimeRevision:
         "e923315c020d4966807849f9db10536b628d5739",
       lezSchemaId: "palace-schema-v3",
@@ -7429,9 +7371,6 @@ try {
 } finally {
   const cleanupFailures = await stopKnownWorkers(
     [...workers.values()],
-    processExists,
-    processGroupExists,
-    terminateOwnedProcessGroup,
     cleanupClaimBoundProcesses,
   );
   report.cleanup = {

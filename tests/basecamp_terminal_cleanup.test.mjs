@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   acceptBasecampPidHandoff,
   stopKnownWorkers,
@@ -31,10 +33,9 @@ test("terminal cleanup passes only after all known processes stop", async () => 
         },
       }),
     ],
-    (pid) => alive.has(pid),
-    () => false,
-    async () => {},
-    async () => {},
+    async () => {
+      assert.equal(alive.size, 0);
+    },
   );
   assert.deepEqual(failures, []);
 });
@@ -48,55 +49,34 @@ test("terminal cleanup reports a rejected stop", async () => {
         },
       }),
     ],
-    () => false,
-    () => false,
-    async () => {},
     async () => {},
   );
   assert.deepEqual(failures, ["a cleanup rejected: shutdown failed"]);
 });
 
-test("terminal cleanup reports every surviving known PID", async () => {
+test("terminal cleanup delegates surviving descendants to exact finalizer", async () => {
   const failures = await stopKnownWorkers(
     [worker({ label: "b", workerPid: 301, basecampPid: 302 })],
-    () => true,
-    () => true,
-    async () => {},
-    async () => {},
+    async () => {
+      throw new Error("run-owned processes survived Gate 2 cleanup");
+    },
   );
   assert.deepEqual(failures, [
-    "b worker process 301 survived cleanup",
-    "b worker process group 301 survived cleanup",
-    "b Basecamp process 302 survived cleanup",
-    "b Basecamp process group 302 survived cleanup",
+    "run-owned process cleanup rejected: "
+      + "run-owned processes survived Gate 2 cleanup",
   ]);
 });
 
-test("terminal cleanup rejects a surviving detached Basecamp group", async () => {
-  const failures = await stopKnownWorkers(
-    [worker({ label: "c", workerPid: 401, basecampPid: 402 })],
-    () => false,
-    (processGroupId) => processGroupId === 402,
-    async () => {},
-    async () => {},
-  );
-  assert.deepEqual(failures, [
-    "c Basecamp process group 402 survived cleanup",
-  ]);
-});
-
-test("terminal cleanup can force a detached group before proof", async () => {
-  const groups = new Set([502]);
+test("terminal cleanup never signals handed-off numeric process IDs", async () => {
+  let finalized = false;
   const failures = await stopKnownWorkers(
     [worker({ label: "d", workerPid: 501, basecampPid: 502 })],
-    () => false,
-    (processGroupId) => groups.has(processGroupId),
-    async (processGroupId) => {
-      groups.delete(processGroupId);
+    async () => {
+      finalized = true;
     },
-    async () => {},
   );
   assert.deepEqual(failures, []);
+  assert.equal(finalized, true);
 });
 
 test("early PID handoff survives an init response failure", () => {
@@ -117,9 +97,6 @@ test("early PID handoff survives an init response failure", () => {
 test("terminal cleanup fails when run-owned process sweep fails", async () => {
   const failures = await stopKnownWorkers(
     [],
-    () => false,
-    () => false,
-    async () => {},
     async () => {
       throw new Error("alternate process group survived");
     },
@@ -127,4 +104,18 @@ test("terminal cleanup fails when run-owned process sweep fails", async () => {
   assert.deepEqual(failures, [
     "run-owned process cleanup rejected: alternate process group survived",
   ]);
+});
+
+test("Gate 4 always runs the exact claim-bound process finalizer", async () => {
+  const source = await readFile(
+    fileURLToPath(new URL("./basecamp_gate4.mjs", import.meta.url)),
+    "utf8",
+  );
+  const allCalls = source.match(/stopKnownWorkers\s*\(/g) ?? [];
+  const exactCalls = source.match(
+    /stopKnownWorkers\s*\(\s*\[\.\.\.workers\.values\(\)\]\s*,\s*cleanupClaimBoundProcesses\s*,?\s*\)/g,
+  ) ?? [];
+
+  assert.equal(allCalls.length, 2);
+  assert.equal(exactCalls.length, allCalls.length);
 });

@@ -10,6 +10,11 @@ import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import {
+  captureDirectChildIdentity,
+  signalDirectChild,
+  waitForDirectChildExit,
+} from "./basecamp_direct_child.mjs";
 
 const [
   basecampArgument,
@@ -39,7 +44,7 @@ if (!process.env.QML_INSPECTOR_PORT) {
 }
 
 const renderTimingContract = {
-  basecampRevision: "fd13085f7fda6a8b1ada53a959d3064c5747c9d1",
+  basecampRevision: "205405858676849f69a02e55385ae18ce6d7df5a",
   qtVersion: "6.9.2",
   renderLoop: "software",
   clock: "Qt Quick QSG_RENDER_TIMING integer milliseconds",
@@ -88,17 +93,11 @@ const { App, Inspector } = await import(frameworkUrl);
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 
-function childStdioWithInheritedMvpLock(baseStdio) {
-  const encoded = process.env.PALACE_MVP_LOCK_FD;
-  if (encoded === undefined) return baseStdio;
-  if (!/^(?:[3-9]|[1-9][0-9]{1,2})$/.test(encoded)) {
-    throw new Error("PALACE_MVP_LOCK_FD is invalid");
+function childStdioWithoutReleaseLock(baseStdio) {
+  if (process.env.PALACE_MVP_LOCK_FD !== undefined) {
+    throw new Error("PALACE_MVP_LOCK_FD must not be inherited");
   }
-  const lockFd = Number(encoded);
-  const stdio = [...baseStdio];
-  while (stdio.length <= lockFd) stdio.push("ignore");
-  stdio[lockFd] = lockFd;
-  return stdio;
+  return baseStdio;
 }
 
 function nearestRank(values, percentile) {
@@ -189,14 +188,6 @@ function propertyMap(response) {
   );
 }
 
-function signalProcessGroup(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
 let launchNumber = 0;
 let processState;
 let inspector;
@@ -218,15 +209,17 @@ function launchBasecamp() {
         QSG_RENDER_TIMING: "1",
       },
       detached: true,
-      stdio: childStdioWithInheritedMvpLock(["ignore", "pipe", "pipe"]),
+      stdio: childStdioWithoutReleaseLock(["ignore", "pipe", "pipe"]),
     },
   );
+  const childIdentity = captureDirectChildIdentity(child);
   const stdoutChunks = [];
   const stderrChunks = [];
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
   const state = {
     child,
+    childIdentity,
     exited: undefined,
     launchNumber,
     stdoutChunks,
@@ -275,16 +268,17 @@ async function stopBasecamp() {
 
   const state = processState;
   processState = undefined;
-  if (state.child.exitCode === null && !state.spawnFailure) {
-    signalProcessGroup(state.child, "SIGTERM");
-    const cleanExit = await Promise.race([
-      state.exited.then(() => true),
-      sleep(15_000).then(() => false),
-    ]);
-    if (!cleanExit) {
-      signalProcessGroup(state.child, "SIGKILL");
-      await state.exited;
-    }
+  if (
+    state.child.exitCode === null
+    && state.child.signalCode === null
+    && !state.spawnFailure
+  ) {
+    await signalDirectChild(state.childIdentity, "SIGTERM");
+    await waitForDirectChildExit(
+      state.exited,
+      15_000,
+      `Gate 2 ${label} Basecamp`,
+    );
   }
   await saveLaunchLogs(state);
 }
@@ -301,8 +295,12 @@ async function crashBasecamp() {
   if (state.child.exitCode !== null) {
     throw new Error("Basecamp exited before controlled crash");
   }
-  signalProcessGroup(state.child, "SIGKILL");
-  const exit = await state.exited;
+  await signalDirectChild(state.childIdentity, "SIGKILL");
+  const exit = await waitForDirectChildExit(
+    state.exited,
+    15_000,
+    `Gate 2 ${label} controlled-crash Basecamp`,
+  );
   await saveLaunchLogs(state);
   if (exit.signal !== "SIGKILL" || exit.code !== null) {
     throw new Error(
@@ -310,7 +308,7 @@ async function crashBasecamp() {
     );
   }
   return {
-    previousPid: state.child.pid,
+    previousPid: state.childIdentity.pid,
     signal: exit.signal,
     exitCode: exit.code,
     graceful: false,

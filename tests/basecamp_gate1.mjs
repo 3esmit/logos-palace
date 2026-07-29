@@ -13,10 +13,13 @@ import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  captureDirectChildIdentity,
+  signalDirectChild,
+  waitForDirectChildExit,
+} from "./basecamp_direct_child.mjs";
+import {
   claimBoundProcesses,
   discoverOwnedBasecampProcesses,
-  ownedProcessGroupMembers,
-  requireOwnedProcessGroup,
 } from "./basecamp_owned_processes.mjs";
 
 const [basecampArgument, userDirArgument, artifactsArgument, lgxDirArgument] =
@@ -51,17 +54,11 @@ const { App, Inspector } = await import(frameworkUrl);
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 
-function childStdioWithInheritedMvpLock(baseStdio) {
-  const encoded = process.env.PALACE_MVP_LOCK_FD;
-  if (encoded === undefined) return baseStdio;
-  if (!/^(?:[3-9]|[1-9][0-9]{1,2})$/.test(encoded)) {
-    throw new Error("PALACE_MVP_LOCK_FD is invalid");
+function childStdioWithoutReleaseLock(baseStdio) {
+  if (process.env.PALACE_MVP_LOCK_FD !== undefined) {
+    throw new Error("PALACE_MVP_LOCK_FD must not be inherited");
   }
-  const lockFd = Number(encoded);
-  const stdio = [...baseStdio];
-  while (stdio.length <= lockFd) stdio.push("ignore");
-  stdio[lockFd] = lockFd;
-  return stdio;
+  return baseStdio;
 }
 
 const expectedBackgroundHandles = {
@@ -103,15 +100,17 @@ function launchBasecamp(label) {
         QT_QPA_PLATFORM: "offscreen",
       },
       detached: true,
-      stdio: childStdioWithInheritedMvpLock(["ignore", "pipe", "pipe"]),
+      stdio: childStdioWithoutReleaseLock(["ignore", "pipe", "pipe"]),
     },
   );
+  const childIdentity = captureDirectChildIdentity(child);
   const stdoutChunks = [];
   const stderrChunks = [];
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
   const state = {
     child,
+    childIdentity,
     exited: undefined,
     spawnFailure: undefined,
     stopPromise: undefined,
@@ -136,101 +135,6 @@ function launchBasecamp(label) {
   });
   state.exited = exited;
   return state;
-}
-
-function signalProcessGroup(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
-function processExists(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-function processGroupExists(processGroupId) {
-  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
-    return false;
-  }
-  try {
-    process.kill(-processGroupId, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-async function terminateKnownBasecamp(pid) {
-  if (!processExists(pid)) return;
-  let argv;
-  try {
-    argv = (await readFile(`/proc/${pid}/cmdline`))
-      .toString("utf8")
-      .split("\0")
-      .filter(Boolean);
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
-  }
-  const userDirIndex = argv.indexOf("--user-dir");
-  if (
-    resolve(argv[0] ?? "") !== basecamp
-    || userDirIndex < 0
-    || !argv[userDirIndex + 1]
-    || resolve(argv[userDirIndex + 1]) !== userDir
-  ) {
-    throw new Error(`refusing to signal unexpected reused PID ${pid}`);
-  }
-  signalProcessGroup({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGTERM");
-  for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
-    await sleep(100);
-  }
-  if (processExists(pid)) {
-    signalProcessGroup({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGKILL");
-    for (
-      let attempt = 0;
-      attempt < 50 && processExists(pid);
-      attempt += 1
-    ) {
-      await sleep(100);
-    }
-  }
-  if (processExists(pid)) {
-    throw new Error(`Basecamp process ${pid} survived cleanup`);
-  }
-}
-
-async function terminateOwnedProcessGroup(processGroupId) {
-  if (!processGroupExists(processGroupId)) return;
-  const members = await ownedProcessGroupMembers({
-    processGroupId,
-    claimPath: process.env.PALACE_MVP_CLAIM_PATH,
-  });
-  if (members.length === 0 && !processGroupExists(processGroupId)) return;
-  requireOwnedProcessGroup(members, processGroupId);
-  try {
-    process.kill(-processGroupId, "SIGKILL");
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-  for (
-    let attempt = 0;
-    attempt < 50 && processGroupExists(processGroupId);
-    attempt += 1
-  ) {
-    await sleep(100);
-  }
-  if (processGroupExists(processGroupId)) {
-    throw new Error(`process group ${processGroupId} survived SIGKILL`);
-  }
 }
 
 function claimWorkload(candidates) {
@@ -258,43 +162,35 @@ async function cleanupClaimBoundProcesses() {
   ) {
     throw new Error("run-owned child remained in Gate 1 process group");
   }
-  for (const processGroupId of new Set(
-    workload.map(({ processGroupId }) => processGroupId),
-  )) {
-    await terminateOwnedProcessGroup(processGroupId);
-  }
-  if (
-    claimWorkload(await claimBoundProcesses({ claimPath })).length > 0
-  ) {
+  if (workload.length > 0) {
     throw new Error("run-owned processes survived Gate 1 cleanup");
   }
 }
 
 async function stopBasecamp(processState) {
   processState.stopPromise ??= (async () => {
-    if (processState.child.exitCode === null && !processState.spawnFailure) {
-      signalProcessGroup(processState.child, "SIGTERM");
-      const cleanExit = await Promise.race([
-        processState.exited.then(() => true),
-        sleep(10_000).then(() => false),
-      ]);
-      if (!cleanExit) {
-        signalProcessGroup(processState.child, "SIGKILL");
-        await processState.exited;
-      }
+    if (
+      processState.child.exitCode === null
+      && processState.child.signalCode === null
+      && !processState.spawnFailure
+    ) {
+      await signalDirectChild(processState.childIdentity, "SIGTERM");
+      await waitForDirectChildExit(
+        processState.exited,
+        10_000,
+        "Gate 1 Basecamp",
+      );
     }
     await processState.saveLogs();
-    await terminateKnownBasecamp(processState.child.pid);
-    await terminateOwnedProcessGroup(processState.child.pid);
     const sessionProcesses = claimWorkload(
       await claimBoundProcesses({
         claimPath: process.env.PALACE_MVP_CLAIM_PATH,
       }),
-    ).filter(({ sessionId }) => sessionId === processState.child.pid);
-    for (const processGroupId of new Set(
-      sessionProcesses.map(({ processGroupId }) => processGroupId),
-    )) {
-      await terminateOwnedProcessGroup(processGroupId);
+    ).filter(
+      ({ sessionId }) => sessionId === processState.childIdentity.pid,
+    );
+    if (sessionProcesses.length > 0) {
+      throw new Error("Gate 1 retained owned session processes");
     }
     const discovered = await discoverOwnedBasecampProcesses({
       basecamp,

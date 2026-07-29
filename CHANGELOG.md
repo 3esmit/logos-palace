@@ -39,6 +39,29 @@ after its first published release.
 - Resumable Gate 0–6 runner with immutable source/runtime bindings,
   claim-bound terminal process cleanup, completed-run attestation, and
   allowlist-only public evidence.
+- Supervised release exclusion with a sole close-on-exec lock descriptor,
+  death-coupled immutable mutators, versioned claim roll-forward, and
+  contention/crash regression coverage.
+- Stop-before-exec transient gate scopes with exact cgroup-v2 unit/slice
+  attestation, sole-leader unit-addressed release, parent-death cgroup
+  guardians, durable launch markers, interrupted-attempt history, PID reuse
+  defense, and unload-before-PASS validation.
+- Repository-built pidfd helper with captured child start-time identity,
+  post-`pidfd_open` identity recheck, and `pidfd_send_signal` delivery;
+  destructive cleanup no longer targets stored numeric PIDs or process
+  groups, while exact outer cgroups own residual descendants.
+- Guardian-held `cgroup.kill` and `cgroup.procs` descriptors with two-read
+  sole-guardian proof, daemon-residue kill before disarm, and immediate
+  failure when interruption cleanup cannot be proven.
+- Standalone Gate 1 and Gate 2 lock attestation covering exact parent and
+  start-time chains, executable/argv identity, sole descriptor ownership,
+  contention, and the matching `/proc/locks` kernel row.
+- Exact creator process identity on resume and raw application latency
+  aggregates recomputed from 20 ordered samples at each supported payload
+  size.
+- Strict compiled/public evidence bindings for runtime NARs, process
+  executable mappings, command outcomes, claim completion, metrics, and ten
+  fully decoded screenshot files.
 
 ### Changed
 
@@ -48,6 +71,9 @@ after its first published release.
   the schema-v3 typed public account graph.
 - Durable actions require stable state observation plus exact explorer
   finality; Delivery publication cannot promote them.
+- Basecamp dependency pin advanced to the verified-asset bridge candidate at
+  its pinned revision, with installed-variant producer-capability recovery for
+  portable packages.
 
 ### Security
 

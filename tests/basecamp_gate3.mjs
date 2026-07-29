@@ -31,9 +31,12 @@ import {
 import {
   claimBoundProcesses,
   discoverOwnedBasecampProcesses,
-  ownedProcessGroupMembers,
-  requireOwnedProcessGroup,
 } from "./basecamp_owned_processes.mjs";
+import {
+  captureDirectChildIdentity,
+  signalDirectChild,
+  waitForDirectChildExit,
+} from "./basecamp_direct_child.mjs";
 
 const [
   basecampArgument,
@@ -124,17 +127,11 @@ const holderProfiles = {
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 
-function childStdioWithInheritedMvpLock(baseStdio) {
-  const encoded = process.env.PALACE_MVP_LOCK_FD;
-  if (encoded === undefined) return baseStdio;
-  if (!/^(?:[3-9]|[1-9][0-9]{1,2})$/.test(encoded)) {
-    throw new Error("PALACE_MVP_LOCK_FD is invalid");
+function childStdioWithoutReleaseLock(baseStdio) {
+  if (process.env.PALACE_MVP_LOCK_FD !== undefined) {
+    throw new Error("PALACE_MVP_LOCK_FD must not be inherited");
   }
-  const lockFd = Number(encoded);
-  const stdio = [...baseStdio];
-  while (stdio.length <= lockFd) stdio.push("ignore");
-  stdio[lockFd] = lockFd;
-  return stdio;
+  return baseStdio;
 }
 
 async function durableReplace(path, contents) {
@@ -362,63 +359,6 @@ function storageConfig(base, tcpPort, udpPort, label) {
   return JSON.stringify(config);
 }
 
-function signalProcessGroup(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
-async function terminateKnownBasecamp(pid, expectedUserDir) {
-  if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return;
-  let argv;
-  try {
-    argv = (await readFile(`/proc/${pid}/cmdline`))
-      .toString("utf8")
-      .split("\0")
-      .filter(Boolean);
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
-  }
-  const userDirIndex = argv.indexOf("--user-dir");
-  if (
-    argv.length === 0
-    || resolve(argv[0]) !== basecamp
-    || (
-      expectedUserDir
-      && (
-        userDirIndex < 0
-        || !argv[userDirIndex + 1]
-        || resolve(argv[userDirIndex + 1]) !== resolve(expectedUserDir)
-      )
-    )
-  ) {
-    throw new Error(`refusing to signal unexpected reused PID ${pid}`);
-  }
-  const signalGroup = (signal) => {
-    try {
-      process.kill(-pid, signal);
-    } catch (error) {
-      if (error?.code !== "ESRCH") process.kill(pid, signal);
-    }
-  };
-  signalGroup("SIGTERM");
-  for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
-    await sleep(100);
-  }
-  if (processExists(pid)) {
-    signalGroup("SIGKILL");
-    for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
-      await sleep(100);
-    }
-  }
-  if (processExists(pid)) {
-    throw new Error(`Basecamp process ${pid} survived cleanup`);
-  }
-}
-
 class WorkerClient {
   constructor(label, inspectorPort) {
     this.label = label;
@@ -449,9 +389,10 @@ class WorkerClient {
           QML_INSPECTOR_PORT: String(inspectorPort),
         },
         detached: true,
-        stdio: childStdioWithInheritedMvpLock(["pipe", "pipe", "pipe"]),
+        stdio: childStdioWithoutReleaseLock(["pipe", "pipe", "pipe"]),
       },
     );
+    this.childIdentity = captureDirectChildIdentity(this.child);
     this.child.stderr.pipe(this.stderr);
     this.exited = new Promise((resolveExit) => {
       this.child.once("exit", (code, signal) => {
@@ -548,17 +489,14 @@ class WorkerClient {
       try {
         await this.call("shutdown", {}, 30_000);
       } catch {
-        signalProcessGroup(this.child, "SIGTERM");
+        await signalDirectChild(this.childIdentity, "SIGTERM");
       }
       this.child.stdin.end();
-      const stopped = await Promise.race([
-        this.exited.then(() => true),
-        sleep(5_000).then(() => false),
-      ]);
-      if (!stopped) {
-        signalProcessGroup(this.child, "SIGKILL");
-        await this.exited;
-      }
+      await waitForDirectChildExit(
+        this.exited,
+        5_000,
+        `Gate 3 ${this.label} worker`,
+      );
     }
     if (!this.stderr.writableEnded) this.stderr.end();
     await this.stderrFinished;
@@ -1382,51 +1320,6 @@ function processExists(pid) {
   }
 }
 
-function processGroupExists(processGroupId) {
-  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
-    return false;
-  }
-  try {
-    process.kill(-processGroupId, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-async function terminateOwnedProcessGroup(processGroupId) {
-  if (
-    !Number.isSafeInteger(processGroupId)
-    || processGroupId <= 0
-    || !processGroupExists(processGroupId)
-  ) {
-    return;
-  }
-  const members = await ownedProcessGroupMembers({
-    processGroupId,
-    claimPath: process.env.PALACE_MVP_CLAIM_PATH,
-  });
-  if (members.length === 0 && !processGroupExists(processGroupId)) {
-    return;
-  }
-  requireOwnedProcessGroup(members, processGroupId);
-  try {
-    process.kill(-processGroupId, "SIGKILL");
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-  for (
-    let attempt = 0;
-    attempt < 50 && processGroupExists(processGroupId);
-    attempt += 1
-  ) {
-    await sleep(100);
-  }
-  if (processGroupExists(processGroupId)) {
-    throw new Error(`process group ${processGroupId} survived SIGKILL`);
-  }
-}
-
 function claimWorkload(candidates) {
   const byPid = new Map(candidates.map((entry) => [entry.pid, entry]));
   const excluded = new Set([process.pid]);
@@ -1452,15 +1345,7 @@ async function cleanupClaimBoundProcesses() {
   ) {
     throw new Error("run-owned child remained in Gate 3 process group");
   }
-  for (const processGroupId of new Set(
-    workload.map(({ processGroupId }) => processGroupId),
-  )) {
-    await terminateOwnedProcessGroup(processGroupId);
-  }
-  const remaining = claimWorkload(
-    await claimBoundProcesses({ claimPath }),
-  );
-  if (remaining.length > 0) {
+  if (workload.length > 0) {
     throw new Error("run-owned processes survived Gate 3 cleanup");
   }
 }
@@ -1476,53 +1361,6 @@ async function cleanupOwnedWorkerProcesses(worker) {
     }
   };
 
-  if (Number.isSafeInteger(worker.basecampPid)) {
-    await attempt(() =>
-      terminateKnownBasecamp(worker.basecampPid, expectedUserDir));
-    await attempt(() => terminateOwnedProcessGroup(worker.basecampPid));
-  }
-  let discovered = [];
-  await attempt(async () => {
-    discovered = await discoverOwnedBasecampProcesses({
-      basecamp,
-      userDirs: new Set([expectedUserDir]),
-    });
-  });
-  for (const process of discovered) {
-    worker.basecampPid ??= process.pid;
-    await attempt(() =>
-      terminateKnownBasecamp(process.pid, expectedUserDir));
-    await attempt(() =>
-      terminateOwnedProcessGroup(process.processGroupId));
-  }
-  await attempt(() => terminateOwnedProcessGroup(worker.child.pid));
-  await attempt(async () => {
-    const sessionIds = new Set(
-      [worker.child.pid, worker.basecampPid].filter(
-        (value) => Number.isSafeInteger(value) && value > 0,
-      ),
-    );
-    const sessionProcesses = claimWorkload(
-      await claimBoundProcesses({
-        claimPath: process.env.PALACE_MVP_CLAIM_PATH,
-      }),
-    ).filter(({ sessionId }) => sessionIds.has(sessionId));
-    for (const processGroupId of new Set(
-      sessionProcesses.map(({ processGroupId }) => processGroupId),
-    )) {
-      await terminateOwnedProcessGroup(processGroupId);
-    }
-    const remaining = claimWorkload(
-      await claimBoundProcesses({
-        claimPath: process.env.PALACE_MVP_CLAIM_PATH,
-      }),
-    ).filter(({ sessionId }) => sessionIds.has(sessionId));
-    if (remaining.length > 0) {
-      throw new Error(
-        `${worker.label} retained owned session processes after cleanup`,
-      );
-    }
-  });
   await attempt(async () => {
     const remaining = await discoverOwnedBasecampProcesses({
       basecamp,
@@ -1531,6 +1369,23 @@ async function cleanupOwnedWorkerProcesses(worker) {
     if (remaining.length > 0) {
       throw new Error(
         `${worker.label} retained owned Basecamp processes after cleanup`,
+      );
+    }
+  });
+  await attempt(async () => {
+    const sessionIds = new Set(
+      [worker.child.pid, worker.basecampPid].filter(
+        (value) => Number.isSafeInteger(value) && value > 0,
+      ),
+    );
+    const remaining = claimWorkload(
+      await claimBoundProcesses({
+        claimPath: process.env.PALACE_MVP_CLAIM_PATH,
+      }),
+    ).filter(({ sessionId }) => sessionIds.has(sessionId));
+    if (remaining.length > 0) {
+      throw new Error(
+        `${worker.label} retained owned session processes after cleanup`,
       );
     }
   });
@@ -1646,9 +1501,6 @@ function requestTermination(signal) {
     report.failure = `terminated by ${signal}`;
     const cleanupFailures = await stopKnownWorkers(
       [...workers.values()],
-      processExists,
-      processGroupExists,
-      terminateOwnedProcessGroup,
       cleanupClaimBoundProcesses,
     );
     report.cleanup = {
@@ -1938,9 +1790,6 @@ try {
 } finally {
   const cleanupFailures = await stopKnownWorkers(
     [...workers.values()],
-    processExists,
-    processGroupExists,
-    terminateOwnedProcessGroup,
     cleanupClaimBoundProcesses,
   );
   report.cleanup = {

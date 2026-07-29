@@ -56,8 +56,20 @@ Run C++ contract checks:
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
-  .#checks.x86_64-linux.palace-core-contracts
+  .#checks.x86_64-linux.palace-core-contracts \
+  .#checks.x86_64-linux.palace-core-production-fixture-audit \
+  .#checks.x86_64-linux.palace-core-acceptance-fixture-audit
 ```
+
+Run non-live acceptance-control seams:
+
+```sh
+nix build .#checks.x86_64-linux.palace-acceptance-seams
+```
+
+Process-control changes also require the live host commands under
+[Build and test](README.md#build-and-test). Those checks use the running
+per-user systemd manager and cannot run inside the Nix build sandbox.
 
 Run Palace program checks:
 
@@ -81,14 +93,14 @@ Run the narrowest relevant Basecamp harness:
 ```sh
 ./scripts/run-basecamp-gate1.sh
 ./scripts/run-basecamp-gate2.sh
-./scripts/run-basecamp-gate3.sh
 ```
 
 The scripts fetch pinned dependencies, use temporary user directories, install
 unsigned development LGXs there, and write ignored evidence under
-`.artifacts/`. Never describe a package build or one gate as full MVP
-acceptance. Pull requests must identify the source snapshot, executed checks,
-and remaining runtime gates.
+`.artifacts/`. Gate 3 and Gate 4 production behavior is claim-bound and must
+run through the full runner. Never describe a package build or one gate as
+full MVP acceptance. Pull requests must identify the source snapshot,
+executed checks, and remaining runtime gates.
 
 The full runner has materially different effects:
 
@@ -98,10 +110,11 @@ The full runner has materially different effects:
 
 It registers public testnet identities and submits irreversible public-testnet
 LEZ actions to one fixed, initially uninitialized Palace root. It holds a
-global program/root lock and records one immutable source snapshot. After
-production Gate 3 evidence exists, continue only with the exact resume command
-and run directory printed by the runner. Review and sanitize reports, logs,
-public account and peer IDs, timings, and screenshots before publication.
+canonical owner-only program/root lock, retires any exact prior v2 run scope
+before release-state mutation, and records one immutable source snapshot.
+After production Gate 3 evidence exists, continue only with the exact resume
+command and run directory printed by the runner. Review and sanitize reports,
+logs, public account and peer IDs, timings, and screenshots before publication.
 
 ## Documentation
 

@@ -6,7 +6,7 @@
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
-    basecamp.url = "github:3esmit/logos-basecamp/fd13085f7fda6a8b1ada53a959d3064c5747c9d1";
+    basecamp.url = "github:3esmit/logos-basecamp/205405858676849f69a02e55385ae18ce6d7df5a";
     basecamp.flake = false;
     delivery_module.url = "github:3esmit/logos-delivery-module/891c43bd6176e17b0aa536ef1aa369bb47e918f4";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
@@ -164,6 +164,55 @@
           strictDeps = true;
           doCheck = true;
         };
+      palacePidfdSignalFor = system:
+        let pkgs = import nixpkgs { inherit system; };
+        in pkgs.stdenv.mkDerivation {
+          pname = "palace-pidfd-signal";
+          version = "0.1.0";
+          src = ./tools/palace-pidfd-signal;
+          strictDeps = true;
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            $CC \
+              -std=c17 \
+              -D_FORTIFY_SOURCE=3 \
+              -fPIE \
+              -fstack-protector-strong \
+              -O2 \
+              -Wall \
+              -Wextra \
+              -Werror \
+              -Wformat=2 \
+              -Wconversion \
+              -Wsign-conversion \
+              -pie \
+              -Wl,-z,relro,-z,now \
+              palace-pidfd-signal.c \
+              -o "$out/bin/palace-pidfd-signal"
+            runHook postInstall
+          '';
+        };
+      acceptanceToolsFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          palacePidfdSignal = palacePidfdSignalFor system;
+        in
+        pkgs.symlinkJoin {
+          name = "logos-palace-acceptance-tools";
+          paths = [
+            palacePidfdSignal
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.findutils
+            pkgs.jq
+            pkgs.nodejs
+            pkgs.systemdMinimal
+            pkgs.util-linux
+          ];
+        };
       palaceReleaseArtifactFor = system:
         let
           pkgs = import nixpkgs { inherit system; };
@@ -222,6 +271,166 @@
               node --test \
                 ${releasePreflightTests}/basecamp_release_preflight.test.mjs
           '';
+      palaceAcceptanceSeamsFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          acceptanceTools = acceptanceToolsFor system;
+          acceptanceSource = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./flake.nix
+              ./scripts
+              ./tests
+            ];
+          };
+          snapshotValidatorValid = pkgs.runCommand
+            "logos-palace-snapshot-validator-valid"
+            { }
+            ''
+              mkdir -p "$out/scripts"
+              printf 'fixture\n' > "$out/README.md"
+              printf '#!/bin/sh\nexit 0\n' > "$out/scripts/run.sh"
+            '';
+          snapshotValidatorGit = pkgs.runCommand
+            "logos-palace-snapshot-validator-git"
+            { }
+            ''
+              mkdir -p "$out/.git"
+              printf 'fixture\n' > "$out/README.md"
+              printf 'unsafe\n' > "$out/.git/config"
+            '';
+          snapshotValidatorTarget = pkgs.runCommand
+            "logos-palace-snapshot-validator-target"
+            { }
+            ''
+              mkdir -p "$out/program/target"
+              printf 'fixture\n' > "$out/README.md"
+              printf 'unsafe\n' > "$out/program/target/out"
+            '';
+          snapshotValidatorSymlink = pkgs.runCommand
+            "logos-palace-snapshot-validator-symlink"
+            { }
+            ''
+              mkdir -p "$out"
+              printf 'fixture\n' > "$out/README.md"
+              ln -s README.md "$out/unsafe-link"
+            '';
+          snapshotValidatorMismatch = pkgs.runCommand
+            "logos-palace-snapshot-validator-mismatch"
+            { }
+            ''
+              mkdir -p "$out"
+              printf 'fixture\n' > "$out/README.md"
+              printf 'unexpected\n' > "$out/extra.txt"
+            '';
+        in pkgs.runCommand
+          "logos-palace-acceptance-seams"
+          {
+            nativeBuildInputs = [
+              acceptanceTools
+            ];
+          }
+          ''
+            export PALACE_FLOCK=${acceptanceTools}/bin/flock
+            export PALACE_BASH=${acceptanceTools}/bin/bash
+            export PALACE_JQ=${acceptanceTools}/bin/jq
+            export PALACE_NODE=${acceptanceTools}/bin/node
+            export PALACE_PIDFD_SIGNAL=${acceptanceTools}/bin/palace-pidfd-signal
+            ${acceptanceTools}/bin/bash -n \
+              ${acceptanceSource}/scripts/*.sh \
+              ${acceptanceSource}/tests/*.sh
+            node --test \
+              ${acceptanceSource}/tests/basecamp_application_metrics.test.mjs \
+              ${acceptanceSource}/tests/basecamp_active_scope_preflight.test.mjs \
+              ${acceptanceSource}/tests/basecamp_claim_lifecycle.test.mjs \
+              ${acceptanceSource}/tests/basecamp_direct_child.test.mjs \
+              ${acceptanceSource}/tests/basecamp_gate4_cold_state.test.mjs \
+              ${acceptanceSource}/tests/basecamp_gate4_creator_identity.test.mjs \
+              ${acceptanceSource}/tests/basecamp_lez_timing.test.mjs \
+              ${acceptanceSource}/tests/basecamp_owned_processes.test.mjs \
+              ${acceptanceSource}/tests/basecamp_process_model.test.mjs \
+              ${acceptanceSource}/tests/basecamp_release_lock.test.mjs \
+              ${acceptanceSource}/tests/basecamp_runner_publication.test.mjs \
+              ${acceptanceSource}/tests/basecamp_scope.integration.test.mjs \
+              ${acceptanceSource}/tests/basecamp_scope.test.mjs \
+              ${acceptanceSource}/tests/basecamp_scope_control.test.mjs \
+              ${acceptanceSource}/tests/basecamp_scope_guardian.test.mjs \
+              ${acceptanceSource}/tests/basecamp_standalone_scope.integration.test.mjs \
+              ${acceptanceSource}/tests/basecamp_terminal_cleanup.test.mjs \
+              ${acceptanceSource}/tests/test_public_evidence.mjs \
+              ${acceptanceSource}/tests/validate_gate4_artifacts.test.mjs
+
+            # Store fixture creation through a nested Nix daemon is unavailable
+            # in a sandbox. Exercise the snapshot validator against derivation
+            # outputs instead.
+            snapshot_manifests="$TMPDIR/snapshot-validator-manifests"
+            mkdir -m 0700 "$snapshot_manifests"
+            printf '%s\0' README.md scripts/run.sh \
+              > "$snapshot_manifests/valid.nul"
+            printf '%s\0' README.md \
+              > "$snapshot_manifests/readme-only.nul"
+            printf '%s\0' README.md unsafe-link \
+              > "$snapshot_manifests/symlink.nul"
+            chmod 0600 "$snapshot_manifests"/*.nul
+
+            node ${acceptanceSource}/tests/validate_product_snapshot.mjs \
+              ${snapshotValidatorValid} "$snapshot_manifests/valid.nul" \
+              > "$TMPDIR/snapshot-validator-valid.json"
+            jq -e '
+              .schema == "logos.palace.product-snapshot-evidence"
+              and .version == 1
+              and .fileCount == 2
+              and .exactTrackedFileSet == true
+              and .forbiddenEntriesAbsent == true
+              and .symlinksAbsent == true
+              and (.treeSha256 | test("^[0-9a-f]{64}$"))
+            ' "$TMPDIR/snapshot-validator-valid.json" >/dev/null
+
+            expect_snapshot_rejection() {
+              label="$1"
+              snapshot="$2"
+              manifest="$3"
+              expected="$4"
+              if node \
+                ${acceptanceSource}/tests/validate_product_snapshot.mjs \
+                "$snapshot" "$manifest" \
+                > "$TMPDIR/$label.stdout" \
+                2> "$TMPDIR/$label.stderr"; then
+                printf 'Snapshot validator accepted unsafe fixture: %s\n' \
+                  "$label" >&2
+                exit 1
+              fi
+              error="$(< "$TMPDIR/$label.stderr")"
+              case "$error" in
+                *"$expected"*) ;;
+                *)
+                  printf \
+                    'Snapshot validator rejected %s for unexpected reason\n' \
+                    "$label" >&2
+                  exit 1
+                  ;;
+              esac
+            }
+            expect_snapshot_rejection \
+              git ${snapshotValidatorGit} \
+              "$snapshot_manifests/readme-only.nul" \
+              "snapshot contains forbidden path"
+            expect_snapshot_rejection \
+              target ${snapshotValidatorTarget} \
+              "$snapshot_manifests/readme-only.nul" \
+              "snapshot contains forbidden path"
+            expect_snapshot_rejection \
+              symlink ${snapshotValidatorSymlink} \
+              "$snapshot_manifests/symlink.nul" \
+              "snapshot symlink is forbidden"
+            expect_snapshot_rejection \
+              mismatch ${snapshotValidatorMismatch} \
+              "$snapshot_manifests/readme-only.nul" \
+              "snapshot files differ from exact Git tracked-file set"
+
+            mkdir -p "$out"
+            touch "$out/passed"
+          '';
     in {
       packages = forAllSystems (system:
         let
@@ -229,50 +438,50 @@
           palaceImageId = palaceImageIdFor system;
           palaceReleaseArtifact = palaceReleaseArtifactFor system;
         in {
-        acceptance-tools =
-          pkgs.symlinkJoin {
-            name = "logos-palace-acceptance-tools";
-            paths = [
-              pkgs.coreutils
-              pkgs.findutils
-              pkgs.jq
-              pkgs.nodejs
-              pkgs.util-linux
-            ];
-          };
-        palace-image-id = palaceImageId;
-        palace-release-artifact = palaceReleaseArtifact;
-        delivery-module-lgx-portable = inputs.delivery_module.packages.${system}.lgx-portable;
-        palace-delivery-acceptance-lgx-portable =
-          palaceDeliveryAcceptance.packages.${system}.lgx-portable;
-        palace-core-acceptance-lgx-portable =
-          palaceCoreAcceptance.packages.${system}.lgx-portable;
-        palace-core-production-fixture-audit =
-          palaceCoreProductionFixtureAuditFor system;
-        palace-core-acceptance-fixture-audit =
-          palaceCoreAcceptanceFixtureAuditFor system;
-        storage-module-lgx-portable = inputs.storage_module.packages.${system}.lgx-portable;
-        lez-core-lgx-portable = inputs.lez_core.packages.${system}.lgx-portable;
-        palace-vm = palaceVm.packages.${system}.default;
-        palace-vm-lgx = palaceVm.packages.${system}.lgx;
-        palace-vm-lgx-portable = palaceVm.packages.${system}.lgx-portable;
-        palace-core = palaceCore.packages.${system}.default;
-        palace-core-lgx = palaceCore.packages.${system}.lgx;
-        palace-core-lgx-portable = palaceCore.packages.${system}.lgx-portable;
-        logos-palace-ui = palaceUi.packages.${system}.default;
-        logos-palace-ui-lgx = palaceUi.packages.${system}.lgx;
-        logos-palace-ui-lgx-portable = palaceUi.packages.${system}.lgx-portable;
-        default = palaceUi.packages.${system}.default;
-      });
+          palace-image-id = palaceImageId;
+          palace-release-artifact = palaceReleaseArtifact;
+          delivery-module-lgx-portable =
+            inputs.delivery_module.packages.${system}.lgx-portable;
+          palace-delivery-acceptance-lgx-portable =
+            palaceDeliveryAcceptance.packages.${system}.lgx-portable;
+          palace-core-acceptance-lgx-portable =
+            palaceCoreAcceptance.packages.${system}.lgx-portable;
+          palace-core-production-fixture-audit =
+            palaceCoreProductionFixtureAuditFor system;
+          palace-core-acceptance-fixture-audit =
+            palaceCoreAcceptanceFixtureAuditFor system;
+          storage-module-lgx-portable =
+            inputs.storage_module.packages.${system}.lgx-portable;
+          lez-core-lgx-portable =
+            inputs.lez_core.packages.${system}.lgx-portable;
+          palace-vm = palaceVm.packages.${system}.default;
+          palace-vm-lgx = palaceVm.packages.${system}.lgx;
+          palace-vm-lgx-portable = palaceVm.packages.${system}.lgx-portable;
+          palace-core = palaceCore.packages.${system}.default;
+          palace-core-lgx = palaceCore.packages.${system}.lgx;
+          palace-core-lgx-portable =
+            palaceCore.packages.${system}.lgx-portable;
+          logos-palace-ui = palaceUi.packages.${system}.default;
+          logos-palace-ui-lgx = palaceUi.packages.${system}.lgx;
+          logos-palace-ui-lgx-portable =
+            palaceUi.packages.${system}.lgx-portable;
+          default = palaceUi.packages.${system}.default;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          acceptance-tools = acceptanceToolsFor system;
+        });
 
-      checks = forAllSystems (system: {
-        palace-vm-contracts = palaceVm.checks.${system}.unit-tests;
-        palace-core-contracts = palaceCore.checks.${system}.unit-tests;
-        palace-core-production-fixture-audit =
-          palaceCoreProductionFixtureAuditFor system;
-        palace-core-acceptance-fixture-audit =
-          palaceCoreAcceptanceFixtureAuditFor system;
-        palace-release-artifact = palaceReleaseArtifactFor system;
-      });
+      checks = forAllSystems (system:
+        let pkgs = import nixpkgs { inherit system; };
+        in {
+          palace-vm-contracts = palaceVm.checks.${system}.unit-tests;
+          palace-core-contracts = palaceCore.checks.${system}.unit-tests;
+          palace-core-production-fixture-audit =
+            palaceCoreProductionFixtureAuditFor system;
+          palace-core-acceptance-fixture-audit =
+            palaceCoreAcceptanceFixtureAuditFor system;
+          palace-release-artifact = palaceReleaseArtifactFor system;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          palace-acceptance-seams = palaceAcceptanceSeamsFor system;
+        });
     };
 }

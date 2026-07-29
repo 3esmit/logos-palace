@@ -5,11 +5,13 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   rm,
   stat,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -25,6 +27,10 @@ import {
 } from "./build_public_evidence.mjs";
 import { lezMeasurementBoundaries } from "./basecamp_lez_timing.mjs";
 import { palaceRelease } from "./basecamp_release_preflight.mjs";
+import {
+  releaseProgramId as activeClaimReleaseProgramId,
+  releaseRootId as activeClaimReleaseRootId,
+} from "./basecamp_claim_lifecycle.mjs";
 
 const execFileAsync = promisify(execFile);
 const builderPath = fileURLToPath(
@@ -79,6 +85,9 @@ const sandboxTestOutput =
 const sandboxTestNarHash =
   `sha256-${"M".repeat(43)}=`;
 const sandboxTestNarSize = 2048;
+const runScopeId = "AB12cd34";
+const processScopePrefix = `logos-palace-run-${runScopeId}`;
+const processScopeSlice = `${processScopePrefix}.slice`;
 
 const screenshotSpecs = [
   [
@@ -143,6 +152,42 @@ const screenshotSpecs = [
   ],
 ];
 
+function normalizedScreenshotSpecs(specs) {
+  return specs
+    .map(([file, stage, state, label]) => ({
+      file,
+      stage,
+      state,
+      label,
+    }))
+    .sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function exactSourceBlock(source, startMarker, endMarker, description) {
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `${description} start marker`);
+  assert.equal(
+    source.lastIndexOf(startMarker),
+    start,
+    `${description} start marker must be unique`,
+  );
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `${description} end marker`);
+  return source.slice(start, end + endMarker.length);
+}
+
+function objectScreenshotSpecs(block) {
+  return [...block.matchAll(
+    /file:\s*"([^"]+)"\s*,\s*stage:\s*"([^"]+)"\s*,\s*state:\s*"([^"]+)"\s*,\s*label:\s*"([^"]+)"/g,
+  )].map((match) => match.slice(1));
+}
+
+function tupleScreenshotSpecs(block) {
+  return [...block.matchAll(
+    /\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]/g,
+  )].map((match) => match.slice(1));
+}
+
 const dependencyRevisions = {
   basecamp: {
     revision: basecampRevision,
@@ -157,7 +202,7 @@ const dependencyRevisions = {
     narHash: "sha256-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD=",
   },
   lez_core: {
-    revision: "3".repeat(40),
+    revision: "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
     narHash: "sha256-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=",
   },
 };
@@ -319,6 +364,21 @@ function latency(sampleCount = 20) {
   return { sampleCount, p50Ms: 2, p95Ms: 4, maxMs: 5 };
 }
 
+function applicationSamples(bytes) {
+  const durations = [
+    ...Array(9).fill(1),
+    ...Array(9).fill(2),
+    4,
+    5,
+  ];
+  return durations.map((roundTripMs, index) => ({
+    ordinal: index + 1,
+    requestUtf8Bytes: bytes,
+    responseUtf8Bytes: bytes,
+    roundTripMs,
+  }));
+}
+
 function qsgRun() {
   return {
     parser: {
@@ -382,9 +442,12 @@ function rawGate4Metrics() {
   const applicationRoundTrip = {
     status: "passed",
     clock: "worker performance.now monotonic milliseconds",
-    startBoundary: "start",
-    endBoundary: "end",
-    payloadSemantics: "application UTF-8 bytes",
+    startBoundary:
+      "immediately before inspector invokes the QML UI-backend call",
+    endBoundary:
+      "invocationSequence advanced and exact raw echo property was observed",
+    payloadSemantics:
+      "application UTF-8 bytes; not transport wire bytes",
     samplesPerSize: 20,
     measurements: Object.fromEntries(
       [0, 256, 4096].map((bytes) => [
@@ -394,11 +457,11 @@ function rawGate4Metrics() {
           requestUtf8Bytes: bytes,
           responseUtf8Bytes: bytes,
           latency: latency(),
-          samples: [],
+          samples: applicationSamples(bytes),
         },
       ]),
     ),
-    rejectedUnsupportedSize: "rejected fixture",
+    rejectedUnsupportedSize: "rejected=application-round-trip-size",
   };
   const vmMetric = (phase) => ({
     actionId: "10",
@@ -474,9 +537,9 @@ function compiledMetrics(gate1, gate2, gate4) {
           c: gate2.renderProbe.remote.c.actionToFramebufferCaptureMs,
         },
         screenshots: {
-          local: { artifactPath: "/tmp/private-local.png" },
-          remoteB: { artifactPath: "/tmp/private-b.png" },
-          remoteC: { artifactPath: "/tmp/private-c.png" },
+          local: gate2.renderProbe.local.screenshot,
+          remoteB: gate2.renderProbe.remote.b.screenshot,
+          remoteC: gate2.renderProbe.remote.c.screenshot,
         },
       },
     },
@@ -552,6 +615,47 @@ async function rawReportDigest(path) {
   return digest(await readFile(path));
 }
 
+function processScopeFixture(gate) {
+  const attemptId = `A1b2C3d${gate.slice(4)}`;
+  const unit = `${processScopePrefix}-${gate}-${attemptId}.scope`;
+  const controlGroup =
+    "/user.slice/user-1000.slice/user@1000.service/"
+    + `${processScopeSlice}/${unit}`;
+  const cgroupPath = `/sys/fs/cgroup${controlGroup}`;
+  const sliceControlGroup =
+    "/user.slice/user-1000.slice/user@1000.service/"
+    + processScopeSlice;
+  const sliceCgroupPath = `/sys/fs/cgroup${sliceControlGroup}`;
+  return {
+    schema: "logos.palace.basecamp-process-scope",
+    version: 1,
+    status: "cleaned",
+    unit,
+    slice: processScopeSlice,
+    controlGroup,
+    attestedPid: 1000 + Number(gate.slice(4)),
+    attestedStartTimeTicks: 2000 + Number(gate.slice(4)),
+    barrier: "sigstop-before-exec",
+    cgroupPath,
+    eventsPath: `${cgroupPath}/cgroup.events`,
+    killPath: `${cgroupPath}/cgroup.kill`,
+    sliceControlGroup,
+    sliceCgroupPath,
+    sliceEventsPath: `${sliceCgroupPath}/cgroup.events`,
+    sliceKillPath: `${sliceCgroupPath}/cgroup.kill`,
+    commandExitStatus: 0,
+    cleanup: {
+      status: "passed",
+      initiallyPopulated: false,
+      residueKilled: false,
+      finalPopulated: false,
+      sliceInitiallyPopulated: false,
+      sliceResidueKilled: false,
+      sliceFinalPopulated: false,
+    },
+  };
+}
+
 async function writeCompiled(runDir) {
   const gate1 = await readJson(join(runDir, "gate1/gate1-report.json"));
   const gate2 = await readJson(join(runDir, "gate2/gate2-report.json"));
@@ -589,6 +693,18 @@ async function writeCompiled(runDir) {
     gate4: await rawReportDigest(
       join(runDir, "gate4/gate4-report.json"),
     ),
+    gate1Scope: await rawReportDigest(
+      join(runDir, "gate1/process-scope.json"),
+    ),
+    gate2Scope: await rawReportDigest(
+      join(runDir, "gate2/process-scope.json"),
+    ),
+    gate3Scope: await rawReportDigest(
+      join(runDir, "gate3/process-scope.json"),
+    ),
+    gate4Scope: await rawReportDigest(
+      join(runDir, "gate4/process-scope.json"),
+    ),
   };
   const gate = (name, report, reportSha256) => ({
     status: "passed",
@@ -602,6 +718,18 @@ async function writeCompiled(runDir) {
     fullMvp: "passed",
     ...commonSource(),
     productSnapshotNarSize: 123456,
+    scope: {
+      implementedGates: [
+        "gate0",
+        "gate1",
+        "gate2",
+        "gate3",
+        "gate4",
+        "gate5",
+        "gate6",
+      ],
+      pendingGates: [],
+    },
     packageHashes: lgxPackages,
     dependencyRevisions,
     releaseVerifier: {
@@ -645,47 +773,155 @@ async function writeCompiled(runDir) {
       sandboxTestNarHash,
       sandboxTestNarSize,
     },
+    sharedState: {
+      users: "shared-state/users",
+      gates: ["gate3", "gate4"],
+      activeRunClaim: join(
+        runDir,
+        "claim-state",
+        `active-${activeClaimReleaseProgramId}-${activeClaimReleaseRootId}.json`,
+      ),
+      productSnapshotGcRoot: join(
+        runDir,
+        "claim-state",
+        "product-snapshot",
+      ),
+      runtimeGcRoots: "durable-claim-roots",
+    },
     gates: {
       gate0: {
         ...gate("gate0", "gate0/gate0-report.json", hashes.gate0),
         check: "sandbox-test",
         output: sandboxTestOutput,
       },
-      gate1: gate(
-        "gate1",
-        "gate1/gate1-report.json",
-        hashes.gate1,
-      ),
-      gate2: gate(
-        "gate2",
-        "gate2/gate2-report.json",
-        hashes.gate2,
-      ),
-      gate3: gate(
-        "gate3",
-        "gate3/gate3-report.json",
-        hashes.gate3,
-      ),
-      gate4: gate(
-        "gate4",
-        "gate4/gate4-report.json",
-        hashes.gate4,
-      ),
-      gate5: gate(
-        "gate5",
-        "gate4/gate4-report.json",
-        hashes.gate4,
-      ),
-      gate6: gate(
-        "gate6",
-        "gate4/gate4-report.json",
-        hashes.gate4,
-      ),
+      gate1: {
+        ...gate(
+          "gate1",
+          "gate1/gate1-report.json",
+          hashes.gate1,
+        ),
+        processScope: {
+          evidence: "gate1/process-scope.json",
+          evidenceSha256: hashes.gate1Scope,
+        },
+      },
+      gate2: {
+        ...gate(
+          "gate2",
+          "gate2/gate2-report.json",
+          hashes.gate2,
+        ),
+        processScope: {
+          evidence: "gate2/process-scope.json",
+          evidenceSha256: hashes.gate2Scope,
+        },
+      },
+      gate3: {
+        ...gate(
+          "gate3",
+          "gate3/gate3-report.json",
+          hashes.gate3,
+        ),
+        processScope: {
+          evidence: "gate3/process-scope.json",
+          evidenceSha256: hashes.gate3Scope,
+        },
+      },
+      gate4: {
+        ...gate(
+          "gate4",
+          "gate4/gate4-report.json",
+          hashes.gate4,
+        ),
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: hashes.gate4Scope,
+        },
+      },
+      gate5: {
+        ...gate(
+          "gate5",
+          "gate4/gate4-report.json",
+          hashes.gate4,
+        ),
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: hashes.gate4Scope,
+        },
+      },
+      gate6: {
+        ...gate(
+          "gate6",
+          "gate4/gate4-report.json",
+          hashes.gate4,
+        ),
+        processScope: {
+          evidence: "gate4/process-scope.json",
+          evidenceSha256: hashes.gate4Scope,
+        },
+      },
     },
     metrics: compiledMetrics(gate1, gate2, gate4),
+    metricEvidence: {
+      gate1: {
+        report: "gate1/gate1-report.json",
+        reportSha256: hashes.gate1,
+      },
+      gate2: {
+        report: "gate2/gate2-report.json",
+        reportSha256: hashes.gate2,
+      },
+      gate3: {
+        report: "gate3/gate3-report.json",
+        reportSha256: hashes.gate3,
+      },
+      gate4To6: {
+        report: "gate4/gate4-report.json",
+        reportSha256: hashes.gate4,
+      },
+    },
+    validation: {
+      sameProductSnapshot: true,
+      sameBasecamp: true,
+      samePackageHashes: true,
+      fullGate4To6: true,
+      noPalaceServer: true,
+      reportWrite: "durable-atomic",
+    },
   };
+  delete compiled.runtimeOutputManifestSha256;
   const compiledPath = join(runDir, "compiled-mvp-report.json");
   await writeJson(compiledPath, compiled);
+  const compiledSha256 = await rawReportDigest(compiledPath);
+  const claimDirectory = join(runDir, "claim-state");
+  await mkdir(claimDirectory, { recursive: true, mode: 0o700 });
+  await chmod(claimDirectory, 0o700);
+  const activeClaim = {
+    schema: "logos.palace.basecamp-active-run-claim",
+    version: 2,
+    uid: process.getuid(),
+    releaseProgramId: activeClaimReleaseProgramId,
+    releaseRootId: activeClaimReleaseRootId,
+    runDirectory: runDir,
+    productSnapshot,
+    gcRootPath: compiled.sharedState.productSnapshotGcRoot,
+    gcRootTarget: productSnapshot,
+    gitCommit: candidateCommit,
+    snapshotNarHash: productSnapshotNarHash,
+    snapshotNarSize: 123456,
+    snapshotRunnerSha256,
+    runtimeManifestPath,
+    runtimeManifestSha256: compiled.runtimeOutputs.manifestSha256,
+    processScopeSlice: `logos-palace-run-${runScopeId}.slice`,
+    processScopePrefix: `logos-palace-run-${runScopeId}`,
+    status: "completed",
+    createdAtUnixMs: 1_699_999_999_998,
+    gate3EnteredAtUnixMs: 1_699_999_999_999,
+    completedAtUnixMs: 1_700_000_000_000,
+    compiledReportSha256: compiledSha256,
+  };
+  await writeJson(compiled.sharedState.activeRunClaim, activeClaim);
+  await chmod(compiled.sharedState.activeRunClaim, 0o600);
   await writeJson(
     join(runDir, "active-claim-completion.json"),
     {
@@ -693,8 +929,10 @@ async function writeCompiled(runDir) {
       version: 1,
       status: "completed",
       completedAtUnixMs: 1_700_000_000_000,
-      activeClaimSha256: "7".repeat(64),
-      compiledReportSha256: await rawReportDigest(compiledPath),
+      activeClaimSha256: await rawReportDigest(
+        compiled.sharedState.activeRunClaim,
+      ),
+      compiledReportSha256: compiledSha256,
       productSnapshot,
       sourceCommit: candidateCommit,
       productSnapshotNarHash,
@@ -707,9 +945,18 @@ async function writeCompiled(runDir) {
 }
 
 async function fixture() {
-  const runDir = await mkdtemp(join(tmpdir(), "palace-public-evidence-"));
+  const fixtureRoot = await mkdtemp(
+    join(tmpdir(), "palace-public-evidence-"),
+  );
+  const runDir = join(fixtureRoot, `run.${runScopeId}`);
+  await mkdir(runDir);
   for (const gate of ["gate0", "gate1", "gate2", "gate3", "gate4"]) {
     await mkdir(join(runDir, gate));
+  }
+  for (const gate of ["gate1", "gate2", "gate3", "gate4"]) {
+    const path = join(runDir, gate, "process-scope.json");
+    await writeJson(path, processScopeFixture(gate));
+    await chmod(path, 0o600);
   }
   await writeJson(
     join(runDir, "runtime-output-manifest.json"),
@@ -819,10 +1066,34 @@ async function fixture() {
       sendToReceiveLatency: { allNodes: latency(300) },
     },
     renderProbe: {
-      local: { actionToFramebufferCaptureMs: 6 },
+      local: {
+        actionToFramebufferCaptureMs: 6,
+        screenshot: {
+          file: "gate2-render-probe-a.png",
+          width: 1600,
+          height: 900,
+          sha256: "6".repeat(64),
+        },
+      },
       remote: {
-        b: { actionToFramebufferCaptureMs: 7 },
-        c: { actionToFramebufferCaptureMs: 8 },
+        b: {
+          actionToFramebufferCaptureMs: 7,
+          screenshot: {
+            file: "gate2-render-probe-b.png",
+            width: 1600,
+            height: 900,
+            sha256: "7".repeat(64),
+          },
+        },
+        c: {
+          actionToFramebufferCaptureMs: 8,
+          screenshot: {
+            file: "gate2-render-probe-c.png",
+            width: 1600,
+            height: 900,
+            sha256: "8".repeat(64),
+          },
+        },
       },
     },
     restartRecovery: {
@@ -1468,6 +1739,7 @@ async function fixture() {
   await writeJson(join(runDir, "gate4/gate4-report.json"), gate4);
   await writeCompiled(runDir);
   return {
+    fixtureRoot,
     runDir,
     output: join(runDir, "public-evidence.json"),
     processRuntimeArtifacts,
@@ -1480,7 +1752,7 @@ async function withFixture(callback) {
   try {
     await callback(value);
   } finally {
-    await rm(value.runDir, { recursive: true, force: true });
+    await rm(value.fixtureRoot, { recursive: true, force: true });
   }
 }
 
@@ -1547,6 +1819,101 @@ function useDirectWrapperEvidence(gate4) {
   return { interpreterPath, interpreterSha256 };
 }
 
+test("keeps exact-ten screenshot contract synchronized", async () => {
+  const [
+    gate4Source,
+    validatorSource,
+    builderSource,
+    runnerSource,
+  ] = await Promise.all([
+    readFile(
+      fileURLToPath(new URL("./basecamp_gate4.mjs", import.meta.url)),
+      "utf8",
+    ),
+    readFile(
+      fileURLToPath(
+        new URL("./validate_gate4_artifacts.mjs", import.meta.url),
+      ),
+      "utf8",
+    ),
+    readFile(builderPath, "utf8"),
+    readFile(
+      fileURLToPath(
+        new URL("../scripts/run-basecamp-mvp.sh", import.meta.url),
+      ),
+      "utf8",
+    ),
+  ]);
+  const expected = normalizedScreenshotSpecs(screenshotSpecs);
+  assert.equal(expected.length, 10);
+  assert.equal(new Set(expected.map(({ file }) => file)).size, 10);
+
+  const contracts = [
+    [
+      "Gate 4",
+      objectScreenshotSpecs(exactSourceBlock(
+        gate4Source,
+        "const screenshotSpecs = {",
+        "\n};\n\nawait mkdir",
+        "Gate 4 screenshot contract",
+      )),
+    ],
+    [
+      "standalone validator",
+      tupleScreenshotSpecs(exactSourceBlock(
+        validatorSource,
+        "const expected = [",
+        "].map(([file, stage, state, label]) => ({ file, stage, state, label }));",
+        "standalone screenshot contract",
+      )),
+    ],
+    [
+      "public evidence builder",
+      objectScreenshotSpecs(exactSourceBlock(
+        builderSource,
+        "const screenshotSpecs = Object.freeze([",
+        "\n]);\n\nconst dependencySpecs",
+        "public evidence screenshot contract",
+      )),
+    ],
+    [
+      "release runner",
+      objectScreenshotSpecs(exactSourceBlock(
+        runnerSource,
+        "      def expected_screenshots:",
+        ";\n\n      def valid_screenshot_evidence:",
+        "runner screenshot contract",
+      )),
+    ],
+  ];
+  for (const [description, contract] of contracts) {
+    assert.equal(contract.length, 10, `${description} screenshot count`);
+    assert.deepEqual(
+      normalizedScreenshotSpecs(contract),
+      expected,
+      `${description} screenshot set`,
+    );
+  }
+
+  const runnerCounts = [...runnerSource.matchAll(
+    /\.screenshots \| length\) == (\d+)/g,
+  )];
+  assert.equal(runnerCounts.length, 1);
+  assert.equal(Number(runnerCounts[0][1]), expected.length);
+  assert.match(
+    gate4Source,
+    /const expectedScreenshots = Object\.values\(screenshotSpecs\);/,
+  );
+  assert.match(
+    validatorSource,
+    /report\.screenshots\.length !== expected\.length/,
+  );
+  assert.match(
+    builderSource,
+    /evidence\.screenshots\.length !== screenshotSpecs\.length/,
+  );
+});
+
 test("builds exact allowlist-only public evidence", async () => {
   await withFixture(async ({
     runDir,
@@ -1557,16 +1924,67 @@ test("builds exact allowlist-only public evidence", async () => {
     const evidence = await buildPublicEvidence(runDir, output);
     const reopened = await readJson(output);
     assert.deepEqual(reopened, evidence);
+    const completion = await readJson(
+      join(runDir, "active-claim-completion.json"),
+    );
     assert.deepEqual(reopened.terminalCompletion, {
       status: "completed",
       completedAtUnixMs: 1_700_000_000_000,
-      activeClaimSha256: "7".repeat(64),
+      activeClaimSha256: completion.activeClaimSha256,
       compiledReportSha256: await rawReportDigest(
         join(runDir, "compiled-mvp-report.json"),
       ),
     });
+    assert.deepEqual(
+      reopened.processScopes,
+      Object.fromEntries(
+        await Promise.all(
+          ["gate1", "gate2", "gate3", "gate4"].map(
+            async (gate) => [
+              gate,
+              {
+                evidence: `${gate}/process-scope.json`,
+                evidenceSha256: digest(
+                  await readFile(
+                    join(runDir, gate, "process-scope.json"),
+                  ),
+                ),
+                unit:
+                  `${processScopePrefix}-${gate}-A1b2C3d${gate.slice(4)}.scope`,
+                slice: processScopeSlice,
+                cleanup: {
+                  status: "passed",
+                  initiallyPopulated: false,
+                  residueKilled: false,
+                  finalPopulated: false,
+                  sliceInitiallyPopulated: false,
+                  sliceResidueKilled: false,
+                  sliceFinalPopulated: false,
+                },
+              },
+            ],
+          ),
+        ),
+      ),
+    );
     assert.equal(reopened.screenshots.length, 10);
     assert.equal(reopened.metrics.delivery.orderedMessageCount, 300);
+    assert.equal(
+      reopened.metrics.applicationRoundTrip.clock,
+      "worker performance.now monotonic milliseconds",
+    );
+    assert.equal(
+      reopened.metrics.applicationRoundTrip.payloadSemantics,
+      "application UTF-8 bytes; not transport wire bytes",
+    );
+    assert.deepEqual(
+      reopened.metrics.applicationRoundTrip.measurements,
+      [0, 256, 4096].map((bytes) => ({
+        bytes,
+        samples: applicationSamples(bytes),
+        latencyMs: latency(),
+      })),
+    );
     assert.deepEqual(reopened.components, {
       uiCommit: candidateCommit,
       coreCommit: candidateCommit,
@@ -1763,6 +2181,11 @@ test("builds exact allowlist-only public evidence", async () => {
       "\"ports\":",
       "\"device\":",
       "\"inode\":",
+      "\"attestedPid\":",
+      "\"controlGroup\":",
+      "\"cgroupPath\":",
+      "\"eventsPath\":",
+      "\"killPath\":",
       "credentials",
       "apiToken",
     ]) {
@@ -1806,6 +2229,100 @@ test("writes exact owner-only mode even under restrictive umask", async () => {
   });
 });
 
+test("rejects process scope mutation after compilation", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    await buildPublicEvidence(runDir, output);
+    const path = join(runDir, "gate2/process-scope.json");
+    const scope = await readJson(path);
+    scope.attestedPid += 1;
+    await writeJson(path, scope);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /gate2 compiled process scope binding is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects nonzero process-scope command exit status", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate2/process-scope.json");
+    const scope = await readJson(path);
+    scope.commandExitStatus = 1;
+    await writeJson(path, scope);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /gate2 process scope evidence is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects missing process scope evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    await buildPublicEvidence(runDir, output);
+    await unlink(join(runDir, "gate3/process-scope.json"));
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /ENOENT|gate3 process scope/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects crosswired process scope evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const gate1Path = join(runDir, "gate1/process-scope.json");
+    const gate2Path = join(runDir, "gate2/process-scope.json");
+    const [gate1, gate2] = await Promise.all([
+      readJson(gate1Path),
+      readJson(gate2Path),
+    ]);
+    await Promise.all([
+      writeJson(gate1Path, gate2),
+      writeJson(gate2Path, gate1),
+    ]);
+    await writeCompiled(runDir);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /gate1 process scope evidence is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects Gate 5 scope binding differing from Gate 4", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(path);
+    compiled.gates.gate5.processScope = {
+      ...compiled.gates.gate3.processScope,
+    };
+    await writeJson(path, compiled);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /gate5 compiled process scope binding is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects non-clean public process scope projection", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    evidence.processScopes.gate4.cleanup.residueKilled = true;
+    assert.throws(
+      () => validatePublicEvidence(evidence),
+      /public evidence schema/,
+    );
+  });
+});
+
 test("removes prior public evidence when terminal claim proof fails", async () => {
   await withFixture(async ({ runDir, output }) => {
     await buildPublicEvidence(runDir, output);
@@ -1820,6 +2337,111 @@ test("removes prior public evidence when terminal claim proof fails", async () =
     await assert.rejects(
       buildPublicEvidence(runDir, output),
       /terminal active-run completion is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects completed claim bytes differing from terminal digest", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    await buildPublicEvidence(runDir, output);
+    const compiled = await readJson(
+      join(runDir, "compiled-mvp-report.json"),
+    );
+    const claim = await readJson(
+      compiled.sharedState.activeRunClaim,
+    );
+    claim.completedAtUnixMs += 1;
+    await writeJson(compiled.sharedState.activeRunClaim, claim);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /completed active-run claim differs/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects unverified fields in compiled evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.unverified = { status: "passed" };
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled report envelope is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects unverified fields in compiled Basecamp evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.basecamp.unverified = true;
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled Basecamp evidence shape is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects unbound compiled render screenshot evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.metrics.render.markedActionToFramebufferCapture
+      .screenshots.local.sha256 = "0".repeat(64);
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled render metrics differ from raw evidence/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects unbound compiled LEZ metric producer reference", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.metrics.lez.jsonPointer = "/actions";
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled LEZ metrics differ from raw evidence/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects extra fields in a compiled metric container", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.metrics.delivery.unverified = true;
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled Delivery metrics differ from raw evidence/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects unbound compiled metric report digest", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const compiledPath = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(compiledPath);
+    compiled.metricEvidence.gate2.reportSha256 = "0".repeat(64);
+    await writeJson(compiledPath, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled metric evidence binding is invalid/,
     );
     await assert.rejects(access(output), { code: "ENOENT" });
   });
@@ -2472,6 +3094,219 @@ test("rejects changed LEZ measurement boundary", async () => {
   });
 });
 
+test("rejects unpinned application round-trip clock", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const gate4 = await readJson(path);
+    gate4.metrics.applicationRoundTrip.clock = "wall clock";
+    await writeJson(path, gate4);
+    await writeCompiled(runDir);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /raw application round-trip evidence is invalid/,
+    );
+    await assert.rejects(access(output));
+  });
+});
+
+test("rejects unpinned application payload semantics", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const gate4 = await readJson(path);
+    gate4.metrics.applicationRoundTrip.payloadSemantics =
+      "transport wire bytes";
+    await writeJson(path, gate4);
+    await writeCompiled(runDir);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /raw application round-trip evidence is invalid/,
+    );
+    await assert.rejects(access(output));
+  });
+});
+
+test("rejects malformed raw application sample series", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const baseline = await readJson(path);
+    const cases = [
+      {
+        name: "missing payload size",
+        mutate: (roundTrip) => {
+          delete roundTrip.measurements["256"];
+        },
+      },
+      {
+        name: "extra payload size",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["1"] = structuredClone(
+            roundTrip.measurements["0"],
+          );
+        },
+      },
+      {
+        name: "missing sample",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples.pop();
+        },
+      },
+      {
+        name: "extra sample",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples.push({
+            ordinal: 21,
+            requestUtf8Bytes: 256,
+            responseUtf8Bytes: 256,
+            roundTripMs: 5,
+          });
+        },
+      },
+      {
+        name: "misordered ordinal",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].ordinal = 2;
+        },
+      },
+      {
+        name: "extra sample field",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].unverified = true;
+        },
+      },
+      {
+        name: "tampered byte count",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0]
+            .responseUtf8Bytes = 255;
+        },
+      },
+      {
+        name: "negative duration",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].roundTripMs = -1;
+        },
+      },
+      {
+        name: "non-finite duration",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].roundTripMs =
+            Number.POSITIVE_INFINITY;
+        },
+      },
+      {
+        name: "fractional duration",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].roundTripMs = 1.5;
+        },
+      },
+      {
+        name: "unsafe integer duration",
+        mutate: (roundTrip) => {
+          roundTrip.measurements["256"].samples[0].roundTripMs =
+            Number.MAX_SAFE_INTEGER + 1;
+        },
+      },
+    ];
+    for (const entry of cases) {
+      const gate4 = structuredClone(baseline);
+      entry.mutate(gate4.metrics.applicationRoundTrip);
+      await writeJson(path, gate4);
+      await writeCompiled(runDir);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /raw application/,
+        entry.name,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    }
+  });
+});
+
+test("rejects each application aggregate differing from raw samples", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const baseline = await readJson(path);
+    for (const [field, value] of [
+      ["p50Ms", 3],
+      ["p95Ms", 3],
+      ["maxMs", 6],
+    ]) {
+      const gate4 = structuredClone(baseline);
+      gate4.metrics.applicationRoundTrip.measurements["256"]
+        .latency[field] = value;
+      await writeJson(path, gate4);
+      await writeCompiled(runDir);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /raw application 256-byte latency differs from samples/,
+        field,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    }
+  });
+});
+
+test("rejects each compiled application aggregate differing from raw samples", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "compiled-mvp-report.json");
+    const baseline = await readJson(path);
+    for (const [field, value] of [
+      ["p50Ms", 3],
+      ["p95Ms", 3],
+      ["maxMs", 6],
+    ]) {
+      const compiled = structuredClone(baseline);
+      compiled.metrics.applicationRoundTrip.measurements["256"]
+        .latency[field] = value;
+      await writeJson(path, compiled);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /application round-trip metrics differ from raw evidence/,
+        field,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    }
+  });
+});
+
+test("rejects extra raw application envelope fields", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const gate4 = await readJson(path);
+    gate4.metrics.applicationRoundTrip.unverified = true;
+    await writeJson(path, gate4);
+    await writeCompiled(runDir);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /raw application round-trip evidence is invalid/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects changed raw application boundary receipts", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const baseline = await readJson(path);
+    for (const [field, value] of [
+      ["startBoundary", "after inspector invocation"],
+      ["endBoundary", "before exact echo observation"],
+      ["rejectedUnsupportedSize", "accepted"],
+    ]) {
+      const gate4 = structuredClone(baseline);
+      gate4.metrics.applicationRoundTrip[field] = value;
+      await writeJson(path, gate4);
+      await writeCompiled(runDir);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /raw application round-trip evidence is invalid/,
+        field,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    }
+  });
+});
+
 test("rejects missing Storage transition receipt mutation", async () => {
   await withFixture(async ({ runDir, output }) => {
     const path = join(runDir, "gate4/gate4-report.json");
@@ -2679,6 +3514,124 @@ test("rejects unexpected public evidence keys", async () => {
   });
 });
 
+test("rejects raw LEZ module revision differing from dependency pin", async () => {
+  const original = dependencyRevisions.lez_core.revision;
+  dependencyRevisions.lez_core.revision = "4".repeat(40);
+  try {
+    await withFixture(async ({ runDir, output }) => {
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /dependency evidence is incomplete or inconsistent/,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    });
+  } finally {
+    dependencyRevisions.lez_core.revision = original;
+  }
+});
+
+test("rejects public LEZ module revision differing from dependency pin", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    evidence.dependencies.lezCore.revision = "4".repeat(40);
+    assert.throws(
+      () => validatePublicEvidence(evidence),
+      /public evidence schema/,
+    );
+  });
+});
+
+test("rejects public Delivery counts whose sender sum differs", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    evidence.metrics.delivery.perSender.a += 1;
+    assert.throws(
+      () => validatePublicEvidence(evidence),
+      /public evidence schema/,
+    );
+  });
+});
+
+test("rejects changed public application samples and aggregates", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    const mutations = [
+      {
+        name: "sample count",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .latencyMs.sampleCount = 19;
+        },
+      },
+      {
+        name: "p50",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .latencyMs.p50Ms = 3;
+        },
+      },
+      {
+        name: "p95",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .latencyMs.p95Ms = 3;
+        },
+      },
+      {
+        name: "max",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .latencyMs.maxMs = 6;
+        },
+      },
+      {
+        name: "sample duration",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .samples[18].roundTripMs = 3;
+        },
+      },
+      {
+        name: "fractional sample duration",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .samples[0].roundTripMs = 1.5;
+        },
+      },
+      {
+        name: "unsafe sample duration",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .samples[0].roundTripMs = Number.MAX_SAFE_INTEGER + 1;
+        },
+      },
+      {
+        name: "sample ordinal",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .samples[0].ordinal = 2;
+        },
+      },
+      {
+        name: "sample byte count",
+        mutate: (candidate) => {
+          candidate.metrics.applicationRoundTrip.measurements[1]
+            .samples[0].responseUtf8Bytes = 255;
+        },
+      },
+    ];
+    for (const mutation of mutations) {
+      const candidate = structuredClone(evidence);
+      mutation.mutate(candidate);
+      assert.throws(
+        () => validatePublicEvidence(candidate),
+        /public evidence schema/,
+        mutation.name,
+      );
+    }
+  });
+});
+
 test("rejects direct Storage provider attribution overclaim", async () => {
   await withFixture(async ({ runDir, output }) => {
     const evidence = await buildPublicEvidence(runDir, output);
@@ -2712,6 +3665,21 @@ test("rejects deleted screenshot evidence", async () => {
   await withFixture(async ({ runDir, output }) => {
     await unlink(
       join(runDir, "gate4/gate6-c-lounge-restarted.png"),
+    );
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /strict screenshot evidence validation failed/,
+    );
+    await assert.rejects(access(output));
+  });
+});
+
+test("rejects extra PNG symlink evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const gate4Dir = join(runDir, "gate4");
+    await symlink(
+      "gate4-a-three-user-atrium-converged.png",
+      join(gate4Dir, "unreported.png"),
     );
     await assert.rejects(
       buildPublicEvidence(runDir, output),

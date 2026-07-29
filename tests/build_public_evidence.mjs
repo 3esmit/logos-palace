@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import {
   lstat,
   open,
+  readdir,
   realpath,
   rename,
   unlink,
@@ -22,6 +23,14 @@ import { palaceRelease } from "./basecamp_release_preflight.mjs";
 import {
   validateProcessExecutableIdentity,
 } from "./basecamp_process_model.mjs";
+import {
+  validateControlGroups,
+} from "./basecamp_scope.mjs";
+import {
+  releaseProgramId,
+  releaseRootId,
+  validateV2Claim,
+} from "./basecamp_claim_lifecycle.mjs";
 import {
   lezMeasurementBoundaries,
   recoverPersistedTimingEvidence,
@@ -99,6 +108,13 @@ const reportSpecs = Object.freeze([
     version: 2,
   },
 ]);
+
+const processScopeSpecs = Object.freeze(
+  ["gate1", "gate2", "gate3", "gate4"].map((gate) => ({
+    gate,
+    file: `${gate}/process-scope.json`,
+  })),
+);
 
 const screenshotSpecs = Object.freeze([
   {
@@ -341,6 +357,18 @@ const networkContract = Object.freeze({
   lezSequencerOrigin: "https://testnet.lez.logos.co",
   lezReadOrigin: "https://explorer.testnet.lez.logos.co",
 });
+const applicationRoundTripClock =
+  "worker performance.now monotonic milliseconds";
+const applicationRoundTripStartBoundary =
+  "immediately before inspector invokes the QML UI-backend call";
+const applicationRoundTripEndBoundary =
+  "invocationSequence advanced and exact raw echo property was observed";
+const applicationRoundTripPayloadSemantics =
+  "application UTF-8 bytes; not transport wire bytes";
+const applicationRoundTripSamplesPerSize = 20;
+const applicationRoundTripPayloadSizes = Object.freeze([0, 256, 4096]);
+const applicationRoundTripRejectedReceipt =
+  "rejected=application-round-trip-size";
 
 function isObject(value) {
   return (
@@ -443,7 +471,12 @@ async function canonicalDirectory(path, description) {
   return absolute;
 }
 
-async function boundedFile(path, maximumBytes, description) {
+async function boundedFile(
+  path,
+  maximumBytes,
+  description,
+  { ownerOnly = false } = {},
+) {
   const absolute = resolve(path);
   if (await realpath(absolute) !== absolute) {
     throw new Error(`${description} is not canonical`);
@@ -465,15 +498,26 @@ async function boundedFile(path, maximumBytes, description) {
     const before = await handle.stat({ bigint: true });
     const bytes = await handle.readFile();
     const after = await handle.stat({ bigint: true });
+    const uid = process.getuid?.();
     if (
       !before.isFile()
       || before.dev !== after.dev
       || before.ino !== after.ino
       || before.size !== after.size
       || before.mtimeNs !== after.mtimeNs
+      || before.mode !== after.mode
+      || before.uid !== after.uid
       || bytes.length !== Number(after.size)
       || bytes.length <= 0
       || bytes.length > maximumBytes
+      || (
+        ownerOnly
+        && (
+          !Number.isSafeInteger(uid)
+          || Number(before.uid) !== uid
+          || (Number(before.mode) & 0o777) !== 0o600
+        )
+      )
     ) {
       throw new Error(`${description} changed while reading`);
     }
@@ -483,8 +527,20 @@ async function boundedFile(path, maximumBytes, description) {
   }
 }
 
-async function readReport(path, description) {
-  const bytes = await boundedFile(path, 64 * 1024 * 1024, description);
+async function readReport(
+  path,
+  description,
+  {
+    maximumBytes = 64 * 1024 * 1024,
+    ownerOnly = false,
+  } = {},
+) {
+  const bytes = await boundedFile(
+    path,
+    maximumBytes,
+    description,
+    { ownerOnly },
+  );
   let value;
   try {
     value = JSON.parse(bytes.toString("utf8"));
@@ -495,6 +551,100 @@ async function readReport(path, description) {
     throw new Error(`${description} is not a JSON object`);
   }
   return { value, sha256: sha256(bytes) };
+}
+
+function validateProcessScopeEvidence(runDir, scopes) {
+  const runMatch = basename(runDir).match(
+    /^run\.([A-Za-z0-9]{8})$/,
+  );
+  if (!runMatch) {
+    throw new Error("MVP run directory basename is invalid");
+  }
+  const prefix = `logos-palace-run-${runMatch[1]}`;
+  const slice = `${prefix}.slice`;
+  const projection = {};
+  for (const { gate, file } of processScopeSpecs) {
+    const record = scopes[gate];
+    const value = record?.value;
+    const unitPattern = new RegExp(
+      `^${prefix}-${gate}-[A-Za-z0-9]{8}\\.scope$`,
+    );
+    if (
+      !exactKeys(
+        value,
+        [
+          "schema",
+          "version",
+          "status",
+          "unit",
+          "slice",
+          "controlGroup",
+          "attestedPid",
+          "attestedStartTimeTicks",
+          "barrier",
+          "cgroupPath",
+          "eventsPath",
+          "killPath",
+          "sliceControlGroup",
+          "sliceCgroupPath",
+          "sliceEventsPath",
+          "sliceKillPath",
+          "commandExitStatus",
+          "cleanup",
+        ],
+      )
+      || value.schema !== "logos.palace.basecamp-process-scope"
+      || value.version !== 1
+      || value.status !== "cleaned"
+      || !unitPattern.test(value.unit)
+      || value.slice !== slice
+      || !Number.isSafeInteger(value.attestedPid)
+      || value.attestedPid <= 0
+      || !Number.isSafeInteger(value.attestedStartTimeTicks)
+      || value.attestedStartTimeTicks <= 0
+      || value.barrier !== "sigstop-before-exec"
+      || value.commandExitStatus !== 0
+      || value.cgroupPath !== `/sys/fs/cgroup${value.controlGroup}`
+      || value.eventsPath !== `${value.cgroupPath}/cgroup.events`
+      || value.killPath !== `${value.cgroupPath}/cgroup.kill`
+      || value.sliceControlGroup !== dirname(value.controlGroup)
+      || value.sliceCgroupPath
+        !== `/sys/fs/cgroup${value.sliceControlGroup}`
+      || value.sliceEventsPath
+        !== `${value.sliceCgroupPath}/cgroup.events`
+      || value.sliceKillPath !== `${value.sliceCgroupPath}/cgroup.kill`
+      || !exactJson(value.cleanup, {
+        status: "passed",
+        initiallyPopulated: false,
+        residueKilled: false,
+        finalPopulated: false,
+        sliceInitiallyPopulated: false,
+        sliceResidueKilled: false,
+        sliceFinalPopulated: false,
+      })
+    ) {
+      throw new Error(`${gate} process scope evidence is invalid`);
+    }
+    try {
+      validateControlGroups({
+        pidControlGroup: value.controlGroup,
+        unitControlGroup: value.controlGroup,
+        sliceControlGroup: dirname(value.controlGroup),
+        unit: value.unit,
+        slice,
+      });
+    } catch {
+      throw new Error(`${gate} process scope evidence is invalid`);
+    }
+    projection[gate] = {
+      evidence: file,
+      evidenceSha256: record.sha256,
+      unit: value.unit,
+      slice,
+      cleanup: value.cleanup,
+    };
+  }
+  return projection;
 }
 
 function validateReportStatuses(reports) {
@@ -545,9 +695,32 @@ function validateReportStatuses(reports) {
   }
 }
 
-function validateCompiledBindings(compiled, reports) {
+function validateCompiledBindings(compiled, reports, scopes) {
   if (
-    compiled.schema !== "logos.palace.basecamp-mvp-compiled-report"
+    !exactKeys(compiled, [
+      "schema",
+      "version",
+      "status",
+      "fullMvp",
+      "productSnapshot",
+      "sourceCommit",
+      "productSnapshotNarHash",
+      "productSnapshotNarSize",
+      "snapshotRunnerSha256",
+      "scope",
+      "dependencyRevisions",
+      "releaseVerifier",
+      "runtimeOutputs",
+      "contractProofs",
+      "basecamp",
+      "packageHashes",
+      "sharedState",
+      "gates",
+      "metrics",
+      "metricEvidence",
+      "validation",
+    ])
+    || compiled.schema !== "logos.palace.basecamp-mvp-compiled-report"
     || compiled.version !== 1
     || compiled.status !== "passed"
     || compiled.fullMvp !== "passed"
@@ -562,6 +735,26 @@ function validateCompiledBindings(compiled, reports) {
       compiled.productSnapshot,
     )
     || !isObject(compiled.gates)
+    || !exactJson(compiled.scope, {
+      implementedGates: [
+        "gate0",
+        "gate1",
+        "gate2",
+        "gate3",
+        "gate4",
+        "gate5",
+        "gate6",
+      ],
+      pendingGates: [],
+    })
+    || !exactJson(compiled.validation, {
+      sameProductSnapshot: true,
+      sameBasecamp: true,
+      samePackageHashes: true,
+      fullGate4To6: true,
+      noPalaceServer: true,
+      reportWrite: "durable-atomic",
+    })
   ) {
     throw new Error("compiled report envelope is invalid");
   }
@@ -584,14 +777,55 @@ function validateCompiledBindings(compiled, reports) {
     expectedGateBindings,
   )) {
     const binding = compiled.gates[gate];
+    const expectedKeys = gate === "gate0"
+      ? ["status", "check", "output", "report", "reportSha256"]
+      : ["status", "report", "reportSha256", "processScope"];
     if (
-      !isObject(binding)
+      !exactKeys(binding, expectedKeys)
       || binding.status !== "passed"
       || binding.report !== reportFile
       || binding.reportSha256 !== reports[reportName].sha256
     ) {
       throw new Error(`${gate} compiled report binding is invalid`);
     }
+    if (gate === "gate0") {
+      if (Object.hasOwn(binding, "processScope")) {
+        throw new Error("gate0 compiled process scope binding is invalid");
+      }
+      continue;
+    }
+    const scopeGate = ["gate5", "gate6"].includes(gate)
+      ? "gate4"
+      : gate;
+    const scopeSpec = processScopeSpecs.find(
+      ({ gate: candidate }) => candidate === scopeGate,
+    );
+    if (!exactJson(binding.processScope, {
+      evidence: scopeSpec.file,
+      evidenceSha256: scopes[scopeGate].sha256,
+    })) {
+      throw new Error(`${gate} compiled process scope binding is invalid`);
+    }
+  }
+  if (!exactJson(compiled.metricEvidence, {
+    gate1: {
+      report: "gate1/gate1-report.json",
+      reportSha256: reports.gate1.sha256,
+    },
+    gate2: {
+      report: "gate2/gate2-report.json",
+      reportSha256: reports.gate2.sha256,
+    },
+    gate3: {
+      report: "gate3/gate3-report.json",
+      reportSha256: reports.gate3.sha256,
+    },
+    gate4To6: {
+      report: "gate4/gate4-report.json",
+      reportSha256: reports.gate4To6.sha256,
+    },
+  })) {
+    throw new Error("compiled metric evidence binding is invalid");
   }
   for (const { value } of Object.values(reports)) {
     if (
@@ -615,6 +849,8 @@ function publicDependencies(compiled, gate4) {
     || JSON.stringify(Object.keys(source).sort())
       !== JSON.stringify(dependencySpecs.map(([name]) => name).sort())
     || !exactJson(source, gate4.dependencyRevisions)
+    || source.lez_core?.revision
+      !== gate4.releaseContract?.network?.lezModuleRevision
   ) {
     throw new Error("dependency evidence is incomplete or inconsistent");
   }
@@ -721,7 +957,86 @@ function publicTestOnlyVariants(gate2, productionPackages) {
   };
 }
 
-function publicTerminalCompletion(completion, compiled) {
+async function completedActiveClaim({
+  runDir,
+  compiled,
+  completion,
+  runtimeManifest,
+  processScopeEvidence,
+}) {
+  const sharedState = compiled.value.sharedState;
+  const commonSlice = processScopeEvidence.gate1.value.slice;
+  const processScopePrefix = commonSlice?.endsWith(".slice")
+    ? commonSlice.slice(0, -".slice".length)
+    : undefined;
+  if (
+    !exactKeys(sharedState, [
+      "users",
+      "gates",
+      "activeRunClaim",
+      "productSnapshotGcRoot",
+      "runtimeGcRoots",
+    ])
+    || sharedState.users !== "shared-state/users"
+    || !exactJson(sharedState.gates, ["gate3", "gate4"])
+    || sharedState.runtimeGcRoots !== "durable-claim-roots"
+    || typeof sharedState.activeRunClaim !== "string"
+    || resolve(sharedState.activeRunClaim) !== sharedState.activeRunClaim
+    || typeof sharedState.productSnapshotGcRoot !== "string"
+    || resolve(sharedState.productSnapshotGcRoot)
+      !== sharedState.productSnapshotGcRoot
+    || !/^logos-palace-run-[A-Za-z0-9]{8}$/.test(
+      processScopePrefix ?? "",
+    )
+    || Object.values(processScopeEvidence).some(
+      ({ value }) => value.slice !== commonSlice,
+    )
+  ) {
+    throw new Error("compiled active-run claim binding is invalid");
+  }
+  const claimPath = sharedState.activeRunClaim;
+  const claim = await readReport(
+    claimPath,
+    "completed active-run claim",
+    {
+      maximumBytes: 64 * 1024,
+      ownerOnly: true,
+    },
+  );
+  const expectedCommon = {
+    schema: "logos.palace.basecamp-active-run-claim",
+    version: 2,
+    uid: process.getuid?.(),
+    releaseProgramId,
+    releaseRootId,
+    runDirectory: runDir,
+    productSnapshot: compiled.value.productSnapshot,
+    gcRootPath: sharedState.productSnapshotGcRoot,
+    gcRootTarget: compiled.value.productSnapshot,
+    gitCommit: compiled.value.sourceCommit,
+    snapshotNarHash: compiled.value.productSnapshotNarHash,
+    snapshotNarSize: compiled.value.productSnapshotNarSize,
+    snapshotRunnerSha256: compiled.value.snapshotRunnerSha256,
+    runtimeManifestPath: join(runDir, "runtime-output-manifest.json"),
+    runtimeManifestSha256: runtimeManifest.sha256,
+    processScopeSlice: commonSlice,
+    processScopePrefix,
+  };
+  const value = validateV2Claim(claim.value, expectedCommon);
+  if (
+    basename(claimPath)
+      !== `active-${releaseProgramId}-${releaseRootId}.json`
+    || value.status !== "completed"
+    || value.compiledReportSha256 !== compiled.sha256
+    || value.completedAtUnixMs !== completion.value.completedAtUnixMs
+    || claim.sha256 !== completion.value.activeClaimSha256
+  ) {
+    throw new Error("completed active-run claim differs from completion");
+  }
+  return claim;
+}
+
+function publicTerminalCompletion(completion, compiled, activeClaim) {
   const value = completion.value;
   if (
     !exactKeys(
@@ -747,6 +1062,7 @@ function publicTerminalCompletion(completion, compiled) {
     || !Number.isSafeInteger(value.completedAtUnixMs)
     || value.completedAtUnixMs <= 0
     || !isSha256(value.activeClaimSha256)
+    || value.activeClaimSha256 !== activeClaim.sha256
     || value.compiledReportSha256 !== compiled.sha256
     || value.productSnapshot !== compiled.value.productSnapshot
     || value.sourceCommit !== compiled.value.sourceCommit
@@ -2119,6 +2435,23 @@ function publicContracts(reports) {
 }
 
 function basecampEvidence(compiled, reports, dependencies) {
+  if (
+    !exactKeys(
+      compiled.basecamp,
+      [
+        "revision",
+        "sha256",
+        "sandboxTestOutput",
+        "runtimeOutput",
+        "narHash",
+        "narSize",
+        "sandboxTestNarHash",
+        "sandboxTestNarSize",
+      ],
+    )
+  ) {
+    throw new Error("compiled Basecamp evidence shape is invalid");
+  }
   const candidates = [
     compiled.basecamp,
     reports.gate1.value.basecamp,
@@ -2280,15 +2613,178 @@ function latencySummary(value, description) {
   return result;
 }
 
+function nearestRankPercentile(values, percentile) {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(percentile * sorted.length) - 1];
+}
+
+function rawApplicationLatency(measurement, bytes) {
+  if (
+    !exactKeys(
+      measurement,
+      [
+        "payloadUtf8Bytes",
+        "requestUtf8Bytes",
+        "responseUtf8Bytes",
+        "latency",
+        "samples",
+      ],
+    )
+    || measurement.payloadUtf8Bytes !== bytes
+    || measurement.requestUtf8Bytes !== bytes
+    || measurement.responseUtf8Bytes !== bytes
+    || !Array.isArray(measurement.samples)
+    || measurement.samples.length !== applicationRoundTripSamplesPerSize
+  ) {
+    throw new Error(
+      `raw application ${bytes}-byte measurement is invalid`,
+    );
+  }
+  const samples = measurement.samples.map((sample, index) => {
+    if (
+      !exactKeys(
+        sample,
+        [
+          "ordinal",
+          "requestUtf8Bytes",
+          "responseUtf8Bytes",
+          "roundTripMs",
+        ],
+      )
+      || sample.ordinal !== index + 1
+      || sample.requestUtf8Bytes !== bytes
+      || sample.responseUtf8Bytes !== bytes
+      || !Number.isSafeInteger(sample.roundTripMs)
+      || sample.roundTripMs < 0
+    ) {
+      throw new Error(
+        `raw application ${bytes}-byte sample ${index + 1} is invalid`,
+      );
+    }
+    return {
+      ordinal: sample.ordinal,
+      requestUtf8Bytes: sample.requestUtf8Bytes,
+      responseUtf8Bytes: sample.responseUtf8Bytes,
+      roundTripMs: sample.roundTripMs,
+    };
+  });
+  const durations = samples.map(({ roundTripMs }) => roundTripMs);
+  const summary = {
+    sampleCount: durations.length,
+    p50Ms: nearestRankPercentile(durations, 0.50),
+    p95Ms: nearestRankPercentile(durations, 0.95),
+    maxMs: Math.max(...durations),
+  };
+  if (!exactJson(measurement.latency, summary)) {
+    throw new Error(
+      `raw application ${bytes}-byte latency differs from samples`,
+    );
+  }
+  return { samples, latency: summary };
+}
+
+function rawApplicationMetrics(gate4) {
+  const raw = gate4.metrics?.applicationRoundTrip;
+  if (
+    !exactKeys(
+      raw,
+      [
+        "status",
+        "clock",
+        "startBoundary",
+        "endBoundary",
+        "payloadSemantics",
+        "samplesPerSize",
+        "measurements",
+        "rejectedUnsupportedSize",
+      ],
+    )
+    || raw.status !== "passed"
+    || raw.clock !== applicationRoundTripClock
+    || raw.startBoundary !== applicationRoundTripStartBoundary
+    || raw.endBoundary !== applicationRoundTripEndBoundary
+    || raw.payloadSemantics !== applicationRoundTripPayloadSemantics
+    || raw.samplesPerSize !== applicationRoundTripSamplesPerSize
+    || !exactKeys(
+      raw.measurements,
+      applicationRoundTripPayloadSizes.map(String),
+    )
+    || raw.rejectedUnsupportedSize
+      !== applicationRoundTripRejectedReceipt
+  ) {
+    throw new Error("raw application round-trip evidence is invalid");
+  }
+  return Object.fromEntries(
+    applicationRoundTripPayloadSizes.map((bytes) => {
+      const measurement = raw.measurements[String(bytes)];
+      return [
+        String(bytes),
+        {
+          measurement,
+          ...rawApplicationLatency(measurement, bytes),
+        },
+      ];
+    }),
+  );
+}
+
 function renderMetrics(metrics, gate1, gate2) {
   const source = metrics?.render;
+  const markedCapture = source?.markedActionToFramebufferCapture;
+  const expectedScreenshots = {
+    local: gate2.renderProbe?.local?.screenshot,
+    remoteB: gate2.renderProbe?.remote?.b?.screenshot,
+    remoteC: gate2.renderProbe?.remote?.c?.screenshot,
+  };
+  const validScreenshotBinding = (value, expected, label) => (
+    exactKeys(value, ["file", "width", "height", "sha256"])
+    && exactJson(value, expected)
+    && value.file === `gate2-render-probe-${label}.png`
+    && Number.isSafeInteger(value.width)
+    && value.width > 0
+    && Number.isSafeInteger(value.height)
+    && value.height > 0
+    && isSha256(value.sha256)
+  );
   if (
-    !exactJson(source?.gate1QmlReadyMs, gate1.timings)
-    || source?.markedActionToFramebufferCapture?.localMs
+    !exactKeys(
+      source,
+      ["gate1QmlReadyMs", "markedActionToFramebufferCapture"],
+    )
+    || !exactKeys(
+      source.gate1QmlReadyMs,
+      ["initialRenderMs", "roomTransitionMs", "restartRenderMs"],
+    )
+    || !exactJson(source.gate1QmlReadyMs, gate1.timings)
+    || !exactKeys(
+      markedCapture,
+      ["localMs", "remoteMs", "screenshots"],
+    )
+    || !exactKeys(markedCapture.remoteMs, ["b", "c"])
+    || !exactKeys(
+      markedCapture.screenshots,
+      ["local", "remoteB", "remoteC"],
+    )
+    || !validScreenshotBinding(
+      markedCapture.screenshots.local,
+      expectedScreenshots.local,
+      "a",
+    )
+    || !validScreenshotBinding(
+      markedCapture.screenshots.remoteB,
+      expectedScreenshots.remoteB,
+      "b",
+    )
+    || !validScreenshotBinding(
+      markedCapture.screenshots.remoteC,
+      expectedScreenshots.remoteC,
+      "c",
+    )
+    || markedCapture.localMs
       !== gate2.renderProbe?.local?.actionToFramebufferCaptureMs
-    || source?.markedActionToFramebufferCapture?.remoteMs?.b
+    || markedCapture.remoteMs.b
       !== gate2.renderProbe?.remote?.b?.actionToFramebufferCaptureMs
-    || source?.markedActionToFramebufferCapture?.remoteMs?.c
+    || markedCapture.remoteMs.c
       !== gate2.renderProbe?.remote?.c?.actionToFramebufferCaptureMs
   ) {
     throw new Error("compiled render metrics differ from raw evidence");
@@ -2325,7 +2821,12 @@ function renderMetrics(metrics, gate1, gate2) {
 function deliveryMetrics(metrics, gate2) {
   const source = metrics?.delivery;
   if (
-    source?.orderedMessages?.total !== gate2.orderedSpeech?.count
+    !exactKeys(
+      source,
+      ["orderedMessages", "sendToReceive", "restartRecoveryMs"],
+    )
+    || !exactKeys(source.orderedMessages, ["total", "perSender"])
+    || source.orderedMessages.total !== gate2.orderedSpeech?.count
     || !exactJson(
       source?.orderedMessages?.perSender,
       gate2.orderedSpeech?.perSenderCount,
@@ -2368,10 +2869,17 @@ function deliveryMetrics(metrics, gate2) {
 }
 
 function lezMetrics(metrics, gate4) {
-  const source = metrics?.lez?.actions;
-  const measurementBoundaries = metrics?.lez?.measurementBoundaries;
+  const lez = metrics?.lez;
+  const source = lez?.actions;
+  const measurementBoundaries = lez?.measurementBoundaries;
   if (
-    !Array.isArray(source)
+    !exactKeys(
+      lez,
+      ["report", "jsonPointer", "measurementBoundaries", "actions"],
+    )
+    || lez.report !== "gate4/gate4-report.json"
+    || lez.jsonPointer !== "/metrics/lezActions"
+    || !Array.isArray(source)
     || !exactJson(source, gate4.metrics?.lezActions?.map(
       ({ actionId, timings, timingMeasurement }) => ({
         actionId,
@@ -2387,9 +2895,19 @@ function lezMetrics(metrics, gate4) {
     )
     || source.some(
       (entry, index) =>
-        entry?.actionId !== String(index)
-        || !isObject(entry.timings)
-        || !isObject(entry.timingMeasurement),
+        !exactKeys(
+          entry,
+          ["actionId", "timings", "timingMeasurement"],
+        )
+        || entry.actionId !== String(index)
+        || !exactKeys(
+          entry.timings,
+          ["submitMs", "observeMs", "finalityMs", "totalMs"],
+        )
+        || !exactKeys(
+          entry.timingMeasurement,
+          ["submitMs", "observeMs", "finalityMs", "totalMs"],
+        ),
     )
   ) {
     throw new Error("compiled LEZ metrics differ from raw evidence");
@@ -2457,6 +2975,12 @@ function lezMetrics(metrics, gate4) {
 }
 
 function modeTiming(value, expectedMode, description, retention = false) {
+  const expectedKeys = retention
+    ? ["mode", "endToEndMs", "retentionMs"]
+    : ["mode", "endToEndMs"];
+  if (!exactKeys(value, expectedKeys)) {
+    throw new Error(`${description} metric keys are invalid`);
+  }
   const output = {
     mode: value?.mode,
     endToEndMs:
@@ -2474,7 +2998,22 @@ function modeTiming(value, expectedMode, description, retention = false) {
 
 function storageMetrics(metrics, gate4) {
   const source = metrics?.storage;
-  if (!exactJson(source, gate4.metrics?.storage)) {
+  if (
+    !exactKeys(
+      source,
+      [
+        "gate3FirstNetwork",
+        "gate3Cached",
+        "gate4InitialCacheValidation",
+        "restart",
+      ],
+    )
+    || !exactKeys(source.gate3FirstNetwork, ["providerB", "coldC"])
+    || !exactKeys(source.gate3Cached, ["providerB", "coldC"])
+    || !exactKeys(source.gate4InitialCacheValidation, ["a", "b", "c"])
+    || !exactKeys(source.restart, ["b", "c"])
+    || !exactJson(source, gate4.metrics?.storage)
+  ) {
     throw new Error("compiled Storage metrics differ from raw evidence");
   }
   return {
@@ -2532,36 +3071,47 @@ function storageMetrics(metrics, gate4) {
 
 function applicationMetrics(metrics, gate4) {
   const source = metrics?.applicationRoundTrip;
-  const raw = gate4.metrics?.applicationRoundTrip;
+  const rawMeasurements = rawApplicationMetrics(gate4);
+  const expectedMeasurements = Object.fromEntries(
+    applicationRoundTripPayloadSizes.map((bytes) => {
+      const value = rawMeasurements[String(bytes)].measurement;
+      return [
+        String(bytes),
+        {
+          payloadUtf8Bytes: value.payloadUtf8Bytes,
+          requestUtf8Bytes: value.requestUtf8Bytes,
+          responseUtf8Bytes: value.responseUtf8Bytes,
+          latency: rawMeasurements[String(bytes)].latency,
+        },
+      ];
+    }),
+  );
   if (
-    source?.clock !== raw?.clock
-    || source?.payloadSemantics !== raw?.payloadSemantics
+    !exactKeys(source, ["clock", "payloadSemantics", "measurements"])
+    || source.clock !== applicationRoundTripClock
+    || source.payloadSemantics !== applicationRoundTripPayloadSemantics
     || !isObject(source?.measurements)
-    || !exactJson(
-      source.measurements,
-      Object.fromEntries(
-        Object.entries(raw?.measurements ?? {}).map(([key, value]) => [
-          key,
-          {
-            payloadUtf8Bytes: value.payloadUtf8Bytes,
-            requestUtf8Bytes: value.requestUtf8Bytes,
-            responseUtf8Bytes: value.responseUtf8Bytes,
-            latency: value.latency,
-          },
-        ]),
-      ),
-    )
-    || JSON.stringify(Object.keys(source.measurements).sort())
-      !== JSON.stringify(["0", "256", "4096"])
+    || !exactJson(source.measurements, expectedMeasurements)
   ) {
     throw new Error("application round-trip metrics differ from raw evidence");
   }
   return {
-    measurements: ["0", "256", "4096"].map((key) => {
+    clock: applicationRoundTripClock,
+    payloadSemantics: applicationRoundTripPayloadSemantics,
+    measurements: applicationRoundTripPayloadSizes.map((bytes) => {
+      const key = String(bytes);
       const value = source.measurements[key];
-      const bytes = Number(key);
       if (
-        value.payloadUtf8Bytes !== bytes
+        !exactKeys(
+          value,
+          [
+            "payloadUtf8Bytes",
+            "requestUtf8Bytes",
+            "responseUtf8Bytes",
+            "latency",
+          ],
+        )
+        || value.payloadUtf8Bytes !== bytes
         || value.requestUtf8Bytes !== bytes
         || value.responseUtf8Bytes !== bytes
       ) {
@@ -2569,8 +3119,8 @@ function applicationMetrics(metrics, gate4) {
       }
       return {
         bytes,
-        latencyMs:
-          latencySummary(value.latency, `application ${key}-byte`),
+        samples: rawMeasurements[key].samples,
+        latencyMs: rawMeasurements[key].latency,
       };
     }),
   };
@@ -2578,7 +3128,18 @@ function applicationMetrics(metrics, gate4) {
 
 function vmMetric(value, phase, description) {
   if (
-    value?.actionId !== "10"
+    !exactKeys(
+      value,
+      [
+        "actionId",
+        "phase",
+        "clock",
+        "durationNs",
+        "durationMs",
+        "receiptSha256",
+      ],
+    )
+    || value.actionId !== "10"
     || value.phase !== phase
     || value.clock !== "steady_clock"
     || typeof value.durationNs !== "string"
@@ -2600,9 +3161,32 @@ function vmMetric(value, phase, description) {
 
 function gate5VmMetrics(metrics, gate4) {
   const source = metrics?.gate5Vm;
-  if (!exactJson(source, gate4.metrics?.gate5Vm)) {
+  if (
+    !exactKeys(
+      source,
+      [
+        "previewPayload",
+        "previewRoundTripMs",
+        "executeTurn",
+        "useElapsedMs",
+        "endToEndMs",
+      ],
+    )
+    || !exactKeys(
+      source.previewPayload,
+      ["spot", "expectedActionId", "transitionSha256"],
+    )
+    || source.previewPayload.spot !== "door"
+    || source.previewPayload.expectedActionId !== "10"
+    || !isSha256(source.previewPayload.transitionSha256)
+    || !exactKeys(source.previewRoundTripMs, ["a", "b"])
+    || !exactKeys(source.executeTurn, ["provisional", "finalized"])
+    || !exactKeys(source.executeTurn.provisional, ["a", "b"])
+    || !exactJson(source, gate4.metrics?.gate5Vm)
+  ) {
     throw new Error("compiled Gate 5 VM metrics differ from raw evidence");
   }
+  nonnegativeNumber(source.useElapsedMs, "Gate 5 use");
   return {
     previewRoundTripMs: {
       a: nonnegativeNumber(
@@ -2641,7 +3225,20 @@ function gate5VmMetrics(metrics, gate4) {
 
 function recoveryMetrics(metrics, gate4) {
   const source = metrics?.recovery;
-  if (!exactJson(source, gate4.metrics?.recovery)) {
+  if (
+    !exactKeys(
+      source,
+      [
+        "lezProjectionRebuildMs",
+        "deliveryReconnectMs",
+        "fullRebuildMs",
+        "coldHistoryStorageVmRebuildMs",
+        "fullRebuildStartBoundary",
+        "fullRebuildEndBoundary",
+      ],
+    )
+    || !exactJson(source, gate4.metrics?.recovery)
+  ) {
     throw new Error("compiled recovery metrics differ from raw evidence");
   }
   return {
@@ -2680,7 +3277,8 @@ function qsgSummary(value, description) {
 function frameMetrics(metrics, gate4) {
   const source = metrics?.frameTiming;
   if (
-    !exactJson(source, gate4.metrics?.frameTiming)
+    !exactKeys(source, ["parserContract", "runs"])
+    || !exactJson(source, gate4.metrics?.frameTiming)
     || !isObject(source?.runs)
     || JSON.stringify(Object.keys(source.runs).sort())
       !== JSON.stringify([...qsgRunNames].sort())
@@ -2691,7 +3289,9 @@ function frameMetrics(metrics, gate4) {
     runs: qsgRunNames.map((name) => {
       const run = source.runs[name];
       if (
-        !Number.isSafeInteger(run?.sampleCount)
+        !exactKeys(run, ["parser", "sampleCount", "summaries"])
+        || !exactJson(run.parser, source.parserContract)
+        || !Number.isSafeInteger(run.sampleCount)
         || run.sampleCount <= 0
         || !exactKeys(run.summaries, qsgSummaryFields)
       ) {
@@ -2714,7 +3314,8 @@ function frameMetrics(metrics, gate4) {
 function memoryMetrics(metrics, gate4) {
   const source = metrics?.palaceVmPeakMemoryKiB;
   if (
-    source?.b !== gate4.metrics?.processMemory?.b?.palaceVmHost?.vmHwmKiB
+    !exactKeys(source, ["b", "c"])
+    || source.b !== gate4.metrics?.processMemory?.b?.palaceVmHost?.vmHwmKiB
     || source?.c !== gate4.metrics?.processMemory?.c?.palaceVmHost?.vmHwmKiB
   ) {
     throw new Error("compiled memory metrics differ from raw evidence");
@@ -2727,7 +3328,24 @@ function memoryMetrics(metrics, gate4) {
 
 function metricEvidence(compiled, reports) {
   const metrics = compiled.metrics;
-  if (!isObject(metrics)) throw new Error("compiled metrics are missing");
+  if (
+    !exactKeys(
+      metrics,
+      [
+        "render",
+        "delivery",
+        "lez",
+        "storage",
+        "applicationRoundTrip",
+        "gate5Vm",
+        "recovery",
+        "frameTiming",
+        "palaceVmPeakMemoryKiB",
+      ],
+    )
+  ) {
+    throw new Error("compiled metric set is not exact");
+  }
   return {
     render: renderMetrics(
       metrics,
@@ -2791,6 +3409,17 @@ async function publicScreenshots(gate4, gate4Dir) {
       sha256: entry.sha256,
     };
   }));
+}
+
+async function validateScreenshotDirectoryEntries(gate4Dir) {
+  const actual = (await readdir(gate4Dir, { withFileTypes: true }))
+    .filter((entry) => entry.name.endsWith(".png"))
+    .map((entry) => entry.name)
+    .sort();
+  const expected = screenshotSpecs.map(({ file }) => file).sort();
+  if (!exactJson(actual, expected)) {
+    throw new Error("Gate 4 artifact directory PNG set is not exact");
+  }
 }
 
 function keyWords(name) {
@@ -2922,7 +3551,13 @@ function assertPublicMetricShape(metrics) {
     || !exactKeys(metrics.storage.cached, ["providerB", "coldC"])
     || !exactKeys(metrics.storage.initialCache, ["a", "b", "c"])
     || !exactKeys(metrics.storage.restart, ["b", "c"])
-    || !exactKeys(metrics.applicationRoundTrip, ["measurements"])
+    || !exactKeys(
+      metrics.applicationRoundTrip,
+      ["clock", "payloadSemantics", "measurements"],
+    )
+    || metrics.applicationRoundTrip.clock !== applicationRoundTripClock
+    || metrics.applicationRoundTrip.payloadSemantics
+      !== applicationRoundTripPayloadSemantics
     || !exactKeys(
       metrics.gate5Vm,
       ["previewRoundTripMs", "executeTurnMs", "endToEndMs"],
@@ -2963,6 +3598,10 @@ function assertPublicMetricShape(metrics) {
     || Object.values(metrics.delivery.perSender).some(
       (value) => !Number.isSafeInteger(value) || value < 100,
     )
+    || Object.values(metrics.delivery.perSender).reduce(
+      (sum, value) => sum + value,
+      0,
+    ) !== metrics.delivery.orderedMessageCount
   ) {
     throw new Error("public Delivery count is invalid");
   }
@@ -3053,15 +3692,46 @@ function assertPublicMetricShape(metrics) {
   for (const [index, measurement] of
     metrics.applicationRoundTrip.measurements.entries()) {
     if (
-      !exactKeys(measurement, ["bytes", "latencyMs"])
-      || measurement.bytes !== [0, 256, 4096][index]
+      !exactKeys(measurement, ["bytes", "samples", "latencyMs"])
+      || measurement.bytes !== applicationRoundTripPayloadSizes[index]
+      || !Array.isArray(measurement.samples)
+      || measurement.samples.length
+        !== applicationRoundTripSamplesPerSize
     ) {
       throw new Error("public application measurement keys are invalid");
     }
-    latencySummary(
-      measurement.latencyMs,
-      "public application round-trip",
-    );
+    const durations = measurement.samples.map((sample, sampleIndex) => {
+      if (
+        !exactKeys(
+          sample,
+          [
+            "ordinal",
+            "requestUtf8Bytes",
+            "responseUtf8Bytes",
+            "roundTripMs",
+          ],
+        )
+        || sample.ordinal !== sampleIndex + 1
+        || sample.requestUtf8Bytes !== measurement.bytes
+        || sample.responseUtf8Bytes !== measurement.bytes
+        || !Number.isSafeInteger(sample.roundTripMs)
+        || sample.roundTripMs < 0
+      ) {
+        throw new Error("public application sample is invalid");
+      }
+      return sample.roundTripMs;
+    });
+    const expectedLatency = {
+      sampleCount: applicationRoundTripSamplesPerSize,
+      p50Ms: nearestRankPercentile(durations, 0.50),
+      p95Ms: nearestRankPercentile(durations, 0.95),
+      maxMs: Math.max(...durations),
+    };
+    if (!exactJson(measurement.latencyMs, expectedLatency)) {
+      throw new Error(
+        "public application aggregate differs from ordered samples",
+      );
+    }
   }
   if (
     !Array.isArray(metrics.frameTiming.runs)
@@ -3088,6 +3758,57 @@ function assertPublicMetricShape(metrics) {
   }
 }
 
+function validPublicProcessScopes(scopes) {
+  if (
+    !exactKeys(
+      scopes,
+      processScopeSpecs.map(({ gate }) => gate),
+    )
+  ) {
+    return false;
+  }
+  let commonSlice;
+  for (const { gate, file } of processScopeSpecs) {
+    const scope = scopes[gate];
+    const sliceMatch = scope?.slice?.match(
+      /^logos-palace-run-([A-Za-z0-9]{8})\.slice$/,
+    );
+    if (
+      !exactKeys(
+        scope,
+        [
+          "evidence",
+          "evidenceSha256",
+          "unit",
+          "slice",
+          "cleanup",
+        ],
+      )
+      || !sliceMatch
+      || scope.evidence !== file
+      || !isSha256(scope.evidenceSha256)
+      || !new RegExp(
+        `^logos-palace-run-${sliceMatch[1]}-${gate}-`
+          + "[A-Za-z0-9]{8}\\.scope$",
+      ).test(scope.unit)
+      || !exactJson(scope.cleanup, {
+        status: "passed",
+        initiallyPopulated: false,
+        residueKilled: false,
+        finalPopulated: false,
+        sliceInitiallyPopulated: false,
+        sliceResidueKilled: false,
+        sliceFinalPopulated: false,
+      })
+    ) {
+      return false;
+    }
+    commonSlice ??= scope.slice;
+    if (scope.slice !== commonSlice) return false;
+  }
+  return true;
+}
+
 export function validatePublicEvidence(evidence) {
   if (
     !exactKeys(
@@ -3110,6 +3831,7 @@ export function validatePublicEvidence(evidence) {
         "network",
         "rawReports",
         "gates",
+        "processScopes",
         "processProof",
         "recoveryEvidence",
         "metrics",
@@ -3218,6 +3940,8 @@ export function validatePublicEvidence(evidence) {
         || !isHex(pin.revision, 40)
         || !isNarHash(pin.narHash),
     )
+    || evidence.dependencies.lezCore.revision
+      !== evidence.network?.lezModuleRevision
     || !exactKeys(evidence.basecamp, ["revision", "binarySha256"])
     || !isHex(evidence.basecamp.revision, 40)
     || !isSha256(evidence.basecamp.binarySha256)
@@ -3769,6 +4493,7 @@ export function validatePublicEvidence(evidence) {
         || gate.gate !== `gate${index}`
         || gate.status !== "passed",
     )
+    || !validPublicProcessScopes(evidence.processScopes)
     || !Array.isArray(evidence.screenshots)
     || evidence.screenshots.length !== screenshotSpecs.length
     || evidence.screenshots.some((entry, index) => {
@@ -3865,15 +4590,25 @@ export function validatePublicEvidence(evidence) {
 
 async function validateScreenshotsFirst(gate4Report, gate4Dir) {
   try {
-    await execFileAsync(
+    await validateScreenshotDirectoryEntries(gate4Dir);
+    const { stdout } = await execFileAsync(
       process.execPath,
       [screenshotValidator, gate4Report, gate4Dir],
       {
+        encoding: "utf8",
         timeout: 120_000,
         maxBuffer: 64 * 1024,
         windowsHide: true,
       },
     );
+    const match = stdout.match(
+      /^GATE4_ARTIFACTS=PASS\nGATE4_REPORT_SHA256=([0-9a-f]{64})\n$/,
+    );
+    if (!match) {
+      throw new Error("strict screenshot validator output is invalid");
+    }
+    await validateScreenshotDirectoryEntries(gate4Dir);
+    return match[1];
   } catch {
     throw new Error("strict screenshot evidence validation failed");
   }
@@ -3967,7 +4702,8 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
   const gate4Report = join(gate4Dir, "gate4-report.json");
 
   // Screenshot byte validation intentionally precedes JSON projection.
-  await validateScreenshotsFirst(gate4Report, gate4Dir);
+  const screenshotValidatedGate4Sha256 =
+    await validateScreenshotsFirst(gate4Report, gate4Dir);
 
   const reportEntries = await Promise.all(
     reportSpecs.map(async (spec) => [
@@ -3976,6 +4712,20 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     ]),
   );
   const reports = Object.fromEntries(reportEntries);
+  const processScopeEntries = await Promise.all(
+    processScopeSpecs.map(async (spec) => [
+      spec.gate,
+      await readReport(
+        join(runDir, spec.file),
+        `${spec.gate} process scope`,
+        {
+          maximumBytes: 64 * 1024,
+          ownerOnly: true,
+        },
+      ),
+    ]),
+  );
+  const processScopeEvidence = Object.fromEntries(processScopeEntries);
   const compiled = await readReport(
     join(runDir, "compiled-mvp-report.json"),
     "compiled MVP report",
@@ -3988,13 +4738,27 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     join(runDir, "runtime-output-manifest.json"),
     "runtime output manifest",
   );
-
+  if (
+    reports.gate4To6.sha256 !== screenshotValidatedGate4Sha256
+  ) {
+    throw new Error(
+      "Gate 4 report changed after strict screenshot validation",
+    );
+  }
   validateReportStatuses(reports);
+  const processScopes = validateProcessScopeEvidence(
+    runDir,
+    processScopeEvidence,
+  );
   const runtime = validateRuntimeManifest(
     compiled.value,
     runtimeManifest,
   );
-  validateCompiledBindings(compiled.value, reports);
+  validateCompiledBindings(
+    compiled.value,
+    reports,
+    processScopeEvidence,
+  );
   const lgxPackages = publicLgxPackages(compiled.value, reports);
   const testOnlyVariants = publicTestOnlyVariants(
     reports.gate2.value,
@@ -4033,9 +4797,17 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     reports.gate4To6.value,
     gate4Dir,
   );
+  const activeClaim = await completedActiveClaim({
+    runDir,
+    compiled,
+    completion,
+    runtimeManifest,
+    processScopeEvidence,
+  });
   const terminalCompletion = publicTerminalCompletion(
     completion,
     compiled,
+    activeClaim,
   );
   const evidence = {
     schema: "logos.palace.public-evidence",
@@ -4077,6 +4849,7 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
       gate: `gate${index}`,
       status: "passed",
     })),
+    processScopes,
     processProof,
     recoveryEvidence,
     metrics,

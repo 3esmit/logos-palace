@@ -8,16 +8,10 @@ function failureMessage(reason) {
 
 export async function stopKnownWorkers(
   workers,
-  processExists,
-  processGroupExists,
-  terminateProcessGroup,
   finalizeOwnedProcesses,
 ) {
   if (
     !Array.isArray(workers)
-    || typeof processExists !== "function"
-    || typeof processGroupExists !== "function"
-    || typeof terminateProcessGroup !== "function"
     || typeof finalizeOwnedProcesses !== "function"
   ) {
     throw new TypeError("terminal cleanup inputs are invalid");
@@ -39,43 +33,6 @@ export async function stopKnownWorkers(
       );
     }
 
-    const workerPid = worker.child?.pid;
-    for (const processGroupId of [workerPid, worker.basecampPid]) {
-      if (
-        knownPid(processGroupId)
-        && processGroupExists(processGroupId)
-      ) {
-        try {
-          await terminateProcessGroup(processGroupId);
-        } catch (error) {
-          failures.push(
-            `${label} process group ${processGroupId} forced cleanup rejected: `
-            + failureMessage(error),
-          );
-        }
-      }
-    }
-    if (knownPid(workerPid) && processExists(workerPid)) {
-      failures.push(`${label} worker process ${workerPid} survived cleanup`);
-    }
-    if (knownPid(workerPid) && processGroupExists(workerPid)) {
-      failures.push(
-        `${label} worker process group ${workerPid} survived cleanup`,
-      );
-    }
-    if (knownPid(worker.basecampPid) && processExists(worker.basecampPid)) {
-      failures.push(
-        `${label} Basecamp process ${worker.basecampPid} survived cleanup`,
-      );
-    }
-    if (
-      knownPid(worker.basecampPid)
-      && processGroupExists(worker.basecampPid)
-    ) {
-      failures.push(
-        `${label} Basecamp process group ${worker.basecampPid} survived cleanup`,
-      );
-    }
   }
   try {
     await finalizeOwnedProcesses();
