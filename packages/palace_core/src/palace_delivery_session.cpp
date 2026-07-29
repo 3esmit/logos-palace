@@ -458,6 +458,55 @@ void PalaceDeliverySession::replaceAllowedProps(
     m_allowedProps = std::move(allowedProps);
 }
 
+bool PalaceDeliverySession::reconcileAuthority()
+{
+    if (!m_configured)
+        return false;
+
+    bool projectionChanged = false;
+    for (auto participant = m_participants.begin();
+         participant != m_participants.end();) {
+        if (m_authority.isUserBanned(participant->first, m_config.roomId)) {
+            participant = m_participants.erase(participant);
+            projectionChanged = true;
+            continue;
+        }
+
+        auto prop = participant->second.propIds.begin();
+        while (prop != participant->second.propIds.end()) {
+            const auto allowed = m_allowedProps.find(*prop);
+            if (allowed == m_allowedProps.end()
+                || m_authority.isAssetBanned(allowed->second, m_config.roomId)) {
+                prop = participant->second.propIds.erase(prop);
+                projectionChanged = true;
+            } else {
+                ++prop;
+            }
+        }
+        ++participant;
+    }
+
+    for (auto sender = m_pendingIngress.begin();
+         sender != m_pendingIngress.end();) {
+        auto pending = sender->second.begin();
+        while (pending != sender->second.end()) {
+            if (m_authority.isUserBanned(
+                    pending->second.envelope.senderUserId, m_config.roomId)) {
+                --m_pendingIngressCount;
+                m_pendingIngressBytes -= pending->second.encodedBytes;
+                pending = sender->second.erase(pending);
+            } else {
+                ++pending;
+            }
+        }
+        if (sender->second.empty())
+            sender = m_pendingIngress.erase(sender);
+        else
+            ++sender;
+    }
+    return projectionChanged;
+}
+
 DeliverySessionTransition PalaceDeliverySession::publish(
     const std::string& requestId,
     DeliveryKind kind,

@@ -135,8 +135,10 @@ history.
 ## Storage path
 
 The MVP catalog is a bounded typed graph rooted at a Palace manifest. It
-contains two room backgrounds, a transparent prop with placement metadata, a
-bounded room script, and the associated manifests.
+contains the assigned room backgrounds, a bounded room script, and the
+associated manifests. An optional prop image and placement metadata appear
+only after an administrator supplies and assigns that prop through the
+authoring flow.
 
 Core generates operation IDs and destinations. Downloaded bytes must match
 the expected CID, size, media type, digest, dimensions, and decoder profile
@@ -148,14 +150,32 @@ root after a bounded full decode. Basecamp accepts only the lowercase
 SHA-256-addressed `image://basecamp-verified/...` handle from a declared direct
 Core dependency. It proves canonical producer-root containment and rechecks
 the encoded digest, PNG signature/structure, decode, 4096-pixel dimension
-limits, and 16 MiPixels (16,777,216 pixels). No source path, CID, URL, or
-QML-side decoder crosses the UI boundary. This proves byte identity, safe
-decode, and producer provenance; it does not assert moderation approval or
-future availability.
+limits, and 16 MiPixels (16,777,216 pixels). Image rendering receives only the
+verified handle. The authoring surface receives bounded display, review,
+publication, and room-assignment metadata, but has no Storage-client or decoder
+authority. This proves byte identity, safe decode, and Core-producer
+provenance; it does not assert moderation approval or future availability.
 
 The pinned Storage API has no separate pin primitive. Retention evidence is
 therefore expressed through verified local availability and successful peer
 fetches, not an undocumented pin guarantee.
+
+Room images and any explicitly authorized prop images are
+administrator-authored inputs, not compiled resources. Basecamp owns the
+user-mediated file selection and exposes only an opaque, per-view capability;
+neither QML nor Core receives a host path. The UI streams the immutable
+selection to Core through a bounded, ordered chunk protocol. Core derives the
+digest and dimensions, stages only a fully verified PNG, and exposes an opaque
+content handle. Upload is blocked until human approval; a returned Storage CID
+is accepted only when its SHA-256 multihash equals the verified handle.
+Persisted assignments supply graph leaves only for administrator-authorized
+assets. Restart loading rejects checksum, record, review, publication-CID,
+permission, and symlink mismatches.
+
+When a verified graph contains an administrator-authored prop, the avatar
+renderer receives its identifier, opaque handle, dimensions, anchor, and layer
+only from that graph. QML does not contain a prop image or draw a substitute
+asset; absent or unrecovered props are not rendered.
 
 ## Local state and restart
 
@@ -293,6 +313,7 @@ Release completion still requires one recorded clean-source run covering all
 MVP behavior, hostile inputs, restart/rebuild, creator removal, and
 latency/resource measurements. The full runner accepts a runtime-gate pass
 only after exact claim-bound process cleanup. It requires ten exact decoded
-PNG screenshots and publishes sanitized evidence only after durable run
-completion. Interrupted-attempt history remains local and is not projected.
-No individual gate should be presented as the final result.
+Gate 4–6 PNG screenshots plus one separately bound Gate 3 Moderation screenshot
+and publishes sanitized evidence only after durable run completion.
+Interrupted-attempt history remains local and is not projected. No individual
+gate should be presented as the final result.

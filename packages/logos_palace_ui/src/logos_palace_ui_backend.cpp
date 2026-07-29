@@ -60,6 +60,18 @@ bool isLowerHex64(const QString& value)
             });
 }
 
+bool isAssetIdentifier(const QString& value)
+{
+    return !value.isEmpty() && value.size() <= 64
+        && std::all_of(
+            value.begin(), value.end(), [](const QChar character) {
+                const ushort value = character.unicode();
+                return (value >= 'a' && value <= 'z')
+                    || (value >= '0' && value <= '9')
+                    || value == '-' || value == '_';
+            });
+}
+
 } // namespace
 
 QString LogosPalaceUiBackend::applicationRoundTrip(
@@ -380,6 +392,134 @@ QString LogosPalaceUiBackend::publicationStatus(QString handle)
         modules().palace_core.publicationStatus(handle));
 }
 
+QString LogosPalaceUiBackend::beginAssetStage(QString label)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.beginAssetStage(label);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::appendAssetStageChunk(
+    QString sessionId,
+    qint64 sequence,
+    QString base64Chunk)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (sequence < 0) {
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-chunk-sequence"));
+    }
+    const QString result =
+        modules().palace_core.appendAssetStageChunk(
+            sessionId,
+            QVariant::fromValue(
+                static_cast<qulonglong>(sequence)),
+            base64Chunk);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::commitAssetStage(
+    QString sessionId)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.commitAssetStage(sessionId);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::cancelAssetStage(
+    QString sessionId)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.cancelAssetStage(sessionId);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::reviewAsset(
+    QString handle,
+    QString decision)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.reviewAsset(
+            handle, decision);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::publishAsset(
+    QString handle)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.publishAsset(handle);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::assignRoomBackground(
+    QString roomId,
+    QString handle)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result =
+        modules().palace_core.assignRoomBackground(
+            roomId, handle);
+    refreshStorageState();
+    refreshRoomProjection();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::assignPropAsset(
+    QString propId,
+    QString handle,
+    qint64 anchorX,
+    qint64 anchorY,
+    QString layer)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (anchorX < 0 || anchorY < 0
+        || anchorX > std::numeric_limits<std::uint32_t>::max()
+        || anchorY > std::numeric_limits<std::uint32_t>::max()) {
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=prop-anchor-invalid"));
+    }
+    const QString result =
+        modules().palace_core.assignPropAsset(
+            propId,
+            handle,
+            QVariant::fromValue(
+                static_cast<qulonglong>(anchorX)),
+            QVariant::fromValue(
+                static_cast<qulonglong>(anchorY)),
+            layer);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::refreshAssetAuthoring()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    refreshStorageState();
+    return rememberStorageReceipt(
+        QStringLiteral("ok;backgrounds=refreshed"));
+}
+
 QString LogosPalaceUiBackend::publishMvpStorageBundle()
 {
     if (!isContextReady())
@@ -536,7 +676,7 @@ QString LogosPalaceUiBackend::banProp(QString propId)
     if (!isContextReady())
         return rememberModerationReceipt(
             QStringLiteral("prop"), propId, unavailableReceipt());
-    if (propId != QStringLiteral("hat"))
+    if (!isAssetIdentifier(propId))
         return rememberModerationReceipt(
             QStringLiteral("prop"),
             propId,
@@ -729,6 +869,14 @@ void LogosPalaceUiBackend::refreshStorageState()
         return;
     setStorageStatus(
         modules().palace_core.storageSessionStatus());
+    setAssetAuthoringState(
+        modules().palace_core.assetAuthoringCatalog());
+    setActivePropAsset(
+        modules().palace_core.activePropAsset());
+    // Storage verification completes asynchronously. Refresh the visible
+    // projection after each storage poll so a restored visitor replaces the
+    // placeholder only after the exact room graph resolves.
+    refreshRoomProjection();
 }
 
 void LogosPalaceUiBackend::refreshLezState()

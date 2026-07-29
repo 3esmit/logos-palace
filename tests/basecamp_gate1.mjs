@@ -61,11 +61,6 @@ function childStdioWithoutReleaseLock(baseStdio) {
   return baseStdio;
 }
 
-const expectedBackgroundHandles = {
-  Atrium: "3bd13dc41f3e27a7eabf45c73188498b95e3e5e475e6fcb967308477afd522be",
-  Lounge: "d2068f9cc4848b29882e532580c2b455ef5d243e7b38f16d590937fbef720486",
-};
-
 async function sha256File(path) {
   const digest = createHash("sha256");
   await new Promise((resolveHash, rejectHash) => {
@@ -293,7 +288,7 @@ async function enterRoom(inspector, rootObjectId, roomId) {
   }
 }
 
-async function verifiedBackground(app, roomTitle) {
+async function preAuthoringBackground(app) {
   let observed;
   await app.waitFor(
     async () => {
@@ -303,28 +298,19 @@ async function verifiedBackground(app, roomTitle) {
         "palaceRoomBackgroundPlaceholder",
       );
       const source = String(image.source ?? "");
-      const match = source.match(
-        /^image:\/\/basecamp-verified\/([0-9a-f]{64})$/,
-      );
-      const ready = image.status === 1 || String(image.status) === "Ready";
-      const placeholderHidden =
-        placeholder.visible === false || String(placeholder.visible) === "false";
-      if (!match || !ready || !placeholderHidden) {
+      const placeholderVisible =
+        placeholder.visible === true || String(placeholder.visible) === "true";
+      if (source !== "" || !placeholderVisible) {
         throw new Error(
-          `background not ready: source=${source} status=${image.status} placeholder=${placeholder.visible}`,
+          `pre-authoring placeholder not visible: source=${source} placeholder=${placeholder.visible}`,
         );
       }
-      if (match[1] !== expectedBackgroundHandles[roomTitle]) {
-        throw new Error(
-          `${roomTitle} background digest mismatch: ${match[1]}`,
-        );
-      }
-      observed = { handle: match[1], source };
+      observed = { state: "placeholder", source };
     },
     {
       timeout: 60_000,
       interval: 500,
-      description: "verified room background",
+      description: "pre-authoring room background placeholder",
     },
   );
   return observed;
@@ -453,7 +439,7 @@ try {
   firstInspector = await connectInspector(firstProcess);
   const firstApp = new App(firstInspector);
   await waitForPalace(firstApp, "Atrium", "Door to Lounge");
-  atriumBackground = await verifiedBackground(firstApp, "Atrium");
+  atriumBackground = await preAuthoringBackground(firstApp);
   timings.initialRenderMs = Math.round(performance.now() - initialStart);
   screenshots.push(await saveScreenshot(firstApp, "atrium.png"));
 
@@ -473,10 +459,7 @@ try {
       description: "local projection transition to Lounge",
     },
   );
-  loungeBackground = await verifiedBackground(firstApp, "Lounge");
-  if (loungeBackground.handle === atriumBackground.handle) {
-    throw new Error("two rooms resolved to the same background handle");
-  }
+  loungeBackground = await preAuthoringBackground(firstApp);
   timings.roomTransitionMs = Math.round(
     performance.now() - transitionStart,
   );
@@ -493,10 +476,13 @@ try {
   secondInspector = await connectInspector(secondProcess);
   const secondApp = new App(secondInspector);
   await waitForPalace(secondApp, "Lounge", "Door to Atrium");
-  restoredBackground = await verifiedBackground(secondApp, "Lounge");
-  if (restoredBackground.handle !== loungeBackground.handle) {
+  restoredBackground = await preAuthoringBackground(secondApp);
+  if (
+    JSON.stringify(restoredBackground)
+    !== JSON.stringify(loungeBackground)
+  ) {
     throw new Error(
-      `restored Lounge handle changed: ${loungeBackground.handle} -> ${restoredBackground.handle}`,
+      "restored Lounge placeholder changed",
     );
   }
   timings.restartRenderMs = Math.round(performance.now() - restartStart);

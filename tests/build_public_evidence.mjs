@@ -19,6 +19,7 @@ import {
   resolve,
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inflateSync } from "node:zlib";
 import { palaceRelease } from "./basecamp_release_preflight.mjs";
 import {
   validateProcessExecutableIdentity,
@@ -35,6 +36,14 @@ import {
   lezMeasurementBoundaries,
   recoverPersistedTimingEvidence,
 } from "./basecamp_lez_timing.mjs";
+import {
+  palaceFrameTimingContract,
+  summarizePalaceFrameIntervals,
+  validatePalaceFrameTimingMeasurement,
+} from "./basecamp_frame_timing.mjs";
+import {
+  canonicalStorageCidSha256 as cidSha256,
+} from "./basecamp_storage_cid.mjs";
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(import.meta.url);
@@ -120,7 +129,7 @@ const screenshotSpecs = Object.freeze([
   {
     file: "gate4-a-three-user-atrium-converged.png",
     stage: "gate4-delivery-convergence",
-    state: "three-user-atrium-with-approved-prop",
+    state: "three-user-atrium-converged",
     label: "a",
   },
   {
@@ -132,7 +141,7 @@ const screenshotSpecs = Object.freeze([
   {
     file: "gate4-b-atrium-after-moderation.png",
     stage: "gate4-moderation",
-    state: "atrium-after-human-user-and-prop-bans",
+    state: "atrium-after-human-moderation",
     label: "b",
   },
   {
@@ -179,6 +188,39 @@ const screenshotSpecs = Object.freeze([
   },
 ]);
 
+function gate3ObjectOrder(propId) {
+  if (
+    propId !== null
+    && !/^[a-z][a-z0-9_-]{0,63}$/.test(propId)
+  ) {
+    throw new Error("active prop ID cannot form graph object IDs");
+  }
+  return [
+    "background-atrium",
+    "background-lounge",
+    ...(propId === null
+      ? []
+      : [`prop-${propId}-image`, `prop-${propId}-metadata`]),
+    "room-atrium-metadata",
+    "room-lounge-metadata",
+    "script-door",
+    ...(propId === null ? [] : [`prop-${propId}`]),
+    "room-atrium",
+    "room-lounge",
+    "palace-1",
+  ];
+}
+
+const assetAuthoringBoundary =
+  "operator-selected bounded PNG bytes -> verified handle -> approval"
+  + " -> digest-bound Storage CID -> manifest assignment";
+const assetAuthoringScreenshotFile =
+  "gate3-admin-assets-published.png";
+const assetAuthoringScreenshotStage =
+  "gate3-admin-asset-authoring";
+const assetAuthoringScreenshotState =
+  "admin-selected-assets-approved-published-assigned";
+
 const dependencySpecs = Object.freeze([
   ["basecamp", "basecamp"],
   ["delivery_module", "deliveryModule"],
@@ -186,16 +228,9 @@ const dependencySpecs = Object.freeze([
   ["lez_core", "lezCore"],
 ]);
 
-const qsgSummaryFields = Object.freeze([
-  "totalMs",
-  "polishMs",
-  "syncMs",
-  "renderMs",
-  "swapMs",
-  "frameDeltaMs",
-]);
+const frameTimingSummaryFields = Object.freeze(["frameIntervalUs"]);
 
-const qsgRunNames = Object.freeze([
+const frameTimingRunNames = Object.freeze([
   "aInitial",
   "bInitial",
   "cInitial",
@@ -456,6 +491,152 @@ function exactJson(left, right) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+const crcTable = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) !== 0
+      ? (value >>> 1) ^ 0xedb88320
+      : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function crc32(bytes) {
+  let value = 0xffffffff;
+  for (const byte of bytes) {
+    value = crcTable[(value ^ byte) & 0xff] ^ (value >>> 8);
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function validatePngScreenshot(bytes, file) {
+  if (
+    bytes.length < 45
+    || !bytes.subarray(0, 8).equals(
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    )
+  ) {
+    throw new Error(`${file} has invalid PNG signature`);
+  }
+  let offset = 8;
+  let chunkCount = 0;
+  let width;
+  let height;
+  const idatChunks = [];
+  let sawIend = false;
+  let sawPhys = false;
+  let idatEnded = false;
+  while (offset < bytes.length && chunkCount < 10_000) {
+    if (offset + 12 > bytes.length) {
+      throw new Error(`${file} has truncated PNG chunk header`);
+    }
+    const length = bytes.readUInt32BE(offset);
+    const chunkEnd = offset + 12 + length;
+    if (length > 64 * 1024 * 1024 || chunkEnd > bytes.length) {
+      throw new Error(`${file} has truncated or oversized PNG chunk`);
+    }
+    const typeBytes = bytes.subarray(offset + 4, offset + 8);
+    const type = typeBytes.toString("ascii");
+    if (!/^[A-Za-z]{4}$/.test(type)) {
+      throw new Error(`${file} has invalid PNG chunk type`);
+    }
+    const data = bytes.subarray(offset + 8, offset + 8 + length);
+    const expectedCrc = bytes.readUInt32BE(offset + 8 + length);
+    if (crc32(Buffer.concat([typeBytes, data])) !== expectedCrc) {
+      throw new Error(`${file} has invalid ${type} CRC`);
+    }
+    if (chunkCount === 0) {
+      if (type !== "IHDR" || length !== 13) {
+        throw new Error(`${file} does not begin with exact IHDR`);
+      }
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      if (
+        data[8] !== 8
+        || data[9] !== 2
+        || data[10] !== 0
+        || data[11] !== 0
+        || data[12] !== 0
+      ) {
+        throw new Error(
+          `${file} does not use exact 8-bit RGB PNG encoding`,
+        );
+      }
+    } else if (type === "IHDR") {
+      throw new Error(`${file} has duplicate IHDR`);
+    }
+    if (!["IHDR", "pHYs", "IDAT", "IEND"].includes(type)) {
+      throw new Error(`${file} has disallowed ${type} screenshot metadata`);
+    }
+    if (type === "pHYs") {
+      if (
+        sawPhys
+        || idatChunks.length > 0
+        || length !== 9
+        || data.readUInt32BE(0) !== 3780
+        || data.readUInt32BE(4) !== 3780
+        || data[8] !== 1
+      ) {
+        throw new Error(`${file} has invalid pHYs screenshot metadata`);
+      }
+      sawPhys = true;
+    }
+    if (type === "IDAT") {
+      if (idatEnded) {
+        throw new Error(`${file} has non-consecutive IDAT chunks`);
+      }
+      idatChunks.push(data);
+    } else if (idatChunks.length > 0) {
+      idatEnded = true;
+    }
+    if (type === "IEND") {
+      if (length !== 0 || chunkEnd !== bytes.length) {
+        throw new Error(`${file} has invalid IEND/trailing bytes`);
+      }
+      sawIend = true;
+    }
+    offset = chunkEnd;
+    chunkCount += 1;
+    if (sawIend) break;
+  }
+  if (
+    idatChunks.length === 0
+    || !sawIend
+    || offset !== bytes.length
+    || width !== 1600
+    || height !== 900
+  ) {
+    throw new Error(`${file} PNG structure or 1600x900 dimensions differ`);
+  }
+  const rowBytes = width * 3 + 1;
+  const expectedInflatedBytes = rowBytes * height;
+  const compressedPixels = Buffer.concat(idatChunks);
+  let pixels;
+  try {
+    const decoded = inflateSync(compressedPixels, {
+      info: true,
+      maxOutputLength: expectedInflatedBytes,
+    });
+    if (
+      !Buffer.isBuffer(decoded?.buffer)
+      || decoded?.engine?.bytesWritten !== compressedPixels.length
+    ) {
+      throw new Error("IDAT zlib stream did not consume all input");
+    }
+    pixels = decoded.buffer;
+  } catch {
+    throw new Error(`${file} has invalid or oversized IDAT zlib data`);
+  }
+  if (pixels.length !== expectedInflatedBytes) {
+    throw new Error(`${file} has invalid decoded RGB byte length`);
+  }
+  for (let row = 0; row < height; row += 1) {
+    if (pixels[row * rowBytes] > 4) {
+      throw new Error(`${file} has invalid PNG row filter`);
+    }
+  }
 }
 
 async function canonicalDirectory(path, description) {
@@ -1895,6 +2076,10 @@ function processIdentityInventory(
 }
 
 function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
+  const catalogObjectCount = Object.keys(
+    gate4.catalog?.byId ?? {},
+  ).length;
+  const finalActionId = gate4.plan?.doorActionId;
   const coreOutput = runtime.outputs.find(
     ({ name }) => name === "palace-core-contracts",
   );
@@ -1977,7 +2162,10 @@ function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
     })))
   );
   if (
-    !coreOutput
+    !Number.isSafeInteger(catalogObjectCount)
+    || catalogObjectCount < 8
+    || !["9", "10"].includes(finalActionId)
+    || !coreOutput
     || !vmOutput
     || !exactKeys(
       compiled.contractProofs,
@@ -2022,7 +2210,7 @@ function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
     || crash.exitCode !== null
     || crash.graceful !== false
     || failure?.delayedLezUpdate?.status !== "passed"
-    || failure.delayedLezUpdate.actionId !== "10"
+    || failure.delayedLezUpdate.actionId !== finalActionId
     || failure.delayedLezUpdate.observationPaused !== true
     || !Number.isSafeInteger(failure.delayedLezUpdate.pauseMs)
     || failure.delayedLezUpdate.pauseMs < 1000
@@ -2112,7 +2300,7 @@ function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
       ["phase", "actionId", "navigation", "stateRoot"],
     )
     || coldRebuild.vmProjection.phase !== "promoted"
-    || coldRebuild.vmProjection.actionId !== "10"
+    || coldRebuild.vmProjection.actionId !== finalActionId
     || coldRebuild.vmProjection.navigation !== "1"
     || !isHex(coldRebuild.vmProjection.stateRoot, 64)
     || coldRebuild.vmProjection.stateRoot
@@ -2123,11 +2311,14 @@ function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
     || storageRestart?.clients?.b?.recovered?.mode !== "network"
     || storageRestart.clients.b.recovered.nativeSource !== "network"
     || storageRestart.clients.b.recovered.nativeAvailable !== 0
-    || storageRestart.clients.b.recovered.nativeTotal !== 11
+    || storageRestart.clients.b.recovered.nativeTotal
+      !== catalogObjectCount
     || storageRestart?.clients?.c?.recovered?.mode !== "cache"
     || storageRestart.clients.c.recovered.nativeSource !== "cache"
-    || storageRestart.clients.c.recovered.nativeAvailable !== 11
-    || storageRestart.clients.c.recovered.nativeTotal !== 11
+    || storageRestart.clients.c.recovered.nativeAvailable
+      !== catalogObjectCount
+    || storageRestart.clients.c.recovered.nativeTotal
+      !== catalogObjectCount
     || storageSource?.sourceLabel !== "c"
     || storageSource.sourceAccountId !== gate4.identities?.c?.accountId
     || storageSource.exactCatalogChecksum !== gate4.catalog?.checksum
@@ -2135,10 +2326,10 @@ function publicRecoveryEvidence(compiled, runtime, gate2, gate4) {
     || !validFingerprint(storageSource.retainedDataRootBeforeRestart)
     || storageSource.retainedCatalogVerifiedBeforeColdFetch !== true
     || storageSource.retainedCatalogVerifiedAfterColdFetch !== true
-    || storageSource.sourceNativeAvailable !== 11
-    || storageSource.sourceNativeTotal !== 11
+    || storageSource.sourceNativeAvailable !== catalogObjectCount
+    || storageSource.sourceNativeTotal !== catalogObjectCount
     || storageSource.coldClientNativeAvailable !== 0
-    || storageSource.coldClientNativeTotal !== 11
+    || storageSource.coldClientNativeTotal !== catalogObjectCount
     || storageSource.creatorOffline !== true
     || storageSource.coldClientDataRootRemoved !== true
     || storageSource.coldClientStorageNotStarted !== true
@@ -2872,6 +3063,7 @@ function lezMetrics(metrics, gate4) {
   const lez = metrics?.lez;
   const source = lez?.actions;
   const measurementBoundaries = lez?.measurementBoundaries;
+  const expectedActionCount = gate4.plan?.actions?.length;
   if (
     !exactKeys(
       lez,
@@ -2887,7 +3079,9 @@ function lezMetrics(metrics, gate4) {
         timingMeasurement,
       }),
     ))
-    || source.length !== 11
+    || !Number.isSafeInteger(expectedActionCount)
+    || ![10, 11].includes(expectedActionCount)
+    || source.length !== expectedActionCount
     || !exactJson(measurementBoundaries, lezMeasurementBoundaries)
     || !exactJson(
       measurementBoundaries,
@@ -3126,7 +3320,7 @@ function applicationMetrics(metrics, gate4) {
   };
 }
 
-function vmMetric(value, phase, description) {
+function vmMetric(value, phase, description, expectedActionId) {
   if (
     !exactKeys(
       value,
@@ -3139,7 +3333,7 @@ function vmMetric(value, phase, description) {
         "receiptSha256",
       ],
     )
-    || value.actionId !== "10"
+    || value.actionId !== expectedActionId
     || value.phase !== phase
     || value.clock !== "steady_clock"
     || typeof value.durationNs !== "string"
@@ -3161,6 +3355,7 @@ function vmMetric(value, phase, description) {
 
 function gate5VmMetrics(metrics, gate4) {
   const source = metrics?.gate5Vm;
+  const expectedActionId = gate4.plan?.doorActionId;
   if (
     !exactKeys(
       source,
@@ -3177,7 +3372,7 @@ function gate5VmMetrics(metrics, gate4) {
       ["spot", "expectedActionId", "transitionSha256"],
     )
     || source.previewPayload.spot !== "door"
-    || source.previewPayload.expectedActionId !== "10"
+    || source.previewPayload.expectedActionId !== expectedActionId
     || !isSha256(source.previewPayload.transitionSha256)
     || !exactKeys(source.previewRoundTripMs, ["a", "b"])
     || !exactKeys(source.executeTurn, ["provisional", "finalized"])
@@ -3204,18 +3399,21 @@ function gate5VmMetrics(metrics, gate4) {
           source?.executeTurn?.provisional?.a,
           "provisional",
           "provisional A",
+          expectedActionId,
         ),
       provisionalB:
         vmMetric(
           source?.executeTurn?.provisional?.b,
           "provisional",
           "provisional B",
+          expectedActionId,
         ),
       finalized:
         vmMetric(
           source?.executeTurn?.finalized,
           "finalized",
           "finalized",
+          expectedActionId,
         ),
     },
     endToEndMs:
@@ -3259,7 +3457,7 @@ function recoveryMetrics(metrics, gate4) {
   };
 }
 
-function qsgSummary(value, description) {
+function frameTimingSummary(value, description) {
   if (
     !exactKeys(value, ["p50", "p95", "max"])
     || !Number.isSafeInteger(value.p50)
@@ -3269,7 +3467,7 @@ function qsgSummary(value, description) {
     || value.p50 > value.p95
     || value.p95 > value.max
   ) {
-    throw new Error(`${description} QSG summary is invalid`);
+    throw new Error(`${description} frame timing summary is invalid`);
   }
   return { p50: value.p50, p95: value.p95, max: value.max };
 }
@@ -3277,33 +3475,48 @@ function qsgSummary(value, description) {
 function frameMetrics(metrics, gate4) {
   const source = metrics?.frameTiming;
   if (
-    !exactKeys(source, ["parserContract", "runs"])
+    !exactKeys(source, ["measurementContract", "runs"])
     || !exactJson(source, gate4.metrics?.frameTiming)
+    || !exactJson(
+      source?.measurementContract,
+      palaceFrameTimingContract,
+    )
     || !isObject(source?.runs)
     || JSON.stringify(Object.keys(source.runs).sort())
-      !== JSON.stringify([...qsgRunNames].sort())
+      !== JSON.stringify([...frameTimingRunNames].sort())
   ) {
     throw new Error("compiled frame metrics differ from raw evidence");
   }
   return {
-    runs: qsgRunNames.map((name) => {
+    measurementContract: source.measurementContract,
+    runs: frameTimingRunNames.map((name) => {
       const run = source.runs[name];
+      try {
+        validatePalaceFrameTimingMeasurement(run);
+      } catch {
+        throw new Error(`${name} Palace frame timing evidence is invalid`);
+      }
       if (
-        !exactKeys(run, ["parser", "sampleCount", "summaries"])
-        || !exactJson(run.parser, source.parserContract)
-        || !Number.isSafeInteger(run.sampleCount)
-        || run.sampleCount <= 0
-        || !exactKeys(run.summaries, qsgSummaryFields)
+        !exactJson(
+          run.measurementContract,
+          source.measurementContract,
+        )
+        || !exactKeys(run.summaries, frameTimingSummaryFields)
       ) {
-        throw new Error(`${name} QSG evidence is invalid`);
+        throw new Error(`${name} Palace frame timing evidence is invalid`);
       }
       return {
         name,
+        frameWindow: { ...run.frameWindow },
         sampleCount: run.sampleCount,
+        samplesUs: [...run.samplesUs],
         summaries: Object.fromEntries(
-          qsgSummaryFields.map((field) => [
+          frameTimingSummaryFields.map((field) => [
             field,
-            qsgSummary(run.summaries[field], `${name} ${field}`),
+            frameTimingSummary(
+              run.summaries[field],
+              `${name} ${field}`,
+            ),
           ]),
         ),
       };
@@ -3365,6 +3578,776 @@ function metricEvidence(compiled, reports) {
   };
 }
 
+function validElapsedReceipt(value, description, receiptIsValid) {
+  if (
+    !exactKeys(value, ["receipt", "elapsedMs"])
+    || !Number.isSafeInteger(value.elapsedMs)
+    || value.elapsedMs < 0
+    || value.elapsedMs > 180_000
+    || typeof value.receipt !== "string"
+    || value.receipt.length === 0
+    || value.receipt.length > 16 * 1024
+    || !receiptIsValid(value.receipt)
+  ) {
+    throw new Error(`${description} is invalid`);
+  }
+}
+
+function reconstructedMvpCatalog(objects) {
+  const prefix = [
+    "logos-palace-mvp-storage-catalog-v1",
+    "version=1",
+    "root=palace-1",
+    `objects=${objects.length}`,
+    ...objects.map((object) =>
+      `object=${object.objectId};${object.type};${object.mediaType};`
+      + `${object.cid};${object.byteLength};${object.contentSha256}`),
+    "",
+  ].join("\n");
+  const checksum = sha256(prefix);
+  const canonical = `${prefix}checksum=${checksum}\n`;
+  return {
+    checksum,
+    canonical,
+    encoded: Buffer.from(canonical, "utf8").toString("base64url"),
+    byId: Object.fromEntries(
+      objects.map((object) => [object.objectId, object]),
+    ),
+  };
+}
+
+function validAssetTarget(target, role) {
+  if (role === "room-background") {
+    return (
+      exactKeys(target, ["kind", "roomId"])
+      && target.kind === role
+      && ["atrium", "lounge"].includes(target.roomId)
+    );
+  }
+  return (
+    role === "prop-image"
+    && exactKeys(
+      target,
+      ["kind", "propId", "anchorX", "anchorY", "layer"],
+    )
+    && target.kind === role
+    && /^[a-z][a-z0-9_-]{0,63}$/.test(target.propId)
+    && Number.isSafeInteger(target.anchorX)
+    && target.anchorX >= 0
+    && Number.isSafeInteger(target.anchorY)
+    && target.anchorY >= 0
+    && ["head", "body", "hand", "back"].includes(target.layer)
+  );
+}
+
+function validActivePropProjection(value, requested) {
+  if (!requested) {
+    return (
+      exactKeys(value, ["version", "available"])
+      && value.version === 1
+      && value.available === false
+    );
+  }
+  return (
+    exactKeys(
+      value,
+      [
+        "version",
+        "available",
+        "propId",
+        "handle",
+        "contentSha256",
+        "width",
+        "height",
+        "anchorX",
+        "anchorY",
+        "layer",
+      ],
+    )
+    && value.version === 1
+    && value.available === true
+    && /^[a-z][a-z0-9_-]{0,63}$/.test(value.propId)
+    && isSha256(value.handle)
+    && value.contentSha256 === value.handle
+    && Number.isSafeInteger(value.width)
+    && value.width > 0
+    && Number.isSafeInteger(value.height)
+    && value.height > 0
+    && Number.isSafeInteger(value.anchorX)
+    && value.anchorX >= 0
+    && Number.isSafeInteger(value.anchorY)
+    && value.anchorY >= 0
+    && ["head", "body", "hand", "back"].includes(value.layer)
+  );
+}
+
+function publicAssetAuthoringProjection(gate3, gate4) {
+  const source = gate3.assetAuthoring;
+  if (
+    !exactKeys(
+      source,
+      [
+        "version",
+        "phase",
+        "inputManifest",
+        "selectedAssetCount",
+        "propStory",
+        "boundary",
+        "guardedBeforeApproval",
+        "assets",
+        "graphBindings",
+        "activePropProjection",
+        "elapsedMs",
+        "catalogCount",
+        "assignments",
+      ],
+    )
+    || source.version !== 1
+    || source.phase !== "complete"
+    || !exactKeys(
+      source.inputManifest,
+      ["schema", "version", "sha256", "assetCount"],
+    )
+    || source.inputManifest.schema !== "logos.palace.e2e-asset-inputs"
+    || source.inputManifest.version !== 1
+    || !isSha256(source.inputManifest.sha256)
+    || !Number.isSafeInteger(source.inputManifest.assetCount)
+    || source.inputManifest.assetCount < 2
+    || source.inputManifest.assetCount > 128
+    || source.selectedAssetCount !== source.inputManifest.assetCount
+    || !["requested", "not-requested"].includes(source.propStory)
+    || source.boundary !== assetAuthoringBoundary
+    || !Number.isSafeInteger(source.elapsedMs)
+    || source.elapsedMs < 0
+    || source.elapsedMs > 1_800_000
+    || !Number.isSafeInteger(source.catalogCount)
+    || source.catalogCount < source.selectedAssetCount
+    || !Array.isArray(source.assets)
+    || source.assets.length !== source.selectedAssetCount
+  ) {
+    throw new Error("asset authoring evidence is invalid");
+  }
+  validElapsedReceipt(
+    source.guardedBeforeApproval,
+    "asset approval guard",
+    (receipt) => receipt === "rejected=asset-not-approved",
+  );
+
+  const assets = source.assets.map((asset) => {
+    const hasTarget = Object.hasOwn(asset, "target");
+    const keys = [
+      "assetId",
+      "label",
+      "file",
+      "handle",
+      "width",
+      "height",
+      "byteLength",
+      "role",
+      "chunkBytes",
+      "chunkCount",
+      "begin",
+      "appends",
+      "commit",
+      "review",
+      "publication",
+      "cid",
+      ...(hasTarget ? ["target", "assignment"] : []),
+    ];
+    if (
+      !exactKeys(asset, keys)
+      || !/^[a-z][a-z0-9_-]{0,63}$/.test(asset.assetId)
+      || asset.label !== asset.assetId
+      || !/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(asset.file)
+      || !isSha256(asset.handle)
+      || !Number.isSafeInteger(asset.width)
+      || asset.width <= 0
+      || !Number.isSafeInteger(asset.height)
+      || asset.height <= 0
+      || !Number.isSafeInteger(asset.byteLength)
+      || asset.byteLength <= 0
+      || asset.byteLength > 10 * 1024 * 1024
+      || !["room-background", "prop-image"].includes(asset.role)
+      || (hasTarget && !validAssetTarget(asset.target, asset.role))
+      || asset.chunkBytes !== 32 * 1024
+      || !Number.isSafeInteger(asset.chunkCount)
+      || asset.chunkCount <= 0
+      || !Array.isArray(asset.appends)
+      || asset.appends.length !== asset.chunkCount
+    ) {
+      throw new Error("authored asset envelope is invalid");
+    }
+    const beginMatch =
+      /^ok;session=([0-9a-f]{32});next=0;maxChunkBytes=32768;maxTotalBytes=10485760$/
+        .exec(asset.begin?.receipt);
+    validElapsedReceipt(
+      asset.begin,
+      "asset stage begin",
+      (receipt) => beginMatch !== null && receipt === beginMatch[0],
+    );
+    let appendedBytes = 0;
+    for (let index = 0; index < asset.appends.length; index += 1) {
+      const append = asset.appends[index];
+      if (
+        !exactKeys(
+          append,
+          ["sequence", "byteLength", "receipt", "elapsedMs"],
+        )
+        || append.sequence !== index
+        || !Number.isSafeInteger(append.byteLength)
+        || append.byteLength <= 0
+        || append.byteLength > asset.chunkBytes
+      ) {
+        throw new Error("authored asset chunk is invalid");
+      }
+      appendedBytes += append.byteLength;
+      validElapsedReceipt(
+        { receipt: append.receipt, elapsedMs: append.elapsedMs },
+        "asset stage append",
+        (receipt) =>
+          receipt
+            === `ok;session=${beginMatch[1]};next=${index + 1};`
+              + `bytes=${appendedBytes}`,
+      );
+    }
+    if (appendedBytes !== asset.byteLength) {
+      throw new Error("authored asset byte total is invalid");
+    }
+    validElapsedReceipt(
+      asset.commit,
+      "asset stage commit",
+      (receipt) =>
+        receipt
+          === `ok;handle=${asset.handle};width=${asset.width};`
+            + `height=${asset.height};bytes=${asset.byteLength}`,
+    );
+    validElapsedReceipt(
+      asset.review,
+      "asset approval",
+      (receipt) =>
+        receipt === `ok;handle=${asset.handle};review=approved`,
+    );
+    if (!exactKeys(asset.publication, ["dispatched", "completed"])) {
+      throw new Error("asset publication envelope is invalid");
+    }
+    validElapsedReceipt(
+      asset.publication.dispatched,
+      "asset publication dispatch",
+      (receipt) => receipt === "ok;asset=publishing",
+    );
+    validElapsedReceipt(
+      asset.publication.completed,
+      "asset publication completion",
+      (receipt) => receipt === `published;cid=${asset.cid}`,
+    );
+    try {
+      if (cidSha256(asset.cid) !== asset.handle) {
+        throw new Error("CID digest differs");
+      }
+    } catch {
+      throw new Error("asset publication CID is invalid");
+    }
+    if (hasTarget) {
+      validElapsedReceipt(
+        asset.assignment,
+        "asset assignment",
+        (receipt) =>
+          asset.target.kind === "room-background"
+            ? (
+                receipt
+                  === `ok;room=${asset.target.roomId};handle=${asset.handle}`
+              )
+            : (
+                receipt
+                  === `ok;propId=${asset.target.propId};`
+                    + `handle=${asset.handle};`
+                    + `anchorX=${asset.target.anchorX};`
+                    + `anchorY=${asset.target.anchorY};`
+                    + `layer=${asset.target.layer}`
+              ),
+      );
+    }
+    return asset;
+  });
+  if (
+    new Set(assets.map(({ assetId }) => assetId)).size !== source.selectedAssetCount
+    || new Set(assets.map(({ handle }) => handle)).size !== source.selectedAssetCount
+    || new Set(assets.map(({ cid }) => cid)).size !== source.selectedAssetCount
+  ) {
+    throw new Error("authored asset set is not unique");
+  }
+  const roomTargets = assets.filter(
+    ({ target }) => target?.kind === "room-background",
+  );
+  const propTargets = assets.filter(
+    ({ target }) => target?.kind === "prop-image",
+  );
+  const propRequested = source.propStory === "requested";
+  const finalRoomAssignments = { atrium: "", lounge: "" };
+  for (const asset of roomTargets) {
+    finalRoomAssignments[asset.target.roomId] = asset.handle;
+  }
+  if (
+    roomTargets.length + propTargets.length !== assets.length
+    || roomTargets.length < 2
+    || propTargets.length !== (propRequested ? 1 : 0)
+    || new Set(roomTargets.map(({ target }) => target.roomId)).size !== 2
+    || !exactKeys(source.assignments, ["rooms", "prop"])
+    || !exactKeys(source.assignments.rooms, ["atrium", "lounge"])
+    || !exactJson(source.assignments.rooms, finalRoomAssignments)
+    || source.propStory !== (propTargets.length === 1
+      ? "requested"
+      : "not-requested")
+    || (
+      propRequested
+        ? !exactJson(source.assignments.prop, {
+            propId: propTargets[0].target.propId,
+            handle: propTargets[0].handle,
+            anchorX: propTargets[0].target.anchorX,
+            anchorY: propTargets[0].target.anchorY,
+            layer: propTargets[0].target.layer,
+          })
+        : source.assignments.prop !== null
+    )
+    || !validActivePropProjection(
+      source.activePropProjection,
+      propRequested,
+    )
+    || (
+      propRequested
+      && !exactJson(source.activePropProjection, {
+        version: 1,
+        available: true,
+        propId: propTargets[0].target.propId,
+        handle: propTargets[0].handle,
+        contentSha256: propTargets[0].handle,
+        width: propTargets[0].width,
+        height: propTargets[0].height,
+        anchorX: propTargets[0].target.anchorX,
+        anchorY: propTargets[0].target.anchorY,
+        layer: propTargets[0].target.layer,
+      })
+    )
+  ) {
+    throw new Error("authored asset assignments are invalid");
+  }
+
+  const publication = gate3.publication;
+  const objectOrder = gate3ObjectOrder(
+    propRequested ? propTargets[0].target.propId : null,
+  );
+  if (
+    !exactKeys(
+      publication,
+      ["dispatched", "completed", "checksum", "objects"],
+    )
+    || !isSha256(publication.checksum)
+    || !Array.isArray(publication.objects)
+    || publication.objects.length !== objectOrder.length
+  ) {
+    throw new Error("asset graph publication is invalid");
+  }
+  const publishedCids = new Set();
+  for (let index = 0; index < objectOrder.length; index += 1) {
+    const object = publication.objects[index];
+    if (
+      !exactKeys(
+        object,
+        [
+          "objectId",
+          "type",
+          "mediaType",
+          "cid",
+          "byteLength",
+          "contentSha256",
+        ],
+      )
+      || object.objectId !== objectOrder[index]
+      || typeof object.type !== "string"
+      || object.type.length === 0
+      || typeof object.mediaType !== "string"
+      || object.mediaType.length === 0
+      || !Number.isSafeInteger(object.byteLength)
+      || object.byteLength <= 0
+      || object.byteLength > 10 * 1024 * 1024
+      || !isSha256(object.contentSha256)
+    ) {
+      throw new Error("asset graph publication is invalid");
+    }
+    try {
+      if (cidSha256(object.cid) !== object.contentSha256) {
+        throw new Error("CID digest differs");
+      }
+    } catch {
+      throw new Error("asset graph publication is invalid");
+    }
+    publishedCids.add(object.cid);
+  }
+  if (publishedCids.size !== objectOrder.length) {
+    throw new Error("asset graph publication is invalid");
+  }
+  const catalog = reconstructedMvpCatalog(publication.objects);
+  if (
+    publication.checksum !== catalog.checksum
+    || !exactKeys(
+      gate4?.catalog,
+      [
+        "checksum",
+        "encoded",
+        "encodedSha256",
+        "canonicalSha256",
+        "byId",
+      ],
+    )
+    || gate4.catalog.checksum !== catalog.checksum
+    || gate4.catalog.encoded !== catalog.encoded
+    || gate4.catalog.encodedSha256 !== sha256(catalog.encoded)
+    || gate4.catalog.canonicalSha256 !== sha256(catalog.canonical)
+    || !exactJson(gate4.catalog.byId, catalog.byId)
+    || gate4?.gate3?.catalogChecksum !== catalog.checksum
+  ) {
+    throw new Error(
+      "asset catalog is not bound across Gate 3 and Gate 4",
+    );
+  }
+
+  const expectedObjects = new Map([
+    ["room-background:atrium", "background-atrium"],
+    ["room-background:lounge", "background-lounge"],
+    ...(propRequested
+      ? [[
+          "prop-image",
+          `prop-${propTargets[0].target.propId}-image`,
+        ]]
+      : []),
+  ]);
+  if (
+    !Array.isArray(source.graphBindings)
+    || source.graphBindings.length !== expectedObjects.size
+  ) {
+    throw new Error("asset graph bindings are invalid");
+  }
+  for (const binding of source.graphBindings) {
+    const key = binding?.kind === "room-background"
+      ? `${binding.kind}:${binding.targetId}`
+      : binding?.kind;
+    const objectId = expectedObjects.get(key);
+    const asset = assets.find(
+      ({ assetId }) => assetId === binding?.assetId,
+    );
+    const object = publication.objects.find(
+      (candidate) => candidate.objectId === objectId,
+    );
+    const expectedKeys = binding?.kind === "room-background"
+      ? [
+          "kind",
+          "targetId",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ]
+      : [
+          "kind",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ];
+    if (
+      !objectId
+      || !exactKeys(binding, expectedKeys)
+      || binding.objectId !== objectId
+      || !asset
+      || !exactJson(binding.assignment, asset.target)
+      || binding.cid !== asset.cid
+      || binding.contentSha256 !== asset.handle
+      || object?.cid !== binding.cid
+      || object?.contentSha256 !== binding.contentSha256
+      || object.mediaType !== "image/png"
+    ) {
+      throw new Error("asset graph binding is invalid");
+    }
+  }
+  const propRecovery = gate4?.gate3?.activePropProjectionRecovery;
+  const projectionSha256 = sha256(
+    JSON.stringify(stable(source.activePropProjection)),
+  );
+  if (
+    !exactKeys(
+      propRecovery,
+      [
+        "status",
+        "property",
+        "beforeVerification",
+        "propStory",
+        "projectionSha256",
+        "afterVerification",
+      ],
+    )
+    || propRecovery.status !== "passed"
+    || propRecovery.property !== "gate4ActivePropAsset"
+    || propRecovery.propStory !== source.propStory
+    || propRecovery.projectionSha256 !== projectionSha256
+    || !Array.isArray(propRecovery.beforeVerification)
+    || !Array.isArray(propRecovery.afterVerification)
+    || propRecovery.beforeVerification.length < 2
+    || propRecovery.beforeVerification.length > 3
+    || propRecovery.afterVerification.length
+      !== propRecovery.beforeVerification.length
+    || new Set(
+      propRecovery.beforeVerification.map(({ label }) => label),
+    ).size !== propRecovery.beforeVerification.length
+    || !exactJson(
+      propRecovery.beforeVerification.map(({ label }) => label),
+      propRecovery.afterVerification.map(({ label }) => label),
+    )
+    || propRecovery.beforeVerification.some(
+      (observer) =>
+        !exactKeys(observer, ["label", "projection"])
+        || !["a", "b", "c"].includes(observer.label)
+        || !validActivePropProjection(observer.projection, false),
+    )
+    || propRecovery.afterVerification.some(
+      (observer) =>
+        !exactKeys(observer, ["label", "projection"])
+        || !exactJson(observer.projection, source.activePropProjection),
+    )
+  ) {
+    throw new Error("active prop restore/reverification evidence is invalid");
+  }
+
+  const roleCounts = {
+    roomBackground: assets.filter(
+      ({ role }) => role === "room-background",
+    ).length,
+    propImage: assets.filter(({ role }) => role === "prop-image").length,
+  };
+  return {
+    status: "passed",
+    version: 1,
+    selectedAssetCount: source.selectedAssetCount,
+    propStory: source.propStory,
+    boundary: assetAuthoringBoundary,
+    roles: roleCounts,
+    assignments: {
+      atrium: true,
+      lounge: true,
+      prop: propRequested,
+    },
+    projection: {
+      propVerified: propRequested,
+      observerCount: propRecovery.afterVerification.length,
+    },
+    approvalGuard: {
+      status: source.guardedBeforeApproval.receipt,
+      elapsedMs: source.guardedBeforeApproval.elapsedMs,
+    },
+    ingestion: {
+      chunkBytes: 32 * 1024,
+      chunkCount: assets.reduce(
+        (total, asset) => total + asset.chunkCount,
+        0,
+      ),
+      totalBytes: assets.reduce(
+        (total, asset) => total + asset.byteLength,
+        0,
+      ),
+    },
+    publication: {
+      publishedCount: assets.length,
+      graphLeafCount: source.graphBindings.length,
+      catalogObjectCount: publication.objects.length,
+      catalogChecksum: publication.checksum,
+    },
+  };
+}
+
+async function publicAssetAuthoring(gate3, gate4, gate3Dir) {
+  const projection = publicAssetAuthoringProjection(gate3, gate4);
+  const screenshot = gate3.assetAuthoringScreenshot;
+  const render = screenshot?.renderEvidence;
+  if (
+    !exactKeys(
+      screenshot,
+      [
+        "file",
+        "artifactPath",
+        "width",
+        "height",
+        "byteLength",
+        "sha256",
+        "stage",
+        "state",
+        "label",
+        "renderEvidence",
+      ],
+    )
+    || screenshot.file !== assetAuthoringScreenshotFile
+    || screenshot.artifactPath !== assetAuthoringScreenshotFile
+    || screenshot.width !== 1600
+    || screenshot.height !== 900
+    || !Number.isSafeInteger(screenshot.byteLength)
+    || screenshot.byteLength < 24
+    || screenshot.byteLength > 64 * 1024 * 1024
+    || !isSha256(screenshot.sha256)
+    || screenshot.stage !== assetAuthoringScreenshotStage
+    || screenshot.state !== assetAuthoringScreenshotState
+    || screenshot.label !== "a"
+    || !exactKeys(
+      render,
+      [
+        "schema",
+        "version",
+        "open",
+        "cardCount",
+        "readyImageCount",
+        "publishedCount",
+        "atriumAssigned",
+        "loungeAssigned",
+        "propAssigned",
+        "fenceRequest",
+        "fenceState",
+        "fenceFrame",
+        "epoch",
+      ],
+    )
+    || render.schema !== "logos.palace.asset-authoring-render"
+    || render.version !== 1
+    || render.open !== true
+    || render.cardCount < projection.selectedAssetCount
+    || render.readyImageCount !== render.cardCount
+    || render.publishedCount < projection.selectedAssetCount
+    || render.atriumAssigned !== true
+    || render.loungeAssigned !== true
+    || render.propAssigned !== projection.assignments.prop
+    || !Number.isSafeInteger(render.fenceRequest)
+    || render.fenceRequest <= 0
+    || render.fenceState !== "complete"
+    || !Number.isSafeInteger(render.fenceFrame)
+    || render.fenceFrame < 0
+    || !Number.isSafeInteger(render.epoch)
+    || render.epoch < projection.selectedAssetCount
+  ) {
+    throw new Error("asset authoring screenshot evidence is invalid");
+  }
+  const bytes = await boundedFile(
+    join(gate3Dir, assetAuthoringScreenshotFile),
+    64 * 1024 * 1024,
+    "asset authoring screenshot",
+  );
+  if (
+    bytes.length !== screenshot.byteLength
+    || sha256(bytes) !== screenshot.sha256
+  ) {
+    throw new Error("asset authoring screenshot bytes changed");
+  }
+  validatePngScreenshot(bytes, assetAuthoringScreenshotFile);
+
+  const gate4Evidence = gate4?.gate3?.assetAuthoringEvidence;
+  const assetBindings = gate3.assetAuthoring.assets.map(
+    ({ role, handle, cid, target }) => ({
+      role,
+      handle,
+      cid,
+      assigned: target !== undefined,
+    }),
+  );
+  if (
+    !exactKeys(
+      gate4Evidence,
+      [
+        "status",
+        "version",
+        "selectedAssetCount",
+        "propStory",
+        "manifestSha256",
+        "approvalGuardReceipt",
+        "assetBindingsSha256",
+        "activeGraphBindings",
+        "activePropProjection",
+        "screenshot",
+        "evidenceSha256",
+      ],
+    )
+    || gate4Evidence.status !== "passed"
+    || gate4Evidence.version !== 1
+    || gate4Evidence.selectedAssetCount !== projection.selectedAssetCount
+    || gate4Evidence.propStory !== projection.propStory
+    || gate4Evidence.manifestSha256
+      !== gate3.assetAuthoring.inputManifest.sha256
+    || gate4Evidence.approvalGuardReceipt
+      !== gate3.assetAuthoring.guardedBeforeApproval.receipt
+    || gate4Evidence.assetBindingsSha256
+      !== sha256(JSON.stringify(stable(assetBindings)))
+    || !exactJson(
+      gate4Evidence.activeGraphBindings,
+      gate3.assetAuthoring.graphBindings,
+    )
+    || !exactJson(
+      gate4Evidence.activePropProjection,
+      gate3.assetAuthoring.activePropProjection,
+    )
+    || !exactKeys(
+      gate4Evidence.screenshot,
+      [
+        "file",
+        "width",
+        "height",
+        "byteLength",
+        "sha256",
+        "renderEvidence",
+        "artifactVerified",
+      ],
+    )
+    || gate4Evidence.screenshot.file !== screenshot.file
+    || gate4Evidence.screenshot.width !== screenshot.width
+    || gate4Evidence.screenshot.height !== screenshot.height
+    || gate4Evidence.screenshot.byteLength !== screenshot.byteLength
+    || gate4Evidence.screenshot.sha256 !== screenshot.sha256
+    || !exactJson(gate4Evidence.screenshot.renderEvidence, render)
+    || gate4Evidence.screenshot.artifactVerified !== true
+    || gate4Evidence.evidenceSha256
+      !== sha256(JSON.stringify(stable({
+        assetAuthoring: gate3.assetAuthoring,
+        assetAuthoringScreenshot: screenshot,
+      })))
+  ) {
+    throw new Error(
+      "asset authoring evidence is not bound across Gate 3 and Gate 4",
+    );
+  }
+
+  return {
+    ...projection,
+    screenshot: {
+      file: `gate3/${assetAuthoringScreenshotFile}`,
+      stage: assetAuthoringScreenshotStage,
+      state: assetAuthoringScreenshotState,
+      width: 1600,
+      height: 900,
+      byteLength: screenshot.byteLength,
+      sha256: screenshot.sha256,
+      render: {
+        schema: render.schema,
+        version: 1,
+        open: true,
+        cardCount: render.cardCount,
+        readyImageCount: render.readyImageCount,
+        publishedCount: render.publishedCount,
+        atriumAssigned: true,
+        loungeAssigned: true,
+        propAssigned: projection.assignments.prop,
+        fenceRequest: render.fenceRequest,
+        fenceState: "complete",
+        fenceFrame: render.fenceFrame,
+        epoch: render.epoch,
+      },
+    },
+  };
+}
 async function publicScreenshots(gate4, gate4Dir) {
   if (
     !Array.isArray(gate4.screenshots)
@@ -3496,7 +4479,9 @@ function assertNoSensitiveData(value, path = "$") {
   }
 }
 
-function assertPublicMetricShape(metrics) {
+function assertPublicMetricShape(metrics, propStory) {
+  const expectedLezActionCount =
+    propStory === "requested" ? 11 : 10;
   if (
     !exactKeys(
       metrics,
@@ -3576,7 +4561,14 @@ function assertPublicMetricShape(metrics) {
         "coldHistoryStorageVmRebuildMs",
       ],
     )
-    || !exactKeys(metrics.frameTiming, ["runs"])
+    || !exactKeys(
+      metrics.frameTiming,
+      ["measurementContract", "runs"],
+    )
+    || !exactJson(
+      metrics.frameTiming.measurementContract,
+      palaceFrameTimingContract,
+    )
     || !exactKeys(metrics.palaceVmPeakMemoryKiB, ["b", "c"])
   ) {
     throw new Error("public metric keys are not exact");
@@ -3621,9 +4613,9 @@ function assertPublicMetricShape(metrics) {
     "totalMeasurement",
   ];
   if (
-    metrics.lez.actionCount !== 11
+    metrics.lez.actionCount !== expectedLezActionCount
     || !Array.isArray(metrics.lez.actions)
-    || metrics.lez.actions.length !== 11
+    || metrics.lez.actions.length !== expectedLezActionCount
   ) {
     throw new Error("public LEZ action set is invalid");
   }
@@ -3735,22 +4727,50 @@ function assertPublicMetricShape(metrics) {
   }
   if (
     !Array.isArray(metrics.frameTiming.runs)
-    || metrics.frameTiming.runs.length !== qsgRunNames.length
+    || metrics.frameTiming.runs.length !== frameTimingRunNames.length
   ) {
     throw new Error("public frame run set is invalid");
   }
   for (const [index, run] of metrics.frameTiming.runs.entries()) {
     if (
-      !exactKeys(run, ["name", "sampleCount", "summaries"])
-      || run.name !== qsgRunNames[index]
-      || !Number.isSafeInteger(run.sampleCount)
-      || run.sampleCount <= 0
-      || !exactKeys(run.summaries, qsgSummaryFields)
+      !exactKeys(
+        run,
+        [
+          "name",
+          "frameWindow",
+          "sampleCount",
+          "samplesUs",
+          "summaries",
+        ],
+      )
+      || run.name !== frameTimingRunNames[index]
+      || run.sampleCount !== palaceFrameTimingContract.sampleCount
+      || !exactKeys(
+        run.frameWindow,
+        ["startFrame", "endFrame", "elapsedTimeUs"],
+      )
+      || !Number.isSafeInteger(run.frameWindow.startFrame)
+      || run.frameWindow.startFrame < 0
+      || run.frameWindow.endFrame
+        !== run.frameWindow.startFrame + palaceFrameTimingContract.sampleCount
+      || !Number.isSafeInteger(run.frameWindow.elapsedTimeUs)
+      || run.frameWindow.elapsedTimeUs <= 0
+      || run.frameWindow.elapsedTimeUs
+        > palaceFrameTimingContract.captureTimeoutMs * 1_000
+      || !exactKeys(run.summaries, frameTimingSummaryFields)
+      || !exactJson(
+        run.summaries.frameIntervalUs,
+        summarizePalaceFrameIntervals(run.samplesUs),
+      )
+      || Math.abs(
+        run.samplesUs.reduce((total, sample) => total + sample, 0)
+          - run.frameWindow.elapsedTimeUs,
+      ) > Math.ceil(palaceFrameTimingContract.sampleCount / 2)
     ) {
       throw new Error("public frame run is invalid");
     }
-    for (const field of qsgSummaryFields) {
-      qsgSummary(run.summaries[field], `public frame ${field}`);
+    for (const field of frameTimingSummaryFields) {
+      frameTimingSummary(run.summaries[field], `public frame ${field}`);
     }
   }
   for (const value of Object.values(metrics.palaceVmPeakMemoryKiB)) {
@@ -3809,7 +4829,156 @@ function validPublicProcessScopes(scopes) {
   return true;
 }
 
+function validPublicAssetAuthoring(value) {
+  try {
+    if (
+      !exactKeys(
+        value,
+        [
+          "status",
+          "version",
+          "selectedAssetCount",
+          "propStory",
+          "boundary",
+          "roles",
+          "assignments",
+          "projection",
+          "approvalGuard",
+          "ingestion",
+          "publication",
+          "screenshot",
+        ],
+      )
+      || value.status !== "passed"
+      || value.version !== 1
+      || !Number.isSafeInteger(value.selectedAssetCount)
+      || value.selectedAssetCount < 2
+      || value.selectedAssetCount > 128
+      || !["requested", "not-requested"].includes(value.propStory)
+      || value.boundary !== assetAuthoringBoundary
+      || !exactKeys(value.roles, ["roomBackground", "propImage"])
+      || !Number.isSafeInteger(value.roles.roomBackground)
+      || value.roles.roomBackground < 2
+      || ![0, 1].includes(value.roles.propImage)
+      || value.roles.propImage
+        !== (value.propStory === "requested" ? 1 : 0)
+      || value.roles.roomBackground + value.roles.propImage
+        !== value.selectedAssetCount
+      || !exactJson(value.assignments, {
+        atrium: true,
+        lounge: true,
+        prop: value.propStory === "requested",
+      })
+      || !exactKeys(value.projection, ["propVerified", "observerCount"])
+      || value.projection.propVerified
+        !== (value.propStory === "requested")
+      || !Number.isSafeInteger(value.projection.observerCount)
+      || value.projection.observerCount < 2
+      || value.projection.observerCount > 3
+      || !exactKeys(value.approvalGuard, ["status", "elapsedMs"])
+      || value.approvalGuard.status !== "rejected=asset-not-approved"
+      || !Number.isSafeInteger(value.approvalGuard.elapsedMs)
+      || value.approvalGuard.elapsedMs < 0
+      || value.approvalGuard.elapsedMs > 180_000
+      || !exactKeys(
+        value.ingestion,
+        ["chunkBytes", "chunkCount", "totalBytes"],
+      )
+      || value.ingestion.chunkBytes !== 32 * 1024
+      || !Number.isSafeInteger(value.ingestion.chunkCount)
+      || value.ingestion.chunkCount < value.selectedAssetCount
+      || !Number.isSafeInteger(value.ingestion.totalBytes)
+      || value.ingestion.totalBytes < value.selectedAssetCount
+      || value.ingestion.totalBytes
+        > value.selectedAssetCount * 10 * 1024 * 1024
+      || !exactKeys(
+        value.publication,
+        [
+          "publishedCount",
+          "graphLeafCount",
+          "catalogObjectCount",
+          "catalogChecksum",
+        ],
+      )
+      || value.publication.publishedCount !== value.selectedAssetCount
+      || value.publication.graphLeafCount
+        !== (value.propStory === "requested" ? 3 : 2)
+      || value.publication.catalogObjectCount
+        !== (value.propStory === "requested" ? 11 : 8)
+      || !isSha256(value.publication.catalogChecksum)
+    ) {
+      return false;
+    }
+
+    const screenshot = value.screenshot;
+    const render = screenshot?.render;
+    return (
+      exactKeys(
+        screenshot,
+        [
+          "file",
+          "stage",
+          "state",
+          "width",
+          "height",
+          "byteLength",
+          "sha256",
+          "render",
+        ],
+      )
+      && screenshot.file === `gate3/${assetAuthoringScreenshotFile}`
+      && screenshot.stage === assetAuthoringScreenshotStage
+      && screenshot.state === assetAuthoringScreenshotState
+      && screenshot.width === 1600
+      && screenshot.height === 900
+      && Number.isSafeInteger(screenshot.byteLength)
+      && screenshot.byteLength >= 24
+      && screenshot.byteLength <= 64 * 1024 * 1024
+      && isSha256(screenshot.sha256)
+      && exactKeys(
+        render,
+        [
+          "schema",
+          "version",
+          "open",
+          "cardCount",
+          "readyImageCount",
+          "publishedCount",
+          "atriumAssigned",
+          "loungeAssigned",
+          "propAssigned",
+          "fenceRequest",
+          "fenceState",
+          "fenceFrame",
+          "epoch",
+        ],
+      )
+      && render.schema === "logos.palace.asset-authoring-render"
+      && render.version === 1
+      && render.open === true
+      && render.cardCount >= value.selectedAssetCount
+      && render.readyImageCount === render.cardCount
+      && render.publishedCount >= value.selectedAssetCount
+      && render.atriumAssigned === true
+      && render.loungeAssigned === true
+      && render.propAssigned === (value.propStory === "requested")
+      && Number.isSafeInteger(render.fenceRequest)
+      && render.fenceRequest > 0
+      && render.fenceState === "complete"
+      && Number.isSafeInteger(render.fenceFrame)
+      && render.fenceFrame >= 0
+      && Number.isSafeInteger(render.epoch)
+      && render.epoch >= value.selectedAssetCount
+    );
+  } catch {
+    return false;
+  }
+}
 export function validatePublicEvidence(evidence) {
+  const expectedCatalogObjectCount =
+    evidence?.assetAuthoring?.publication?.catalogObjectCount;
+  const expectedFinalActionId =
+    evidence?.assetAuthoring?.propStory === "requested" ? "10" : "9";
   if (
     !exactKeys(
       evidence,
@@ -3835,6 +5004,7 @@ export function validatePublicEvidence(evidence) {
         "processProof",
         "recoveryEvidence",
         "metrics",
+        "assetAuthoring",
         "screenshots",
       ],
     )
@@ -4285,7 +5455,7 @@ export function validatePublicEvidence(evidence) {
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
       .coldClientNativeAvailable !== 0
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
-      .coldClientNativeTotal !== 11
+      .coldClientNativeTotal !== expectedCatalogObjectCount
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
       .retainedHolderLabel !== "c"
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
@@ -4293,9 +5463,9 @@ export function validatePublicEvidence(evidence) {
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
       .retainedHolderNativeSource !== "cache"
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
-      .retainedHolderNativeAvailable !== 11
+      .retainedHolderNativeAvailable !== expectedCatalogObjectCount
     || evidence.recoveryEvidence.coldClientRebuild.retainedSource
-      .retainedHolderNativeTotal !== 11
+      .retainedHolderNativeTotal !== expectedCatalogObjectCount
     || !exactKeys(
       evidence.recoveryEvidence.coldClientRebuild.retainedSource
         .retainedDataRootBeforeRestart,
@@ -4349,7 +5519,7 @@ export function validatePublicEvidence(evidence) {
     || evidence.recoveryEvidence.coldClientRebuild.vmProjection
       .phase !== "promoted"
     || evidence.recoveryEvidence.coldClientRebuild.vmProjection
-      .actionId !== "10"
+      .actionId !== expectedFinalActionId
     || evidence.recoveryEvidence.coldClientRebuild.vmProjection
       .navigation !== true
     || !isHex(
@@ -4494,6 +5664,7 @@ export function validatePublicEvidence(evidence) {
         || gate.status !== "passed",
     )
     || !validPublicProcessScopes(evidence.processScopes)
+    || !validPublicAssetAuthoring(evidence.assetAuthoring)
     || !Array.isArray(evidence.screenshots)
     || evidence.screenshots.length !== screenshotSpecs.length
     || evidence.screenshots.some((entry, index) => {
@@ -4580,7 +5751,10 @@ export function validatePublicEvidence(evidence) {
     throw new Error("public evidence schema is invalid");
   }
   try {
-    assertPublicMetricShape(evidence.metrics);
+    assertPublicMetricShape(
+      evidence.metrics,
+      evidence.assetAuthoring.propStory,
+    );
   } catch {
     throw new Error("public evidence schema is invalid");
   }
@@ -4695,6 +5869,10 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
   }
   await invalidateOutput(outputPath);
 
+  const gate3Dir = await canonicalDirectory(
+    join(runDir, "gate3"),
+    "Gate 3 evidence directory",
+  );
   const gate4Dir = await canonicalDirectory(
     join(runDir, "gate4"),
     "Gate 4 evidence directory",
@@ -4793,6 +5971,11 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     reports.gate4To6.value,
   );
   const metrics = metricEvidence(compiled.value, reports);
+  const assetAuthoring = await publicAssetAuthoring(
+    reports.gate3.value,
+    reports.gate4To6.value,
+    gate3Dir,
+  );
   const screenshots = await publicScreenshots(
     reports.gate4To6.value,
     gate4Dir,
@@ -4853,6 +6036,7 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     processProof,
     recoveryEvidence,
     metrics,
+    assetAuthoring,
     screenshots,
   };
   validatePublicEvidence(evidence);

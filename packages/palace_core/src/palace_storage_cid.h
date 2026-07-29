@@ -11,6 +11,13 @@ bool canonicalStorageCidSha256(
     const std::string& value,
     std::string& digest);
 
+// Accepts only canonical CIDv1 lower-base32/base58btc carrying exactly one
+// SHA2-256 multihash. On success, digest receives 64 lower hex characters.
+// Failure clears digest.
+bool canonicalStorageCidV1Sha256(
+    const std::string& value,
+    std::string& digest);
+
 bool isCanonicalStorageCid(const std::string& value);
 
 } // namespace palace

@@ -25,9 +25,9 @@ if (!reportArgument || !artifactsArgument) {
 const reportPath = resolve(reportArgument);
 const artifactsDir = resolve(artifactsArgument);
 const expected = [
-  ["gate4-a-three-user-atrium-converged.png", "gate4-delivery-convergence", "three-user-atrium-with-approved-prop", "a"],
+  ["gate4-a-three-user-atrium-converged.png", "gate4-delivery-convergence", "three-user-atrium-converged", "a"],
   ["gate4-b-storage-object-degraded.png", "gate4-storage-failure", "missing-storage-object-degraded", "b"],
-  ["gate4-b-atrium-after-moderation.png", "gate4-moderation", "atrium-after-human-user-and-prop-bans", "b"],
+  ["gate4-b-atrium-after-moderation.png", "gate4-moderation", "atrium-after-human-moderation", "b"],
   ["gate5-a-door-preview.png", "gate5-preview", "door-preview-before-finality", "a"],
   ["gate5-b-door-preview.png", "gate5-preview", "door-preview-before-finality", "b"],
   ["gate5-b-door-pending.png", "gate5-pending", "door-awaiting-lez-observation", "b"],

@@ -16,6 +16,12 @@ Item {
         ? backend.deliverySessionStatus : "state=unavailable"
     readonly property string storageStatus: backend
         ? backend.storageStatus : "storage=unavailable"
+    readonly property string assetAuthoringState: backend
+        ? backend.assetAuthoringState
+        : "{\"version\":1,\"count\":0,\"sessionCount\":0,\"bundleLocked\":false,\"roomAssignments\":{\"atrium\":\"\",\"lounge\":\"\"},\"propAssignment\":null,\"assets\":[]}"
+    readonly property string activePropAssetState: backend
+        ? backend.activePropAsset
+        : "{\"version\":1,\"available\":false}"
     readonly property string lezState: backend
         ? backend.lezState : "wallet=closed;ready=0"
     readonly property string identityState: backend
@@ -40,6 +46,39 @@ Item {
     property string invocationError: ""
     property int invocationSequence: 0
     property string acceptanceRoundTripResponse: ""
+    readonly property int gateFrameTimingSampleTarget: 120
+    readonly property int gateFrameTimingWarmupFrames: 2
+    property int gateFrameTimingRequest: 0
+    property int gateFrameTimingWarmupsRemaining: 0
+    property bool gateFrameTimingRunning: false
+    property var gateFrameTimingSamplesUs: []
+    property int gateFrameTimingStartFrame: -1
+    property int gateFrameTimingEndFrame: -1
+    property int gateFrameTimingStartElapsedUs: -1
+    property int gateFrameTimingElapsedTimeUs: 0
+    property string gateFrameTimingFailure: ""
+    readonly property string gateFrameTimingEvidence: JSON.stringify({
+        "schema": "logos.palace.frame-animation-timing",
+        "version": 1,
+        "request": gateFrameTimingRequest,
+        "state": gateFrameTimingFailure.length > 0
+            ? "failed"
+            : (gateFrameTimingRunning
+               ? "sampling"
+               : (gateFrameTimingRequest === 0
+                  ? "idle"
+                  : (gateFrameTimingSamplesUs.length
+                     === gateFrameTimingSampleTarget
+                     ? "complete" : "failed"))),
+        "sampleUnit": "microseconds",
+        "warmupFrames": gateFrameTimingWarmupFrames,
+        "sampleTarget": gateFrameTimingSampleTarget,
+        "samplesUs": gateFrameTimingSamplesUs,
+        "startFrame": gateFrameTimingStartFrame,
+        "endFrame": gateFrameTimingEndFrame,
+        "elapsedTimeUs": gateFrameTimingElapsedTimeUs,
+        "failure": gateFrameTimingFailure
+    })
     readonly property string lastActionReceipt: invocationError.length > 0
         ? invocationError : (backend ? backend.lastActionReceipt : "")
 
@@ -55,6 +94,12 @@ Item {
     readonly property string gate3Status: storageStatus
     readonly property string gate3Receipt: lastActionReceipt
     readonly property string gate3RoomHandle: roomBackgroundHandle
+    readonly property string gate3AssetAuthoringState:
+        assetAuthoringState
+    readonly property string gate3ActivePropAsset:
+        activePropAssetState
+    readonly property string gate3AssetAuthoringEvidence:
+        assetAuthoringEvidence(backgroundPreviewEpoch)
     readonly property bool gate3Ready: ready
 
     // Stable inspector contract used by the compiled Gate 4 harness.
@@ -63,6 +108,8 @@ Item {
     readonly property string gate4PalaceState: palaceState
     readonly property string gate4Receipt: lastActionReceipt
     readonly property string gate4ModerationState: moderationState
+    readonly property string gate4ActivePropAsset:
+        activePropAssetState
     readonly property bool gate4Ready: ready
 
     // Stable inspector contract used by the compiled Gate 5 harness.
@@ -80,11 +127,48 @@ Item {
         && gate5VmPhase !== "idle"
 
     readonly property var participants: parseParticipants(participantProjection)
+    readonly property var authoringAssets:
+        parseAuthoringAssets(assetAuthoringState)
+    readonly property var activePropAsset:
+        parseActivePropAsset(activePropAssetState)
+    readonly property string availablePropId:
+        activePropAsset.available === true
+        ? String(activePropAsset.propId) : ""
     readonly property int connectedPeerCount: parseConnectedPeerCount(nodeEvidence)
     property bool ready: false
+    property bool backgroundModerationOpen: false
+    property int backgroundPreviewEpoch: 0
+    property int backgroundReadyImageCount: 0
+    property int backgroundScreenshotFenceRequest: 0
+    property bool backgroundScreenshotFenceRunning: false
+    property int backgroundScreenshotFenceFrame: -1
+    property bool assetImportRunning: false
+    property string assetImportCapability: ""
+    property string assetImportSession: ""
+    property string assetImportLabel: ""
+    property string propDraftId: ""
+    property string propDraftAnchorX: ""
+    property string propDraftAnchorY: ""
+    property string propDraftLayer: ""
     property int localMotionX: 5000
     property int localMotionY: 6200
-    property bool localWearingHat: false
+    property string localWornPropId: ""
+
+    function gateFrameTimingStart(sampleCount) {
+        if (sampleCount !== gateFrameTimingSampleTarget
+                || gateFrameTimingRunning)
+            return -1
+        gateFrameTimingFailure = ""
+        gateFrameTimingSamplesUs = []
+        gateFrameTimingStartFrame = -1
+        gateFrameTimingEndFrame = -1
+        gateFrameTimingStartElapsedUs = -1
+        gateFrameTimingElapsedTimeUs = 0
+        gateFrameTimingWarmupsRemaining = gateFrameTimingWarmupFrames
+        ++gateFrameTimingRequest
+        gateFrameTimingRunning = true
+        return gateFrameTimingRequest
+    }
 
     function parseParticipants(encoded) {
         try {
@@ -100,6 +184,129 @@ Item {
         } catch (error) {
             return []
         }
+    }
+
+    function parseAuthoringAssets(encoded) {
+        try {
+            var decoded = JSON.parse(encoded)
+            if (!decoded || decoded.version !== 1
+                    || !Array.isArray(decoded.assets)
+                    || decoded.count !== decoded.assets.length)
+                return []
+            return decoded.assets
+        } catch (error) {
+            return []
+        }
+    }
+
+    function parseActivePropAsset(encoded) {
+        try {
+            var decoded = JSON.parse(encoded)
+            if (!decoded || decoded.version !== 1
+                    || decoded.available !== true
+                    || !/^[a-z][a-z0-9_-]{0,63}$/.test(
+                        String(decoded.propId || ""))
+                    || !/^[0-9a-f]{64}$/.test(
+                        String(decoded.handle || ""))
+                    || String(decoded.contentSha256 || "")
+                        !== String(decoded.handle)
+                    || !Number.isInteger(decoded.width)
+                    || !Number.isInteger(decoded.height)
+                    || decoded.width <= 0 || decoded.height <= 0
+                    || !Number.isInteger(decoded.anchorX)
+                    || !Number.isInteger(decoded.anchorY)
+                    || decoded.anchorX < 0 || decoded.anchorY < 0
+                    || decoded.anchorX >= decoded.width
+                    || decoded.anchorY >= decoded.height
+                    || !/^[a-z][a-z0-9_-]{0,63}$/.test(
+                        String(decoded.layer || ""))) {
+                return {
+                    "version": 1,
+                    "available": false
+                }
+            }
+            return decoded
+        } catch (error) {
+            return {
+                "version": 1,
+                "available": false
+            }
+        }
+    }
+
+    function validAssetIdentifier(value) {
+        return /^[a-z][a-z0-9_-]{0,63}$/.test(
+            String(value).trim())
+    }
+
+    function parsedAssetAnchor(value) {
+        var encoded = String(value).trim()
+        if (!/^(0|[1-9][0-9]{0,9})$/.test(encoded))
+            return -1
+        var parsed = Number(encoded)
+        return Number.isSafeInteger(parsed) ? parsed : -1
+    }
+
+    function propDraftReady() {
+        return validAssetIdentifier(propDraftId)
+            && validAssetIdentifier(propDraftLayer)
+            && parsedAssetAnchor(propDraftAnchorX) >= 0
+            && parsedAssetAnchor(propDraftAnchorY) >= 0
+    }
+
+    function assetAuthoringEvidence(epoch) {
+        var published = 0
+        for (var assetIndex = 0;
+             assetIndex < authoringAssets.length; ++assetIndex) {
+            if (authoringAssets[assetIndex].reviewState === "approved"
+                    && authoringAssets[assetIndex].publicationState
+                        === "published"
+                    && String(
+                        authoringAssets[assetIndex].cid).length > 0)
+                ++published
+        }
+        var roomAssignments = {"atrium": "", "lounge": ""}
+        var propAssigned = false
+        try {
+            var state = JSON.parse(assetAuthoringState)
+            if (state && state.roomAssignments)
+                roomAssignments = state.roomAssignments
+            propAssigned = Boolean(state && state.propAssignment
+                                   && String(
+                                       state.propAssignment.handle).length
+                                      === 64)
+        } catch (error) {
+        }
+        return JSON.stringify({
+            "schema": "logos.palace.asset-authoring-render",
+            "version": 1,
+            "open": backgroundModerationOpen,
+            "cardCount": backgroundGrid.count,
+            "readyImageCount": backgroundReadyImageCount,
+            "publishedCount": published,
+            "atriumAssigned":
+                String(roomAssignments.atrium || "").length === 64,
+            "loungeAssigned":
+                String(roomAssignments.lounge || "").length === 64,
+            "propAssigned": propAssigned,
+            "fenceRequest": backgroundScreenshotFenceRequest,
+            "fenceState": backgroundScreenshotFenceRunning
+                ? "waiting"
+                : (backgroundScreenshotFenceRequest === 0
+                   ? "idle" : "complete"),
+            "fenceFrame": backgroundScreenshotFenceFrame,
+            "epoch": epoch
+        })
+    }
+
+    function gate3AssetScreenshotFenceStart() {
+        if (!backgroundModerationOpen
+                || backgroundScreenshotFenceRunning)
+            return -1
+        backgroundScreenshotFenceFrame = -1
+        ++backgroundScreenshotFenceRequest
+        backgroundScreenshotFenceRunning = true
+        return backgroundScreenshotFenceRequest
     }
 
     function parseConnectedPeerCount(encoded) {
@@ -239,9 +446,13 @@ Item {
         if (!ready || !backend)
             return rejectedNotReady()
         var selectedProp = String(propId)
+        if (!validAssetIdentifier(selectedProp)) {
+            invocationError = "rejected=prop-id-invalid"
+            ++invocationSequence
+            return invocationError
+        }
         return watchAction(backend.wearProp(selectedProp), function () {
-            if (selectedProp === "hat")
-                localWearingHat = true
+            localWornPropId = selectedProp
         })
     }
 
@@ -249,9 +460,14 @@ Item {
         if (!ready || !backend)
             return rejectedNotReady()
         var selectedProp = String(propId)
+        if (!validAssetIdentifier(selectedProp)) {
+            invocationError = "rejected=prop-id-invalid"
+            ++invocationSequence
+            return invocationError
+        }
         return watchAction(backend.removeProp(selectedProp), function () {
-            if (selectedProp === "hat")
-                localWearingHat = false
+            if (localWornPropId === selectedProp)
+                localWornPropId = ""
         })
     }
 
@@ -301,6 +517,268 @@ Item {
             return rejectedNotReady()
         return watchAction(
             backend.publicationStatus(String(handle)), null)
+    }
+
+    function beginAssetStage(label) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.beginAssetStage(String(label)),
+            null)
+    }
+
+    function appendAssetStageChunk(sessionId, sequence, base64Chunk) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.appendAssetStageChunk(
+                String(sessionId),
+                Math.round(Number(sequence)),
+                String(base64Chunk)),
+            null)
+    }
+
+    function commitAssetStage(sessionId) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.commitAssetStage(String(sessionId)),
+            null)
+    }
+
+    function cancelAssetStage(sessionId) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.cancelAssetStage(String(sessionId)),
+            null)
+    }
+
+    function reviewAsset(handle, decision) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.reviewAsset(
+                String(handle), String(decision)),
+            null)
+    }
+
+    function publishAsset(handle) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.publishAsset(String(handle)),
+            null)
+    }
+
+    function assignRoomBackground(roomId, handle) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.assignRoomBackground(
+                String(roomId), String(handle)),
+            null)
+    }
+
+    function assignPropAsset(propId, handle, anchorX, anchorY, layer) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.assignPropAsset(
+                String(propId),
+                String(handle),
+                Math.round(Number(anchorX)),
+                Math.round(Number(anchorY)),
+                String(layer)),
+            null)
+    }
+
+    function refreshAssetAuthoring() {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(backend.refreshAssetAuthoring(), null)
+    }
+
+    function reviewAndPublishAsset(handle) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        invocationError = ""
+        logos.watch(
+            backend.reviewAsset(String(handle), "approve"),
+            function (reviewReceipt) {
+                if (String(reviewReceipt).indexOf("rejected=") === 0) {
+                    invocationError = String(reviewReceipt)
+                    ++invocationSequence
+                    return
+                }
+                logos.watch(
+                    backend.publishAsset(String(handle)),
+                    function (publishReceipt) {
+                        if (String(publishReceipt)
+                                .indexOf("rejected=") === 0) {
+                            invocationError = String(publishReceipt)
+                            ++invocationSequence
+                            return
+                        }
+                        invocationError = ""
+                        ++invocationSequence
+                    },
+                    function (error) {
+                        invocationError =
+                            "rejected=ui-remote-call;" + String(error)
+                        ++invocationSequence
+                    })
+            },
+            function (error) {
+                invocationError =
+                    "rejected=ui-remote-call;" + String(error)
+                ++invocationSequence
+            })
+        return "pending"
+    }
+
+    function safeAssetStageLabel(value) {
+        var candidate = String(value || "")
+        // Thirty-two UTF-16 code units fit Core's 128-byte UTF-8 label bound.
+        // A display name is never authority, so use a generic local label when
+        // a bridge result is longer or contains a control character.
+        if (candidate.length === 0 || candidate.length > 32
+                || /[\u0000-\u001f\u007f]/.test(candidate))
+            return "selected-image.png"
+        return candidate
+    }
+
+    function resetAssetImport() {
+        if (assetImportCapability.length > 0
+                && typeof basecampFiles !== "undefined")
+            basecampFiles.release(assetImportCapability)
+        assetImportRunning = false
+        assetImportCapability = ""
+        assetImportSession = ""
+        assetImportLabel = ""
+    }
+
+    function abandonAssetImport() {
+        var session = assetImportSession
+        resetAssetImport()
+        if (session.length > 0 && backend)
+            backend.cancelAssetStage(session)
+    }
+
+    function failAssetImport(reason) {
+        var rejected = String(reason)
+        if (rejected.indexOf("rejected=") !== 0)
+            rejected = "rejected=asset-import;" + rejected
+        if (assetImportSession.length > 0 && backend) {
+            logos.watch(
+                backend.cancelAssetStage(assetImportSession),
+                function () {},
+                function () {})
+        }
+        invocationError = rejected
+        resetAssetImport()
+        ++invocationSequence
+    }
+
+    function commitSelectedAsset() {
+        logos.watch(
+            backend.commitAssetStage(assetImportSession),
+            function (receipt) {
+                if (String(receipt).indexOf("rejected=") === 0) {
+                    failAssetImport(receipt)
+                    return
+                }
+                invocationError = ""
+                resetAssetImport()
+                ++invocationSequence
+            },
+            function (error) {
+                failAssetImport("remote-commit;" + String(error))
+            })
+    }
+
+    function appendSelectedAssetChunk() {
+        var chunk = basecampFiles.readNextChunk(
+            assetImportCapability)
+        if (!chunk || chunk.ok !== true) {
+            failAssetImport(
+                "selected-file-read;"
+                + String(chunk && chunk.code
+                         ? chunk.code : "invalid-result"))
+            return
+        }
+        var terminal = chunk.eof === true
+        logos.watch(
+            backend.appendAssetStageChunk(
+                assetImportSession,
+                Number(chunk.sequence),
+                String(chunk.base64)),
+            function (receipt) {
+                if (String(receipt).indexOf("rejected=") === 0) {
+                    failAssetImport(receipt)
+                    return
+                }
+                if (terminal) {
+                    // Core already owns the final decoded bytes. Revoke the
+                    // host snapshot before the asynchronous commit round trip.
+                    if (assetImportCapability.length > 0
+                            && typeof basecampFiles !== "undefined")
+                        basecampFiles.release(assetImportCapability)
+                    assetImportCapability = ""
+                    commitSelectedAsset()
+                } else
+                    appendSelectedAssetChunk()
+            },
+            function (error) {
+                failAssetImport("remote-append;" + String(error))
+            })
+    }
+
+    function selectAssetFile() {
+        if (!ready || !backend || assetImportRunning)
+            return rejectedNotReady()
+        if (typeof basecampFiles === "undefined") {
+            invocationError = "rejected=selected-file-bridge-unavailable"
+            ++invocationSequence
+            return invocationError
+        }
+        var selected = basecampFiles.openFile(
+            ["PNG images (*.png)"], 10 * 1024 * 1024)
+        if (!selected || selected.ok !== true) {
+            if (selected && (selected.cancelled === true
+                             || selected.code === "CANCELLED"))
+                return "cancelled"
+            invocationError =
+                "rejected=file-selection;"
+                + String(selected && selected.code
+                         ? selected.code : "invalid-result")
+            ++invocationSequence
+            return invocationError
+        }
+
+        assetImportRunning = true
+        assetImportCapability = String(selected.handle)
+        assetImportLabel = safeAssetStageLabel(selected.displayName)
+        invocationError = ""
+        logos.watch(
+            backend.beginAssetStage(assetImportLabel),
+            function (receipt) {
+                if (String(receipt).indexOf("rejected=") === 0) {
+                    failAssetImport(receipt)
+                    return
+                }
+                assetImportSession =
+                    encodedStatusValue(String(receipt), "session")
+                if (assetImportSession.length !== 32) {
+                    failAssetImport("invalid-session-receipt")
+                    return
+                }
+                appendSelectedAssetChunk()
+            },
+            function (error) {
+                failAssetImport("remote-begin;" + String(error))
+            })
+        return "pending"
     }
 
     function gate3PublishBundle() {
@@ -478,6 +956,81 @@ Item {
     Component.onCompleted: {
         root.ready = root.backend !== null
             && logos.isViewModuleReady("logos_palace_ui")
+    }
+
+    FrameAnimation {
+        id: gateFrameTimingAnimation
+        running: root.gateFrameTimingRunning
+        onTriggered: {
+            if (root.gateFrameTimingWarmupsRemaining > 0) {
+                --root.gateFrameTimingWarmupsRemaining
+                if (root.gateFrameTimingWarmupsRemaining === 0) {
+                    root.gateFrameTimingStartFrame = currentFrame
+                    root.gateFrameTimingStartElapsedUs =
+                        Math.round(elapsedTime * 1000000)
+                }
+                return
+            }
+            var sampleUs = Math.round(frameTime * 1000000)
+            if (!isFinite(sampleUs)
+                    || sampleUs <= 0
+                    || sampleUs > 30000000) {
+                root.gateFrameTimingFailure = "invalid-frame-interval"
+                root.gateFrameTimingRunning = false
+                return
+            }
+            var nextCount = root.gateFrameTimingSamplesUs.length + 1
+            if (currentFrame
+                    !== root.gateFrameTimingStartFrame + nextCount) {
+                root.gateFrameTimingFailure = "invalid-frame-window"
+                root.gateFrameTimingRunning = false
+                return
+            }
+            var samples =
+                root.gateFrameTimingSamplesUs.concat([sampleUs])
+            if (nextCount === root.gateFrameTimingSampleTarget) {
+                var elapsedUs = Math.round(elapsedTime * 1000000)
+                    - root.gateFrameTimingStartElapsedUs
+                var summedUs = 0
+                for (var index = 0; index < samples.length; ++index)
+                    summedUs += samples[index]
+                if (elapsedUs <= 0
+                        || elapsedUs > 30000000
+                        || Math.abs(summedUs - elapsedUs)
+                           > Math.ceil(
+                               root.gateFrameTimingSampleTarget / 2)) {
+                    root.gateFrameTimingFailure = "invalid-frame-window"
+                    root.gateFrameTimingRunning = false
+                    return
+                }
+                root.gateFrameTimingEndFrame = currentFrame
+                root.gateFrameTimingElapsedTimeUs = elapsedUs
+            }
+            root.gateFrameTimingSamplesUs = samples
+            if (nextCount === root.gateFrameTimingSampleTarget)
+                root.gateFrameTimingRunning = false
+        }
+    }
+
+    Timer {
+        interval: 30000
+        repeat: false
+        running: root.gateFrameTimingRunning
+        onTriggered: {
+            root.gateFrameTimingFailure = "capture-timeout"
+            root.gateFrameTimingRunning = false
+        }
+    }
+
+    Component.onDestruction: root.abandonAssetImport()
+
+    FrameAnimation {
+        running: root.backgroundScreenshotFenceRunning
+        onTriggered: {
+            root.backgroundScreenshotFenceFrame = currentFrame
+            root.backgroundScreenshotFenceRunning = false
+            ++root.backgroundPreviewEpoch
+        }
     }
 
     Rectangle {
@@ -659,35 +1212,96 @@ Item {
                         }
 
                         Item {
+                            id: wornProp
                             objectName: "palaceWornProp"
                             property string participantUserId:
                                 participantDelegate.participantUserId
-                            property string propId: "hat"
-                            anchors.horizontalCenter: remoteAvatar.horizontalCenter
-                            anchors.bottom: remoteAvatar.top
-                            anchors.bottomMargin: -8
-                            width: 54
-                            height: 29
+                            property string propId:
+                                root.activePropAsset.available === true
+                                ? String(root.activePropAsset.propId)
+                                : (participantDelegate.participantPropList
+                                   .length > 0
+                                   ? String(participantDelegate
+                                            .participantPropList[0])
+                                   : "")
+                            property string assetHandle:
+                                root.activePropAsset.available === true
+                                ? String(root.activePropAsset.handle) : ""
+                            property bool assetAvailable:
+                                root.activePropAsset.available === true
+                                && assetHandle.length === 64
+                            property real sourceWidth: assetAvailable
+                                ? Number(root.activePropAsset.width) : 42
+                            property real sourceHeight: assetAvailable
+                                ? Number(root.activePropAsset.height) : 18
+                            property real renderScale: assetAvailable
+                                ? Math.min(
+                                    1,
+                                    72 / Math.max(1, sourceWidth),
+                                    72 / Math.max(1, sourceHeight))
+                                : 1
+                            property real targetX:
+                                String(root.activePropAsset.layer) === "hand"
+                                ? remoteAvatar.x + remoteAvatar.width
+                                : (String(root.activePropAsset.layer) === "back"
+                                   ? remoteAvatar.x
+                                   : remoteAvatar.x
+                                     + remoteAvatar.width / 2)
+                            property real targetY:
+                                String(root.activePropAsset.layer) === "head"
+                                ? remoteAvatar.y + 8
+                                : (String(root.activePropAsset.layer) === "body"
+                                   ? remoteAvatar.y
+                                     + remoteAvatar.height / 2
+                                   : remoteAvatar.y
+                                     + remoteAvatar.height * 0.62)
+                            property string renderState:
+                                assetAvailable ? "verified-image"
+                                               : "asset-pending"
+                            x: assetAvailable
+                                ? targetX
+                                  - Number(root.activePropAsset.anchorX)
+                                    * renderScale
+                                : remoteAvatar.x
+                                  + (remoteAvatar.width - width) / 2
+                            y: assetAvailable
+                                ? targetY
+                                  - Number(root.activePropAsset.anchorY)
+                                    * renderScale
+                                : remoteAvatar.y - height + 8
+                            width: sourceWidth * renderScale
+                            height: sourceHeight * renderScale
                             visible: participantDelegate.participantPropList
-                                .indexOf("hat") !== -1
+                                .indexOf(propId) !== -1
+                            z: assetAvailable
+                               && String(root.activePropAsset.layer) === "back"
+                                ? -1 : 1
+
+                            Image {
+                                anchors.fill: parent
+                                visible: wornProp.assetAvailable
+                                source: visible
+                                    ? "image://basecamp-verified/"
+                                      + wornProp.assetHandle
+                                    : ""
+                                fillMode: Image.Stretch
+                                asynchronous: false
+                                smooth: true
+                            }
 
                             Rectangle {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                anchors.top: parent.top
-                                width: 34
-                                height: 19
-                                radius: 3
-                                color: "#8b4f2f"
-                                border.color: "#f6cc78"
-                            }
-                            Rectangle {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                anchors.bottom: parent.bottom
-                                width: 54
-                                height: 8
+                                anchors.fill: parent
+                                visible: !wornProp.assetAvailable
                                 radius: 4
-                                color: "#8b4f2f"
-                                border.color: "#f6cc78"
+                                color: "#3b342cdd"
+                                border.color: "#f3c36b"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "asset pending"
+                                    color: "#fff2cf"
+                                    font.pixelSize: 7
+                                }
                             }
                         }
 
@@ -866,16 +1480,24 @@ Item {
                         spacing: 5
 
                         Button {
-                            objectName: "palaceWearHat"
-                            text: "Wear hat"
-                            enabled: root.ready && !root.localWearingHat
-                            onClicked: root.gate2Wear("hat")
+                            objectName: "palaceWearAssignedProp"
+                            text: "Wear assigned prop"
+                            visible: root.availablePropId.length > 0
+                            enabled: root.ready
+                                && root.localWornPropId
+                                    !== root.availablePropId
+                            onClicked: root.gate2Wear(
+                                root.availablePropId)
                         }
                         Button {
-                            objectName: "palaceRemoveHat"
-                            text: "Remove hat"
-                            enabled: root.ready && root.localWearingHat
-                            onClicked: root.gate2Remove("hat")
+                            objectName: "palaceRemoveAssignedProp"
+                            text: "Remove assigned prop"
+                            visible: root.availablePropId.length > 0
+                            enabled: root.ready
+                                && root.localWornPropId
+                                    === root.availablePropId
+                            onClicked: root.gate2Remove(
+                                root.availablePropId)
                         }
                     }
                 }
@@ -915,7 +1537,7 @@ Item {
             anchors.rightMargin: 34
             anchors.topMargin: 190
             width: 230
-            height: 214
+            height: 250
             radius: 8
             color: "#211a14ee"
             border.color: "#846b45"
@@ -973,12 +1595,23 @@ Item {
                 }
 
                 Button {
-                    objectName: "palaceBanHatButton"
-                    width: 104
+                    objectName: "palaceBanAssignedPropButton"
+                    width: 148
                     height: 28
-                    text: "Ban hat prop"
+                    text: "Ban assigned prop"
+                    visible: root.availablePropId.length > 0
                     enabled: root.ready
-                    onClicked: root.gate4BanProp("hat")
+                    onClicked: root.gate4BanProp(
+                        root.availablePropId)
+                }
+
+                Button {
+                    objectName: "palaceBackgroundModerationButton"
+                    width: 154
+                    height: 28
+                    text: "Palace assets"
+                    enabled: root.ready
+                    onClicked: root.backgroundModerationOpen = true
                 }
 
                 Text {
@@ -999,6 +1632,355 @@ Item {
                         : (root.encodedStatusValue(
                                root.moderationState, "state") === "rejected"
                            ? "#ff9c8f" : "#f3c36b")
+                    elide: Text.ElideRight
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        Rectangle {
+            id: backgroundModeration
+            objectName: "palaceBackgroundModeration"
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 80, 930)
+            height: Math.min(parent.height - 80, 620)
+            radius: 12
+            color: "#f518130f"
+            border.color: "#d5b77a"
+            border.width: 2
+            visible: root.backgroundModerationOpen
+            z: 50
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+
+                        Text {
+                            text: "Authoring · Palace assets"
+                            color: "#fff2cf"
+                            font.bold: true
+                            font.pixelSize: 18
+                        }
+                        Text {
+                            text: root.authoringAssets.length
+                                + " staged PNG"
+                                + (root.authoringAssets.length === 1
+                                   ? "" : "s")
+                                + " · approve, upload, then assign"
+                            color: "#c9b78e"
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    Button {
+                        objectName: "palaceAssetSelectFile"
+                        text: root.assetImportRunning
+                            ? "Importing…" : "Add PNG…"
+                        enabled: root.ready && !root.assetImportRunning
+                        onClicked: root.selectAssetFile()
+                    }
+
+                    Button {
+                        objectName: "palaceBackgroundModerationClose"
+                        text: "Close"
+                        onClicked: root.backgroundModerationOpen = false
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        text: "Prop placement"
+                        color: "#c9b78e"
+                        font.pixelSize: 11
+                    }
+
+                    TextField {
+                        objectName: "palaceAssetPropId"
+                        Layout.preferredWidth: 110
+                        placeholderText: "prop ID"
+                        text: root.propDraftId
+                        onTextEdited: root.propDraftId = text
+                    }
+
+                    TextField {
+                        objectName: "palaceAssetPropAnchorX"
+                        Layout.preferredWidth: 76
+                        placeholderText: "anchor X"
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        text: root.propDraftAnchorX
+                        onTextEdited: root.propDraftAnchorX = text
+                    }
+
+                    TextField {
+                        objectName: "palaceAssetPropAnchorY"
+                        Layout.preferredWidth: 76
+                        placeholderText: "anchor Y"
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        text: root.propDraftAnchorY
+                        onTextEdited: root.propDraftAnchorY = text
+                    }
+
+                    TextField {
+                        objectName: "palaceAssetPropLayer"
+                        Layout.preferredWidth: 92
+                        placeholderText: "layer"
+                        text: root.propDraftLayer
+                        onTextEdited: root.propDraftLayer = text
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.propDraftReady()
+                            ? "Ready to assign"
+                            : "Enter metadata before assigning a prop"
+                        color: root.propDraftReady()
+                            ? "#a7e3a0" : "#8f826a"
+                        elide: Text.ElideRight
+                        font.pixelSize: 10
+                    }
+                }
+
+                GridView {
+                    id: backgroundGrid
+                    objectName: "palaceBackgroundGrid"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    cellWidth: Math.max(210, Math.floor(width / 4))
+                    cellHeight: 252
+                    model: root.authoringAssets
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    delegate: Rectangle {
+                        id: backgroundCard
+                        required property var modelData
+                        property var asset: modelData || ({})
+                        property string handle:
+                            String(asset.handle || "")
+                        property string publicationState:
+                            String(asset.publicationState
+                                   || "not-uploaded")
+                        property var assignedRooms:
+                            Array.isArray(asset.roomAssignments)
+                            ? asset.roomAssignments : []
+                        property var assignedProps:
+                            Array.isArray(asset.propAssignments)
+                            ? asset.propAssignments : []
+                        property bool previewCounted: false
+                        width: backgroundGrid.cellWidth - 10
+                        height: backgroundGrid.cellHeight - 10
+                        radius: 8
+                        color: "#292018"
+                        border.color: publicationState === "published"
+                            ? "#7ecb78" : "#62513b"
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 5
+
+                            Image {
+                                id: backgroundPreview
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 112
+                                source: String(backgroundCard.asset.handle
+                                               || "").length === 64
+                                    ? "image://basecamp-verified/"
+                                      + String(backgroundCard.asset.handle)
+                                    : ""
+                                fillMode: Image.PreserveAspectCrop
+                                smooth: true
+                                asynchronous: false
+                                onStatusChanged: {
+                                    if (status === Image.Ready
+                                            && !backgroundCard
+                                                .previewCounted) {
+                                        backgroundCard.previewCounted = true
+                                        ++root.backgroundReadyImageCount
+                                    } else if (status !== Image.Ready
+                                               && backgroundCard
+                                                   .previewCounted) {
+                                        backgroundCard.previewCounted = false
+                                        --root.backgroundReadyImageCount
+                                    }
+                                    ++root.backgroundPreviewEpoch
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: String(backgroundCard.asset.label
+                                                 || backgroundCard.handle)
+                                    color: "#fff2cf"
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                    font.pixelSize: 12
+                                }
+
+                                Text {
+                                    visible:
+                                        backgroundCard.assignedRooms.length > 0
+                                        || backgroundCard.assignedProps.length
+                                           > 0
+                                    text: backgroundCard.assignedRooms
+                                        .concat(backgroundCard.assignedProps)
+                                        .join(" · ").toUpperCase()
+                                    color: "#a7e3a0"
+                                    font.bold: true
+                                    font.pixelSize: 9
+                                }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: Number(backgroundCard.asset.width)
+                                    + "×" + Number(backgroundCard.asset.height)
+                                    + " · " + String(
+                                        backgroundCard.asset.reviewState)
+                                    + " · "
+                                    + backgroundCard.publicationState
+                                color: "#c9b78e"
+                                elide: Text.ElideRight
+                                font.pixelSize: 10
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: backgroundCard.publicationState
+                                       === "published"
+                                       ? "CID "
+                                         + String(
+                                             backgroundCard.asset.cid
+                                             || "").slice(0, 14)
+                                       : "SHA "
+                                         + backgroundCard.handle.slice(0, 12)
+                                color: "#8f826a"
+                                elide: Text.ElideRight
+                                font.pixelSize: 9
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Button {
+                                    objectName:
+                                        "palaceAssetApprove-"
+                                        + backgroundCard.handle
+                                    Layout.fillWidth: true
+                                    text: backgroundCard.publicationState
+                                            === "published"
+                                        ? "Uploaded" : "Approve & upload"
+                                    enabled: root.ready
+                                        && backgroundCard.publicationState
+                                            !== "published"
+                                        && backgroundCard.handle.length
+                                            > 0
+                                    onClicked:
+                                        root.reviewAndPublishAsset(
+                                            backgroundCard.handle)
+                                }
+
+                                Button {
+                                    objectName:
+                                        "palaceAssetReject-"
+                                        + backgroundCard.handle
+                                    text: "Reject"
+                                    enabled: root.ready
+                                        && backgroundCard.publicationState
+                                            !== "published"
+                                    onClicked:
+                                        root.reviewAsset(
+                                            backgroundCard.handle,
+                                            "reject")
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Button {
+                                    objectName:
+                                        "palaceBackgroundAssignAtrium-"
+                                        + backgroundCard.handle
+                                    Layout.fillWidth: true
+                                    text: "Set Atrium"
+                                    enabled: root.ready
+                                        && backgroundCard.publicationState
+                                            === "published"
+                                        && backgroundCard.handle.length === 64
+                                    onClicked:
+                                        root.assignRoomBackground(
+                                            "atrium",
+                                            backgroundCard.handle)
+                                }
+
+                                Button {
+                                    objectName:
+                                        "palaceAssetAssignProp-"
+                                        + backgroundCard.handle
+                                    Layout.fillWidth: true
+                                    text: "Set prop"
+                                    enabled: root.ready
+                                        && backgroundCard.publicationState
+                                            === "published"
+                                        && backgroundCard.handle.length === 64
+                                        && root.propDraftReady()
+                                    onClicked:
+                                        root.assignPropAsset(
+                                            root.propDraftId.trim(),
+                                            backgroundCard.handle,
+                                            root.parsedAssetAnchor(
+                                                root.propDraftAnchorX),
+                                            root.parsedAssetAnchor(
+                                                root.propDraftAnchorY),
+                                            root.propDraftLayer.trim())
+                                }
+
+                                Button {
+                                    objectName:
+                                        "palaceBackgroundAssignLounge-"
+                                        + backgroundCard.handle
+                                    Layout.fillWidth: true
+                                    text: "Set Lounge"
+                                    enabled: root.ready
+                                        && backgroundCard.publicationState
+                                            === "published"
+                                        && backgroundCard.handle.length === 64
+                                    onClicked:
+                                        root.assignRoomBackground(
+                                            "lounge",
+                                            backgroundCard.handle)
+                                }
+                            }
+                        }
+                        Component.onDestruction: {
+                            if (previewCounted)
+                                --root.backgroundReadyImageCount
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.lastActionReceipt.length > 0
+                        ? root.lastActionReceipt
+                        : "Draft assignment becomes authority when Palace creation finalizes."
+                    color: root.lastActionReceipt.indexOf("rejected=") === 0
+                        ? "#ff9c8f" : "#a7e3a0"
                     elide: Text.ElideRight
                     font.pixelSize: 10
                 }

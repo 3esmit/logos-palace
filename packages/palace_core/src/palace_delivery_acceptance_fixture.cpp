@@ -115,7 +115,7 @@ std::int64_t deliveryAcceptanceRoomEpoch(const std::string& roomId)
 
 std::map<std::string, std::string> deliveryAcceptanceAllowedProps()
 {
-    return {{"hat", "fixture-cid-hat"}};
+    return {};
 }
 
 } // namespace palace

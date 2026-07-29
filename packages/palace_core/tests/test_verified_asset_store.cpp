@@ -10,6 +10,8 @@
 #include "palace_sha256.h"
 #include "palace_verified_asset_store.h"
 
+#include <filesystem>
+
 namespace {
 
 std::string encodedPng()
@@ -101,4 +103,40 @@ LOGOS_TEST(verified_asset_store_resolves_only_untampered_digest_handles) {
     LOGOS_ASSERT_EQ(output.write("tampered"), static_cast<qint64>(8));
     output.close();
     LOGOS_ASSERT_FALSE(store.verifiedPngPath(staged.handle).has_value());
+}
+
+LOGOS_TEST(verified_asset_store_rejects_existing_same_content_symlink) {
+    QTemporaryDir temporary;
+    LOGOS_ASSERT_TRUE(temporary.isValid());
+    const QString instanceRoot =
+        temporary.path() + QStringLiteral("/instance");
+    LOGOS_ASSERT_TRUE(QDir().mkpath(instanceRoot));
+
+    palace::VerifiedAssetStore store(instanceRoot.toStdString());
+    const std::string encoded = encodedPng();
+    const palace::AssetRefV1 reference = assetRef(encoded);
+    const palace::VerifiedAsset staged =
+        store.stagePngDerivative(reference, encoded);
+    LOGOS_ASSERT_TRUE(staged.accepted);
+
+    const QString destination =
+        QString::fromStdString(
+            store.directory() + "/" + staged.handle + ".png");
+    const QString target =
+        QString::fromStdString(
+            store.directory() + "/same-content.png");
+    LOGOS_ASSERT_TRUE(QFile::rename(destination, target));
+    std::error_code error;
+    std::filesystem::create_symlink(
+        target.toStdString(), destination.toStdString(), error);
+    LOGOS_ASSERT_FALSE(static_cast<bool>(error));
+
+    const palace::VerifiedAsset rejected =
+        store.stagePngDerivative(reference, encoded);
+    LOGOS_ASSERT_FALSE(rejected.accepted);
+    LOGOS_ASSERT_EQ(
+        rejected.reason,
+        std::string("asset-destination-symlink"));
+    LOGOS_ASSERT_FALSE(
+        store.verifiedPngPath(staged.handle).has_value());
 }

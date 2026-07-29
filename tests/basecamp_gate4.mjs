@@ -73,6 +73,12 @@ import {
   timingBoundaryNames,
   validateObservationTimingEnvelope,
 } from "./basecamp_lez_timing.mjs";
+import {
+  validatePalaceFrameTimingMeasurement,
+} from "./basecamp_frame_timing.mjs";
+import {
+  canonicalStorageCidSha256 as cidSha256,
+} from "./basecamp_storage_cid.mjs";
 
 const [
   basecampArgument,
@@ -191,32 +197,54 @@ const releaseProgramId = palaceRelease.programIdHex;
 const releaseRootId = palaceRelease.rootAccountIdHex;
 const approvedLezModuleRevision =
   "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f";
-const expectedObjectIds = [
-  "background-atrium",
-  "background-lounge",
-  "prop-hat-image",
-  "prop-hat-metadata",
-  "room-atrium-metadata",
-  "room-lounge-metadata",
-  "script-door",
-  "prop-hat",
-  "room-atrium",
-  "room-lounge",
-  "palace-1",
-];
-const expectedObjectTypes = [
-  "background_png",
-  "background_png",
-  "prop_png",
-  "prop_metadata",
-  "room_metadata",
-  "room_metadata",
-  "script_bundle",
-  "prop_manifest",
-  "room_manifest",
-  "room_manifest",
-  "palace_manifest",
-];
+function expectedGraphObjectContract(propId) {
+  if (
+    propId !== null
+    && !/^[a-z][a-z0-9_-]{0,63}$/.test(propId)
+  ) {
+    throw new Error("active prop ID cannot form graph object IDs");
+  }
+  return [
+    ["background-atrium", "background_png"],
+    ["background-lounge", "background_png"],
+    ...(propId === null
+      ? []
+      : [
+          [`prop-${propId}-image`, "prop_png"],
+          [`prop-${propId}-metadata`, "prop_metadata"],
+        ]),
+    ["room-atrium-metadata", "room_metadata"],
+    ["room-lounge-metadata", "room_metadata"],
+    ["script-door", "script_bundle"],
+    ...(propId === null
+      ? []
+      : [[`prop-${propId}`, "prop_manifest"]]),
+    ["room-atrium", "room_manifest"],
+    ["room-lounge", "room_manifest"],
+    ["palace-1", "palace_manifest"],
+  ];
+}
+
+function expectedAssetGraphTargets(propId) {
+  return [
+    {
+      kind: "room-background",
+      targetId: "atrium",
+      objectId: "background-atrium",
+    },
+    {
+      kind: "room-background",
+      targetId: "lounge",
+      objectId: "background-lounge",
+    },
+    ...(propId === null
+      ? []
+      : [{
+          kind: "prop-image",
+          objectId: `prop-${propId}-image`,
+        }]),
+  ];
+}
 const deliveryNodeKeys = {
   a: stableId("delivery-node-key/a"),
   b: stableId("delivery-node-key/b"),
@@ -229,7 +257,7 @@ const screenshotSpecs = {
   gate4Convergence: {
     file: "gate4-a-three-user-atrium-converged.png",
     stage: "gate4-delivery-convergence",
-    state: "three-user-atrium-with-approved-prop",
+    state: "three-user-atrium-converged",
     label: "a",
   },
   gate4StorageDegraded: {
@@ -241,7 +269,7 @@ const screenshotSpecs = {
   gate4Moderation: {
     file: "gate4-b-atrium-after-moderation.png",
     stage: "gate4-moderation",
-    state: "atrium-after-human-user-and-prop-bans",
+    state: "atrium-after-human-moderation",
     label: "b",
   },
   gate5PreviewA: {
@@ -1114,6 +1142,578 @@ function validateGate3ReleasePreflight(evidence, live) {
   };
 }
 
+function exactObjectKeys(value, keys) {
+  return (
+    value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === [...keys].sort().join(",")
+  );
+}
+
+function validElapsedEvidence(value, expectedReceipt) {
+  return (
+    exactObjectKeys(value, ["receipt", "elapsedMs"])
+    && expectedReceipt(value.receipt)
+    && Number.isSafeInteger(value.elapsedMs)
+    && value.elapsedMs >= 0
+    && value.elapsedMs <= 180_000
+  );
+}
+
+function parseActivePropProjection(
+  value,
+  description,
+  expectedAvailable = true,
+) {
+  let projection;
+  try {
+    projection = typeof value === "string"
+      ? JSON.parse(value)
+      : value;
+  } catch {
+    throw new Error(`${description} is not JSON`);
+  }
+  if (!expectedAvailable) {
+    if (
+      !exactObjectKeys(projection, ["version", "available"])
+      || projection.version !== 1
+      || projection.available !== false
+    ) {
+      throw new Error(`${description} is invalid`);
+    }
+    return projection;
+  }
+  if (
+    !exactObjectKeys(
+      projection,
+      [
+        "version",
+        "available",
+        "propId",
+        "handle",
+        "contentSha256",
+        "width",
+        "height",
+        "anchorX",
+        "anchorY",
+        "layer",
+      ],
+    )
+    || projection.version !== 1
+    || projection.available !== true
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(projection.propId)
+    || !isHex64(projection.handle)
+    || projection.contentSha256 !== projection.handle
+    || !Number.isSafeInteger(projection.width)
+    || projection.width <= 0
+    || !Number.isSafeInteger(projection.height)
+    || projection.height <= 0
+    || !Number.isSafeInteger(projection.anchorX)
+    || projection.anchorX < 0
+    || !Number.isSafeInteger(projection.anchorY)
+    || projection.anchorY < 0
+    || !["head", "body", "hand", "back"].includes(projection.layer)
+  ) {
+    throw new Error(`${description} is invalid`);
+  }
+  return projection;
+}
+
+function validateGate3AssetAuthoring(gate3, catalogById) {
+  const authoring = gate3?.assetAuthoring;
+  if (
+    !exactObjectKeys(
+      authoring,
+      [
+        "version",
+        "phase",
+        "inputManifest",
+        "selectedAssetCount",
+        "propStory",
+        "boundary",
+        "guardedBeforeApproval",
+        "assets",
+        "graphBindings",
+        "activePropProjection",
+        "elapsedMs",
+        "catalogCount",
+        "assignments",
+      ],
+    )
+    || authoring.version !== 1
+    || authoring.phase !== "complete"
+    || !exactObjectKeys(
+      authoring.inputManifest,
+      ["schema", "version", "sha256", "assetCount"],
+    )
+    || authoring.inputManifest.schema
+      !== "logos.palace.e2e-asset-inputs"
+    || authoring.inputManifest.version !== 1
+    || !isHex64(authoring.inputManifest.sha256)
+    || !Number.isSafeInteger(authoring.inputManifest.assetCount)
+    || authoring.inputManifest.assetCount < 2
+    || authoring.inputManifest.assetCount > 128
+    || authoring.selectedAssetCount !== authoring.inputManifest.assetCount
+    || !["requested", "not-requested"].includes(authoring.propStory)
+    || authoring.boundary
+      !== "operator-selected bounded PNG bytes -> verified handle -> approval"
+        + " -> digest-bound Storage CID -> manifest assignment"
+    || !validElapsedEvidence(
+      authoring.guardedBeforeApproval,
+      (receipt) => receipt === "rejected=asset-not-approved",
+    )
+    || !Number.isSafeInteger(authoring.elapsedMs)
+    || authoring.elapsedMs < 0
+    || authoring.elapsedMs > 30 * 60_000
+    || !Number.isSafeInteger(authoring.catalogCount)
+    || authoring.catalogCount < authoring.selectedAssetCount
+    || !exactObjectKeys(authoring.assignments, ["rooms", "prop"])
+    || !exactObjectKeys(authoring.assignments.rooms, ["atrium", "lounge"])
+    || Object.values(authoring.assignments.rooms).some(
+      (handle) => !isHex64(handle),
+    )
+    || (
+      authoring.assignments.prop !== null
+      && (
+        !exactObjectKeys(
+          authoring.assignments.prop,
+          ["propId", "handle", "anchorX", "anchorY", "layer"],
+        )
+        || !isHex64(authoring.assignments.prop.handle)
+        || !/^[a-z][a-z0-9_-]{0,63}$/.test(
+          authoring.assignments.prop.propId,
+        )
+        || !Number.isSafeInteger(authoring.assignments.prop.anchorX)
+        || authoring.assignments.prop.anchorX < 0
+        || !Number.isSafeInteger(authoring.assignments.prop.anchorY)
+        || authoring.assignments.prop.anchorY < 0
+        || !["head", "body", "hand", "back"].includes(
+          authoring.assignments.prop.layer,
+        )
+      )
+    )
+    || !Array.isArray(authoring.assets)
+    || authoring.assets.length !== authoring.selectedAssetCount
+  ) {
+    throw new Error("Gate 3 asset authoring envelope is invalid");
+  }
+  const assetGraphTargets = expectedAssetGraphTargets(
+    authoring.assignments.prop?.propId ?? null,
+  );
+
+  const byAssetId = {};
+  for (const actual of authoring.assets) {
+    const baseKeys = [
+      "assetId",
+      "label",
+      "file",
+      "handle",
+      "width",
+      "height",
+      "byteLength",
+      "role",
+      "chunkBytes",
+      "chunkCount",
+      "begin",
+      "appends",
+      "commit",
+      "review",
+      "publication",
+      "cid",
+    ];
+    const expectedKeys = !Object.hasOwn(actual, "target")
+      ? baseKeys
+      : [...baseKeys, "target", "assignment"];
+    const beginFields = statusFields(actual.begin?.receipt);
+    const commitReceipt =
+      `ok;handle=${actual.handle};width=${actual.width};`
+      + `height=${actual.height};bytes=${actual.byteLength}`;
+    if (
+      !exactObjectKeys(actual, expectedKeys)
+      || typeof actual.assetId !== "string"
+      || !/^[a-z][a-z0-9_-]{0,63}$/.test(actual.assetId)
+      || actual.label !== actual.assetId
+      || typeof actual.file !== "string"
+      || !/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(actual.file)
+      || !isHex64(actual.handle)
+      || !Number.isSafeInteger(actual.width)
+      || actual.width <= 0
+      || !Number.isSafeInteger(actual.height)
+      || actual.height <= 0
+      || !Number.isSafeInteger(actual.byteLength)
+      || actual.byteLength <= 0
+      || actual.byteLength > 10 * 1024 * 1024
+      || !["room-background", "prop-image"].includes(actual.role)
+      || (
+        Object.hasOwn(actual, "target")
+        && (
+          !actual.target
+          || actual.target.kind !== actual.role
+          || (
+            actual.role === "room-background"
+            && (
+              !exactObjectKeys(actual.target, ["kind", "roomId"])
+              || !["atrium", "lounge"].includes(actual.target.roomId)
+            )
+          )
+          || (
+            actual.role === "prop-image"
+            && (
+              !exactObjectKeys(
+                actual.target,
+                ["kind", "propId", "anchorX", "anchorY", "layer"],
+              )
+              || !/^[a-z][a-z0-9_-]{0,63}$/.test(actual.target.propId)
+              || !Number.isSafeInteger(actual.target.anchorX)
+              || actual.target.anchorX < 0
+              || !Number.isSafeInteger(actual.target.anchorY)
+              || actual.target.anchorY < 0
+              || !["head", "body", "hand", "back"].includes(
+                actual.target.layer,
+              )
+            )
+          )
+        )
+      )
+      || actual.chunkBytes !== 32 * 1024
+      || !Number.isSafeInteger(actual.chunkCount)
+      || actual.chunkCount <= 0
+      || !validElapsedEvidence(
+        actual.begin,
+        (receipt) => receipt.startsWith("ok;session="),
+      )
+      || !/^[0-9a-f]{32}$/.test(beginFields.session)
+      || beginFields.next !== "0"
+      || beginFields.maxChunkBytes !== String(32 * 1024)
+      || beginFields.maxTotalBytes !== String(10 * 1024 * 1024)
+      || !Array.isArray(actual.appends)
+      || actual.appends.length !== actual.chunkCount
+      || !validElapsedEvidence(
+        actual.commit,
+        (receipt) => receipt === commitReceipt,
+      )
+      || !validElapsedEvidence(
+        actual.review,
+        (receipt) =>
+          receipt === `ok;handle=${actual.handle};review=approved`,
+      )
+      || !exactObjectKeys(
+        actual.publication,
+        ["dispatched", "completed"],
+      )
+      || !validElapsedEvidence(
+        actual.publication.dispatched,
+        (receipt) => receipt === "ok;asset=publishing",
+      )
+      || !validElapsedEvidence(
+        actual.publication.completed,
+        (receipt) => receipt === `published;cid=${actual.cid}`,
+      )
+      || cidSha256(actual.cid) !== actual.handle
+    ) {
+      throw new Error(
+        `Gate 3 asset authoring fixture is invalid: ${actual?.assetId}`,
+      );
+    }
+    let appendedBytes = 0;
+    for (let index = 0; index < actual.appends.length; index += 1) {
+      const append = actual.appends[index];
+      appendedBytes += append?.byteLength ?? 0;
+      if (
+        !exactObjectKeys(
+          append,
+          ["sequence", "byteLength", "receipt", "elapsedMs"],
+        )
+        || append.sequence !== index
+        || !Number.isSafeInteger(append.byteLength)
+        || append.byteLength <= 0
+        || append.byteLength > actual.chunkBytes
+        || !validElapsedEvidence(
+          { receipt: append.receipt, elapsedMs: append.elapsedMs },
+          (receipt) =>
+            receipt
+              === `ok;session=${beginFields.session};next=${index + 1};`
+                + `bytes=${appendedBytes}`,
+        )
+      ) {
+        throw new Error(
+          `Gate 3 asset append is invalid: ${actual.assetId}/${index}`,
+        );
+      }
+    }
+    if (appendedBytes !== actual.byteLength) {
+      throw new Error(
+        `Gate 3 asset byte total is invalid: ${actual.assetId}`,
+      );
+    }
+    if (
+      !Object.hasOwn(actual, "target")
+        ? Object.hasOwn(actual, "assignment")
+        : (
+            actual.target.kind === "room-background"
+              ? !validElapsedEvidence(
+                  actual.assignment,
+                  (receipt) =>
+                    receipt
+                      === `ok;room=${actual.target.roomId};`
+                        + `handle=${actual.handle}`,
+                )
+              : !validElapsedEvidence(
+                  actual.assignment,
+                  (receipt) =>
+                    receipt
+                      === `ok;propId=${actual.target.propId};`
+                        + `handle=${actual.handle};`
+                        + `anchorX=${actual.target.anchorX};`
+                        + `anchorY=${actual.target.anchorY};`
+                        + `layer=${actual.target.layer}`,
+                )
+          )
+    ) {
+      throw new Error(
+        `Gate 3 asset assignment is invalid: ${actual.assetId}`,
+      );
+    }
+    byAssetId[actual.assetId] = actual;
+  }
+  if (
+    Object.keys(byAssetId).length !== authoring.selectedAssetCount
+    || new Set(authoring.assets.map(({ handle }) => handle)).size
+      !== authoring.selectedAssetCount
+    || new Set(authoring.assets.map(({ cid }) => cid)).size
+      !== authoring.selectedAssetCount
+  ) {
+    throw new Error("Gate 3 asset fixtures are not unique");
+  }
+
+  const assignedFixtures = authoring.assets.filter(
+    (asset) => Object.hasOwn(asset, "target"),
+  );
+  const assignedRooms = assignedFixtures.filter(
+    ({ target }) => target.kind === "room-background",
+  );
+  const assignedProps = assignedFixtures.filter(
+    ({ target }) => target.kind === "prop-image",
+  );
+  const propRequested = authoring.assignments.prop !== null;
+  const activePropProjection = parseActivePropProjection(
+    authoring.activePropProjection,
+    "Gate 3 active prop projection",
+    propRequested,
+  );
+  const finalRoomAssignments = { atrium: "", lounge: "" };
+  for (const asset of assignedRooms) {
+    finalRoomAssignments[asset.target.roomId] = asset.handle;
+  }
+  if (
+    assignedFixtures.length !== authoring.assets.length
+    || authoring.propStory
+      !== (propRequested ? "requested" : "not-requested")
+    || assignedRooms.length < 2
+    || assignedProps.length !== (propRequested ? 1 : 0)
+    || new Set(assignedRooms.map(({ target }) => target.roomId)).size !== 2
+    || !exactJson(authoring.assignments.rooms, finalRoomAssignments)
+    || (
+      propRequested
+      && (
+        authoring.assignments.prop.propId
+          !== assignedProps[0].target.propId
+        || authoring.assignments.prop.handle !== assignedProps[0].handle
+        || authoring.assignments.prop.anchorX
+          !== assignedProps[0].target.anchorX
+        || authoring.assignments.prop.anchorY
+          !== assignedProps[0].target.anchorY
+        || authoring.assignments.prop.layer !== assignedProps[0].target.layer
+        || activePropProjection.propId !== assignedProps[0].target.propId
+        || activePropProjection.handle !== assignedProps[0].handle
+        || activePropProjection.width !== assignedProps[0].width
+        || activePropProjection.height !== assignedProps[0].height
+        || activePropProjection.anchorX !== assignedProps[0].target.anchorX
+        || activePropProjection.anchorY !== assignedProps[0].target.anchorY
+        || activePropProjection.layer !== assignedProps[0].target.layer
+        || catalogById[
+          `prop-${authoring.assignments.prop.propId}-image`
+        ]?.contentSha256 !== activePropProjection.contentSha256
+      )
+    )
+  ) {
+    throw new Error("Gate 3 asset manifest assignments are invalid");
+  }
+
+  if (
+    !Array.isArray(authoring.graphBindings)
+    || authoring.graphBindings.length
+      !== assetGraphTargets.length
+  ) {
+    throw new Error("Gate 3 asset graph bindings are missing");
+  }
+  for (
+    let index = 0;
+    index < assetGraphTargets.length;
+    ++index
+  ) {
+    const expected = assetGraphTargets[index];
+    const actual = authoring.graphBindings[index];
+    const publishedObject = catalogById[expected.objectId];
+    const authoredAsset = authoring.assets.reduce(
+      (selected, candidate) =>
+        candidate.target?.kind === expected.kind
+        && (
+          expected.kind !== "room-background"
+          || candidate.target.roomId === expected.targetId
+        )
+          ? candidate
+          : selected,
+      undefined,
+    );
+    const expectedKeys = expected.kind === "room-background"
+      ? [
+          "kind",
+          "targetId",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ]
+      : [
+          "kind",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ];
+    if (
+      !exactObjectKeys(actual, expectedKeys)
+      || actual.kind !== expected.kind
+      || (
+        expected.kind === "room-background"
+        && actual.targetId !== expected.targetId
+      )
+      || actual.assetId !== authoredAsset?.assetId
+      || !exactJson(actual.assignment, authoredAsset?.target)
+      || actual.objectId !== expected.objectId
+      || actual.cid !== authoredAsset?.cid
+      || actual.contentSha256 !== authoredAsset?.handle
+      || publishedObject?.cid !== actual.cid
+      || publishedObject?.contentSha256 !== actual.contentSha256
+      || cidSha256(actual.cid) !== actual.contentSha256
+    ) {
+      throw new Error(
+        `Gate 3 active asset graph binding is invalid: ${expected.kind}`,
+      );
+    }
+  }
+
+  const screenshot = gate3?.assetAuthoringScreenshot;
+  const render = screenshot?.renderEvidence;
+  const screenshotFile = "gate3-admin-assets-published.png";
+  if (
+    !exactObjectKeys(
+      screenshot,
+      [
+        "file",
+        "artifactPath",
+        "width",
+        "height",
+        "byteLength",
+        "sha256",
+        "stage",
+        "state",
+        "label",
+        "renderEvidence",
+      ],
+    )
+    || screenshot.file !== screenshotFile
+    || screenshot.artifactPath !== screenshotFile
+    || screenshot.width !== 1600
+    || screenshot.height !== 900
+    || !Number.isSafeInteger(screenshot.byteLength)
+    || screenshot.byteLength < 24
+    || screenshot.byteLength > 64 * 1024 * 1024
+    || !isHex64(screenshot.sha256)
+    || screenshot.stage !== "gate3-admin-asset-authoring"
+    || screenshot.state
+      !== "admin-selected-assets-approved-published-assigned"
+    || screenshot.label !== "a"
+    || !exactObjectKeys(
+      render,
+      [
+        "schema",
+        "version",
+        "open",
+        "cardCount",
+        "readyImageCount",
+        "publishedCount",
+        "atriumAssigned",
+        "loungeAssigned",
+        "propAssigned",
+        "fenceRequest",
+        "fenceState",
+        "fenceFrame",
+        "epoch",
+      ],
+    )
+    || render.schema !== "logos.palace.asset-authoring-render"
+    || render.version !== 1
+    || render.open !== true
+    || render.cardCount < authoring.selectedAssetCount
+    || render.readyImageCount !== render.cardCount
+    || render.publishedCount < authoring.selectedAssetCount
+    || render.atriumAssigned !== true
+    || render.loungeAssigned !== true
+    || render.propAssigned !== propRequested
+    || !Number.isSafeInteger(render.fenceRequest)
+    || render.fenceRequest <= 0
+    || render.fenceState !== "complete"
+    || !Number.isSafeInteger(render.fenceFrame)
+    || render.fenceFrame < 0
+    || !Number.isSafeInteger(render.epoch)
+    || render.epoch < authoring.selectedAssetCount
+  ) {
+    throw new Error(
+      "Gate 3 asset authoring screenshot or render fence is invalid",
+    );
+  }
+
+  const assetBindings = authoring.assets.map(
+    ({ role, handle, cid, target }) => ({
+      role,
+      handle,
+      cid,
+      assigned: target !== undefined,
+    }),
+  );
+  return {
+    status: "passed",
+    version: 1,
+    selectedAssetCount: authoring.selectedAssetCount,
+    propStory: authoring.propStory,
+    manifestSha256: authoring.inputManifest.sha256,
+    approvalGuardReceipt: authoring.guardedBeforeApproval.receipt,
+    assetBindingsSha256:
+      sha256(JSON.stringify(stableJson(assetBindings))),
+    activeGraphBindings: authoring.graphBindings,
+    activePropProjection,
+    screenshot: {
+      file: screenshot.file,
+      width: screenshot.width,
+      height: screenshot.height,
+      byteLength: screenshot.byteLength,
+      sha256: screenshot.sha256,
+      renderEvidence: render,
+    },
+    evidenceSha256: sha256(
+      JSON.stringify(stableJson({
+        assetAuthoring: authoring,
+        assetAuthoringScreenshot: screenshot,
+      })),
+    ),
+  };
+}
+
 function validateGate3(gate3, currentHashes, basecampDigest) {
   if (
     gate3?.schema !== "logos.palace.basecamp-gate3-report" ||
@@ -1166,6 +1766,11 @@ function validateGate3(gate3, currentHashes, basecampDigest) {
   ) {
     throw new Error("Gate 3 package hashes do not match Gate 4");
   }
+  const propId =
+    gate3?.assetAuthoring?.assignments?.prop?.propId ?? null;
+  const objectContract = expectedGraphObjectContract(propId);
+  const expectedObjectIds =
+    objectContract.map(([objectId]) => objectId);
   const objects = gate3?.publication?.objects;
   if (!Array.isArray(objects) || objects.length !== expectedObjectIds.length) {
     throw new Error("Gate 3 report does not contain the exact MVP catalog");
@@ -1179,7 +1784,7 @@ function validateGate3(gate3, currentHashes, basecampDigest) {
       const object = byId[objectId];
       return (
         !object ||
-        object.type !== expectedObjectTypes[index] ||
+        object.type !== objectContract[index][1] ||
         typeof object.mediaType !== "string" ||
         object.mediaType.length === 0 ||
         typeof object.cid !== "string" ||
@@ -1199,7 +1804,7 @@ function validateGate3(gate3, currentHashes, basecampDigest) {
     "logos-palace-mvp-storage-catalog-v1\n"
     + "version=1\n"
     + "root=palace-1\n"
-    + "objects=11\n"
+    + `objects=${ordered.length}\n`
     + ordered
       .map(
         (object) =>
@@ -1219,12 +1824,23 @@ function validateGate3(gate3, currentHashes, basecampDigest) {
   ) {
     throw new Error("Gate 3 catalog base64url reconstruction failed");
   }
+  const assetAuthoringEvidence =
+    validateGate3AssetAuthoring(gate3, byId);
   return {
     byId,
     ordered,
     checksum,
     canonical,
     encoded,
+    propId,
+    propObjectIds: propId === null
+      ? null
+      : {
+          image: `prop-${propId}-image`,
+          metadata: `prop-${propId}-metadata`,
+          manifest: `prop-${propId}`,
+        },
+    assetAuthoringEvidence,
   };
 }
 
@@ -1237,7 +1853,15 @@ function profile(identity) {
   };
 }
 
-function buildPlan(identities, catalog) {
+function buildPlan(identities, catalog, propObjectId) {
+  const propRequested = propObjectId !== null;
+  const propId = propRequested
+    ? propObjectId.slice("prop-".length)
+    : null;
+  if (propRequested && !catalog[propObjectId]) {
+    throw new Error("requested prop graph object is missing");
+  }
+  const doorActionId = propRequested ? "10" : "9";
   const ids = {
     palace: stableId("palace"),
     ownerGrant: stableId("grant/alice-owner"),
@@ -1251,12 +1875,16 @@ function buildPlan(identities, catalog) {
       identities.b.accountId,
       identities.c.accountId,
     ),
-    propBan: humanModerationBanId(
-      "asset",
-      "9",
-      identities.b.accountId,
-      catalog["prop-hat"].cid,
-    ),
+    ...(propRequested
+      ? {
+          propBan: humanModerationBanId(
+            "asset",
+            "9",
+            identities.b.accountId,
+            catalog[propObjectId].cid,
+          ),
+        }
+      : {}),
   };
   const doorValueHex = Buffer.from("0", "utf8").toString("hex");
   const doorStateRoot = sha256("door_open=0");
@@ -1374,20 +2002,22 @@ function buildPlan(identities, catalog) {
         scope: { kind: "palace" },
       },
     },
+    ...(propRequested
+      ? [{
+          actionId: "9",
+          caller: "b",
+          kind: "create_asset_ban",
+          transition: {
+            kind: "create_asset_ban",
+            grant_id_hex: ids.bobGrant,
+            ban_id_hex: ids.propBan,
+            cid: catalog[propObjectId].cid,
+            scope: { kind: "palace" },
+          },
+        }]
+      : []),
     {
-      actionId: "9",
-      caller: "b",
-      kind: "create_asset_ban",
-      transition: {
-        kind: "create_asset_ban",
-        grant_id_hex: ids.bobGrant,
-        ban_id_hex: ids.propBan,
-        cid: catalog["prop-hat"].cid,
-        scope: { kind: "palace" },
-      },
-    },
-    {
-      actionId: "10",
+      actionId: doorActionId,
       caller: "b",
       kind: "update_shared_state",
       transition: {
@@ -1425,14 +2055,14 @@ function buildPlan(identities, catalog) {
     }),
   );
   const fingerprint = fingerprintFor(actions);
-  const gate4Fingerprint = fingerprintFor(actions.slice(0, 10));
+  const gate4Fingerprint = fingerprintFor(actions.slice(0, -1));
   const legacyGate4Fingerprint = sha256(
     JSON.stringify({
       version: 1,
       programId: releaseProgramId,
       rootAccountId: releaseRootId,
       palaceId: ids.palace,
-      actions: actions.slice(0, 10).map(
+      actions: actions.slice(0, -1).map(
         ({ actionId, caller, transitionSha256 }) => ({
           actionId,
           caller,
@@ -1443,6 +2073,9 @@ function buildPlan(identities, catalog) {
   );
   return {
     version: 2,
+    propStory: propRequested ? "requested" : "not-requested",
+    propId,
+    doorActionId,
     fingerprint,
     gate4Fingerprint,
     legacyGate4Fingerprint,
@@ -1465,6 +2098,9 @@ function buildPlan(identities, catalog) {
 function publicPlan(plan) {
   return {
     version: plan.version,
+    propStory: plan.propStory,
+    propId: plan.propId,
+    doorActionId: plan.doorActionId,
     fingerprint: plan.fingerprint,
     gate4Fingerprint: plan.gate4Fingerprint,
     legacyGate4Fingerprint: plan.legacyGate4Fingerprint,
@@ -1536,13 +2172,16 @@ function validatePreviousReportEnvelope(
   }
   if (
     !Array.isArray(previous.actions)
-    || previous.actions.length > 11
+    || (
+      Array.isArray(previous.plan?.actions)
+      && previous.actions.length > previous.plan.actions.length
+    )
     || new Set(previous.actions.map(({ actionId }) => actionId)).size
       !== previous.actions.length
     || previous.actions.some(
       (action) =>
         !action
-        || !/^(?:[0-9]|10)$/.test(String(action.actionId))
+        || !/^(?:0|[1-9][0-9]*)$/.test(String(action.actionId))
         || !["a", "b", "c"].includes(action.caller)
         || !isHex64(action.transitionSha256),
     )
@@ -1598,12 +2237,14 @@ function validatePriorCreatorOfflineEvidence(previous, plan, creatorPid) {
   const creator = previous?.gate6?.creator;
   const convergence = previous?.gate5?.convergence;
   const authorityBundles = convergence?.authorityBundles;
+  const doorCheckpoint = Number(plan.doorActionId);
   const checkpointReceipt =
-    previous?.checkpoints?.action10A?.status?.receipt;
+    previous?.checkpoints?.[`action${plan.doorActionId}A`]
+      ?.status?.receipt;
   if (
     !["creator-stop-pending", "creator-offline"].includes(lifecycle?.phase)
     || lifecycle.creatorPid !== creatorPid
-    || lifecycle.actionCheckpoint !== 10
+    || lifecycle.actionCheckpoint !== doorCheckpoint
     || creator?.label !== "a"
     || creator.pid !== creatorPid
     || (
@@ -1611,7 +2252,7 @@ function validatePriorCreatorOfflineEvidence(previous, plan, creatorPid) {
       && creator.offline !== true
     )
     || convergence?.status !== "passed"
-    || convergence.checkpoint !== 10
+    || convergence.checkpoint !== doorCheckpoint
     || convergence.sharedRevision !== plan.doorState.openedRevision
     || convergence.sharedStateRoot !== plan.doorState.openedStateRootHex
     || !isHex64(convergence.authorityProjectionDigest)
@@ -1622,7 +2263,7 @@ function validatePriorCreatorOfflineEvidence(previous, plan, creatorPid) {
         bundle?.sha256 !== convergence.authorityProjectionDigest,
     )
     || typeof checkpointReceipt !== "string"
-    || !checkpointReceipt.includes("action=10")
+    || !checkpointReceipt.includes(`action=${plan.doorActionId}`)
   ) {
     throw new Error("creator-offline resume evidence is not exact");
   }
@@ -1700,7 +2341,7 @@ const report = {
   gate5: previousReport?.gate5 ?? {},
   gate6: previousReport?.gate6 ?? {},
   frameTiming: previousReport?.frameTiming ?? {
-    parserContract: undefined,
+    measurementContract: undefined,
     runs: {},
   },
   screenshots: [...(previousReport?.screenshots ?? [])],
@@ -2229,7 +2870,7 @@ async function executeAction(worker, action, plan, priorRecord) {
         ];
       } else if (action.kind === "create_asset_ban") {
         submissionName = "gate4BanProp";
-        submissionArguments = ["hat"];
+        submissionArguments = [plan.propId];
       }
       const submitted = await invoke(
         worker,
@@ -2622,6 +3263,7 @@ async function startProductionStorage(worker, config) {
 }
 
 async function fetchProductionCatalog(worker, catalog) {
+  const expectedObjectCount = catalog.ordered.length;
   const startedAt = performance.now();
   const before = await storageBundleStatus(worker);
   const beforeFields = statusFields(before.receipt);
@@ -2637,7 +3279,7 @@ async function fetchProductionCatalog(worker, catalog) {
       !Number.isSafeInteger(available)
       || !Number.isSafeInteger(total)
       || available < 0
-      || total !== expectedObjectIds.length
+      || total !== expectedObjectCount
       || available > total
       || (
         fields.source === "cache"
@@ -2656,7 +3298,7 @@ async function fetchProductionCatalog(worker, catalog) {
   if (
     beforeFields.state === "verified"
     && beforeFields.catalog === catalog.encoded
-    && beforeFields.verified === String(expectedObjectIds.length)
+    && beforeFields.verified === String(expectedObjectCount)
   ) {
     mode = beforeFields.source;
     nativeSource = beforeFields.source;
@@ -2710,9 +3352,9 @@ async function fetchProductionCatalog(worker, catalog) {
       const fields = statusFields(result.receipt);
       if (
         fields.state !== "verified"
-        || fields.published !== String(expectedObjectIds.length)
-        || fields.verified !== String(expectedObjectIds.length)
-        || fields.total !== String(expectedObjectIds.length)
+        || fields.published !== String(expectedObjectCount)
+        || fields.verified !== String(expectedObjectCount)
+        || fields.total !== String(expectedObjectCount)
         || fields.catalog !== catalog.encoded
         || fields.source !== nativeSource
         || fields.native_available !== String(nativeAvailable)
@@ -3256,7 +3898,7 @@ async function waitProjection(worker, expected, description) {
   );
 }
 
-async function verifyInitialDeliveryLifecycle() {
+async function verifyInitialDeliveryLifecycle(propId) {
   const profiles = Object.fromEntries(
     labels.map((label) => [
       report.identities[label].accountId,
@@ -3302,25 +3944,32 @@ async function verifyInitialDeliveryLifecycle() {
     { prefix: "ok;request=" },
     60_000,
   );
-  const wear = await invoke(
-    workers.get("c"),
-    "gate2Wear",
-    ["hat"],
-    { prefix: "ok;request=" },
-    60_000,
-  );
+  const propRequested = propId !== null;
+  const wear = propRequested
+    ? await invoke(
+        workers.get("c"),
+        "gate2Wear",
+        [propId],
+        { prefix: "ok;request=" },
+        60_000,
+      )
+    : null;
+  const expectedProjection = {
+    [alice]: { x: 2400, y: 3600 },
+    [bob]: { speech: "Gate 4 production mesh" },
+    ...(propRequested
+      ? { [carol]: { props: [propId] } }
+      : {}),
+  };
   const converged = Object.fromEntries(
     await Promise.all(
       labels.map(async (label) => [
         label,
         await waitProjection(
           workers.get(label),
-          {
-            [alice]: { x: 2400, y: 3600 },
-            [bob]: { speech: "Gate 4 production mesh" },
-            [carol]: { props: ["hat"] },
-          },
-          `${label} production move/speech/wear`,
+          expectedProjection,
+          `${label} production move/speech`
+            + (propRequested ? "/wear" : ""),
         ),
       ]),
     ),
@@ -3331,18 +3980,19 @@ async function verifyInitialDeliveryLifecycle() {
     presence,
     move,
     speech,
-    wear,
     converged,
-    approvedPropVisible: true,
+    propStory: propRequested ? "requested" : "not-requested",
+    approvedPropVisible: propRequested,
+    ...(propRequested ? { wear } : {}),
   };
 }
 
-async function removeApprovedPropAfterEvidence() {
+async function removeApprovedPropAfterEvidence(propId) {
   const carol = report.identities.c.accountId;
   const remove = await invoke(
     workers.get("c"),
     "gate2Remove",
-    ["hat"],
+    [propId],
     { prefix: "ok;request=" },
     60_000,
   );
@@ -4033,52 +4683,28 @@ async function tcpListenerOwnership(
   );
 }
 
-function validateQsgRenderTiming(evidence) {
-  const expectedFields = [
-    "totalMs",
-    "polishMs",
-    "syncMs",
-    "renderMs",
-    "swapMs",
-    "frameDeltaMs",
-  ];
-  if (
-    evidence?.parser?.basecampRevision !== report.basecampRevision
-    || evidence.parser.qtVersion !== "6.9.2"
-    || evidence.parser.renderLoop !== "software"
-    || evidence.parser.messagePattern !== "%{category}: %{message}"
-    || !Number.isSafeInteger(evidence.sampleCount)
-    || evidence.sampleCount <= 0
-    || Object.keys(evidence.summaries ?? {}).sort().join(",")
-      !== [...expectedFields].sort().join(",")
-    || expectedFields.some((field) => {
-      const summary = evidence.summaries[field];
-      return (
-        !Number.isSafeInteger(summary?.p50)
-        || !Number.isSafeInteger(summary?.p95)
-        || !Number.isSafeInteger(summary?.max)
-        || summary.p50 > summary.p95
-        || summary.p95 > summary.max
-      );
-    })
-  ) {
-    throw new Error("QSG render timing evidence violates pinned parser contract");
+function validateFrameTiming(evidence) {
+  validatePalaceFrameTimingMeasurement(evidence);
+  if (evidence.measurementContract.basecampRevision !== report.basecampRevision) {
+    throw new Error(
+      "Palace frame timing Basecamp revision differs from the run",
+    );
   }
   if (
-    report.frameTiming.parserContract
+    report.frameTiming.measurementContract
     && !exactStableJson(
-      report.frameTiming.parserContract,
-      evidence.parser,
+      report.frameTiming.measurementContract,
+      evidence.measurementContract,
     )
   ) {
-    throw new Error("QSG render timing parser contract changed within run");
+    throw new Error("Palace frame timing contract changed within run");
   }
-  report.frameTiming.parserContract = evidence.parser;
+  report.frameTiming.measurementContract = evidence.measurementContract;
   return evidence;
 }
 
-async function captureQsgRenderTiming(worker) {
-  return validateQsgRenderTiming(await worker.call("renderTimings"));
+async function captureFrameTiming(worker) {
+  return validateFrameTiming(await worker.call("frameTimings"));
 }
 
 async function processMetrics(pid, expectedTcpListeners, label) {
@@ -4539,21 +5165,22 @@ async function processMetrics(pid, expectedTcpListeners, label) {
   };
 }
 
-async function screenshotFileEvidence(file) {
+async function screenshotFileEvidenceAt(artifactDirectory, file) {
   if (
-    typeof file !== "string"
+    resolve(artifactDirectory) !== artifactDirectory
+    || typeof file !== "string"
     || basename(file) !== file
     || !/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(file)
   ) {
     throw new Error(`invalid screenshot artifact path: ${file}`);
   }
-  const path = join(artifactsDir, file);
+  const path = join(artifactDirectory, file);
   const metadata = await lstat(path);
   if (
     metadata.isSymbolicLink()
     || !metadata.isFile()
     || await realpath(path) !== path
-    || dirname(path) !== artifactsDir
+    || dirname(path) !== artifactDirectory
   ) {
     throw new Error(`${file} is not a canonical regular artifact`);
   }
@@ -4582,6 +5209,10 @@ async function screenshotFileEvidence(file) {
     byteLength: bytes.length,
     sha256: sha256(bytes),
   };
+}
+
+async function screenshotFileEvidence(file) {
+  return screenshotFileEvidenceAt(artifactsDir, file);
 }
 
 function replaceScreenshot(entry) {
@@ -4822,7 +5453,7 @@ async function previewDoor(worker) {
   );
   const fields = statusFields(result.receipt);
   if (
-    fields.action !== "10"
+    fields.action !== report.plan.doorActionId
     || fields.state_root !== report.plan.doorState.openedStateRootHex
     || !fields.receipt
     || !isHex64(fields.receipt_sha256)
@@ -4851,7 +5482,7 @@ function validateStoredVmTurnMetric(
     throw new Error(`prior ${label} VM turn duration is invalid`);
   }
   if (
-    metric?.actionId !== "10"
+    metric?.actionId !== report.plan.doorActionId
     || metric.phase !== expectedPhase
     || metric.clock !== "steady_clock"
     || !/^[0-9]+$/.test(metric.durationNs)
@@ -4894,7 +5525,7 @@ function validatePriorPreviewEvidence(evidence, plan, provisionalMetrics) {
           "state_root",
         ].join(",")
       || fields.spot !== "door"
-      || fields.action !== "10"
+      || fields.action !== plan.doorActionId
       || fields.navigation !== "0"
       || fields.state_root !== plan.doorState.openedStateRootHex
       || fields.script_cid !== report.catalog.byId["script-door"].cid
@@ -5027,14 +5658,14 @@ async function gate5VmTurnMetric(worker, phaseName, expectedReceiptSha256) {
   const result = await invoke(
     worker,
     "gate5VmTurnMetrics",
-    ["10", phaseName],
+    [report.plan.doorActionId, phaseName],
     { prefix: "status=available;" },
     30_000,
   );
   const fields = statusFields(result.receipt);
   if (
     fields.status !== "available"
-    || fields.action !== "10"
+    || fields.action !== report.plan.doorActionId
     || fields.phase !== phaseName
     || fields.clock !== "steady_clock"
     || !/^[0-9]+$/.test(fields.duration_ns ?? "")
@@ -5049,7 +5680,7 @@ async function gate5VmTurnMetric(worker, phaseName, expectedReceiptSha256) {
     throw new Error(`Gate 5 VM ${phaseName} duration is out of bounds`);
   }
   return {
-    actionId: "10",
+    actionId: report.plan.doorActionId,
     phase: phaseName,
     clock: fields.clock,
     durationNs: fields.duration_ns,
@@ -5060,7 +5691,7 @@ async function gate5VmTurnMetric(worker, phaseName, expectedReceiptSha256) {
 
 async function finalizeDoor(worker) {
   const action = report.actions.find(
-    ({ actionId }) => actionId === "10",
+    ({ actionId }) => actionId === report.plan.doorActionId,
   );
   if (!action) {
     throw new Error("Gate 5 action timing record is missing");
@@ -5100,7 +5731,7 @@ async function finalizeDoor(worker) {
       "observed",
       "finalized",
     ].includes(fields.durable);
-    if (accepted && fields.action !== "10") {
+    if (accepted && fields.action !== report.plan.doorActionId) {
       throw new Error(
         `Gate 5 timing response action mismatch: ${evidence.receipt}`,
       );
@@ -5265,7 +5896,7 @@ async function finalizeDoor(worker) {
   const pendingEvidence = [];
   const firstFields = statusFields(use.receipt);
   if (
-    firstFields.action !== "10"
+    firstFields.action !== report.plan.doorActionId
     || firstFields.vm === "promoted"
     || firstFields.durable === "finalized"
   ) {
@@ -5292,7 +5923,7 @@ async function finalizeDoor(worker) {
     Date.now() - delayedObservationStartedAtUnixMs;
   if (
     delayedObservationMs < 1_000
-    || delayedFields.action !== "10"
+    || delayedFields.action !== report.plan.doorActionId
     || delayedFields.vm === "promoted"
     || delayedFields.durable === "finalized"
   ) {
@@ -5304,7 +5935,7 @@ async function finalizeDoor(worker) {
   pendingEvidence.push(delayed.receipt);
   report.failureEvidence.delayedLezUpdate = {
     status: "passed",
-    actionId: "10",
+    actionId: report.plan.doorActionId,
     observationPaused: true,
     pauseClock: "Date.now wall-clock milliseconds",
     pauseMs: delayedObservationMs,
@@ -5333,7 +5964,7 @@ async function finalizeDoor(worker) {
     const timingChanged = observeGate5Response(status, fields);
     if (
       fields.vm === "promoted"
-      && fields.action === "10"
+      && fields.action === report.plan.doorActionId
       && fields.durable === "finalized"
       && fields.navigation === "1"
       && fields.state_root === report.plan.doorState.openedStateRootHex
@@ -5381,7 +6012,7 @@ async function finalizeDoor(worker) {
     );
     if (
       reconciledFields.vm === "promoted"
-      && reconciledFields.action === "10"
+      && reconciledFields.action === report.plan.doorActionId
       && reconciledFields.durable === "finalized"
       && reconciledFields.navigation === "1"
       && reconciledFields.state_root
@@ -5431,7 +6062,7 @@ async function recoverFinalizedDoor(worker) {
     const fields = statusFields(status.receipt);
     if (
       fields.vm === "promoted"
-      && fields.action === "10"
+      && fields.action === report.plan.doorActionId
       && fields.durable === "finalized"
       && fields.navigation === "1"
       && fields.state_root === report.plan.doorState.openedStateRootHex
@@ -5550,8 +6181,37 @@ try {
     currentPackageHashes,
     currentBasecampDigest,
   );
+  const propStoryRequested = catalog.propId !== null;
+  const finalActionCheckpoint =
+    8 + 1 + Number(propStoryRequested);
+  const finalActionId = String(finalActionCheckpoint);
+  const assetAuthoringScreenshot = await screenshotFileEvidenceAt(
+    dirname(gate3ReportPath),
+    catalog.assetAuthoringEvidence.screenshot.file,
+  );
+  if (
+    assetAuthoringScreenshot.width
+      !== catalog.assetAuthoringEvidence.screenshot.width
+    || assetAuthoringScreenshot.height
+      !== catalog.assetAuthoringEvidence.screenshot.height
+    || assetAuthoringScreenshot.byteLength
+      !== catalog.assetAuthoringEvidence.screenshot.byteLength
+    || assetAuthoringScreenshot.sha256
+      !== catalog.assetAuthoringEvidence.screenshot.sha256
+  ) {
+    throw new Error(
+      "Gate 3 asset authoring screenshot artifact does not match report",
+    );
+  }
   report.gate3.productSnapshot = gate3.productSnapshot;
   report.gate3.catalogChecksum = gate3.publication.checksum;
+  report.gate3.assetAuthoringEvidence = {
+    ...catalog.assetAuthoringEvidence,
+    screenshot: {
+      ...catalog.assetAuthoringEvidence.screenshot,
+      artifactVerified: true,
+    },
+  };
   report.catalog = {
     checksum: catalog.checksum,
     encoded: catalog.encoded,
@@ -5691,6 +6351,27 @@ try {
       label,
     );
   }
+  const inactivePropObservers = [];
+  for (const label of initialLabels) {
+    const properties = await workers.get(label).call(
+      "properties",
+      {},
+      30_000,
+    );
+    inactivePropObservers.push({
+      label,
+      projection: parseActivePropProjection(
+        properties.gate4ActivePropAsset,
+        `Gate 4 restored prop projection on ${label}`,
+        false,
+      ),
+    });
+  }
+  report.gate3.activePropProjectionRecovery = {
+    status: "restored-unverified",
+    property: "gate4ActivePropAsset",
+    beforeVerification: inactivePropObservers,
+  };
   await checkpointReport();
 
   phase = "application-round-trip-metrics";
@@ -5797,12 +6478,15 @@ try {
       "fresh-or-local-journal-resume";
   }
   report.detectedFinalizedPrefix = finalizedPrefix;
-  if (finalizedPrefix > 10) {
+  if (finalizedPrefix > finalActionCheckpoint) {
     throw new Error(`unexpected finalized Palace action ${finalizedPrefix}`);
   }
-  if (resumeWithoutCreator && finalizedPrefix !== 10) {
+  if (
+    resumeWithoutCreator
+    && finalizedPrefix !== finalActionCheckpoint
+  ) {
     throw new Error(
-      "creator-offline resume requires finalized action checkpoint 10",
+      "creator-offline resume requires finalized door action checkpoint",
     );
   }
   phase = "identities";
@@ -5861,7 +6545,20 @@ try {
   }
 
   phase = "plan";
-  const plan = buildPlan(report.identities, catalog.byId);
+  const plan = buildPlan(
+    report.identities,
+    catalog.byId,
+    catalog.propObjectIds?.manifest ?? null,
+  );
+  if (
+    plan.propStory !== (
+      propStoryRequested ? "requested" : "not-requested"
+    )
+    || plan.doorActionId !== finalActionId
+    || plan.actions.length !== finalActionCheckpoint + 1
+  ) {
+    throw new Error("dynamic Palace story plan is inconsistent");
+  }
   report.plan = publicPlan(plan);
   if (resumeWithoutCreator) {
     validatePriorCreatorOfflineEvidence(
@@ -6022,6 +6719,40 @@ try {
     }
     report.storage.initial.status = "passed";
   }
+  const expectedActivePropProjection =
+    catalog.assetAuthoringEvidence.activePropProjection;
+  const propProjectionRequested = catalog.propId !== null;
+  const activePropObservers = [];
+  for (const label of initialLabels) {
+    const properties = await workers.get(label).call(
+      "properties",
+      {},
+      30_000,
+    );
+    const projection = parseActivePropProjection(
+      properties.gate4ActivePropAsset,
+      `Gate 4 verified prop projection on ${label}`,
+      propProjectionRequested,
+    );
+    if (!exactJson(projection, expectedActivePropProjection)) {
+      throw new Error(
+        `Gate 4 verified prop projection differs on ${label}`,
+      );
+    }
+    activePropObservers.push({ label, projection });
+  }
+  report.gate3.activePropProjectionRecovery = {
+    ...report.gate3.activePropProjectionRecovery,
+    status: "passed",
+    propStory: propProjectionRequested
+      ? "requested"
+      : "not-requested",
+    projectionSha256: sha256(
+      JSON.stringify(stableJson(expectedActivePropProjection)),
+    ),
+    afterVerification: activePropObservers,
+  };
+  await checkpointReport();
   if (report.failureEvidence.missingStorageObject?.status === "passed") {
     const prior = report.failureEvidence.missingStorageObject;
     if (
@@ -6057,7 +6788,10 @@ try {
   if (resumeWithoutCreator) {
     if (
       report.delivery.initialLifecycle?.status !== "passed"
-      || report.delivery.initialLifecycle.approvedPropVisible !== true
+      || report.delivery.initialLifecycle.propStory
+        !== (propStoryRequested ? "requested" : "not-requested")
+      || report.delivery.initialLifecycle.approvedPropVisible
+        !== propStoryRequested
       || !report.delivery.initialMesh
     ) {
       throw new Error(
@@ -6074,12 +6808,14 @@ try {
     );
     if (finalizedPrefix <= 7) {
       report.delivery.initialLifecycle =
-        await verifyInitialDeliveryLifecycle();
+        await verifyInitialDeliveryLifecycle(catalog.propId);
       await captureScreenshot(screenshotSpecs.gate4Convergence);
-      Object.assign(
-        report.delivery.initialLifecycle,
-        await removeApprovedPropAfterEvidence(),
-      );
+      if (propStoryRequested) {
+        Object.assign(
+          report.delivery.initialLifecycle,
+          await removeApprovedPropAfterEvidence(catalog.propId),
+        );
+      }
     } else if (report.delivery.initialLifecycle?.status !== "passed") {
       throw new Error(
         "resumed post-ban prefix lacks production Delivery lifecycle evidence",
@@ -6232,7 +6968,8 @@ try {
   validatePriorUserBanEvidence(report.moderation.userBan);
   await checkpointReport();
 
-  if (finalizedPrefix < 9) {
+  if (propStoryRequested) {
+    if (finalizedPrefix < 9) {
     phase = "asset-ban-action-nine";
     const action = plan.actions[9];
     await executeAction(
@@ -6249,7 +6986,7 @@ try {
     const staleWear = await invoke(
       workers.get("a"),
       "gate2Wear",
-      ["hat"],
+      [catalog.propId],
       { prefix: "ok;request=" },
       60_000,
     );
@@ -6318,15 +7055,65 @@ try {
       rawTransitionJsonCrossedUiBoundary: false,
     };
     await captureScreenshot(screenshotSpecs.gate4Moderation);
-  } else if (finalizedPrefix === 10) {
+  } else if (finalizedPrefix === finalActionCheckpoint) {
     await reusePriorScreenshot(screenshotSpecs.gate4Moderation);
   } else {
     throw new Error(`unexpected moderation checkpoint ${finalizedPrefix}`);
   }
+  } else {
+    report.moderation.assetBan = {
+      status: "not-requested",
+      propStory: "not-requested",
+    };
+    if (finalizedPrefix === 8) {
+      await invoke(
+        workers.get("b"),
+        "gate4RefreshModeration",
+        [],
+        { prefix: "state=finalized;kind=user;action=8;" },
+        30_000,
+      );
+      const userBanAction = report.actions.find(
+        ({ actionId }) => actionId === "8",
+      );
+      const moderationProperties =
+        await workers.get("b").call("properties");
+      const moderationState = statusFields(
+        String(moderationProperties.gate4ModerationState ?? ""),
+      );
+      if (
+        userBanAction?.submissionMethod !== "gate4BanUser"
+        || moderationState.state !== "finalized"
+        || moderationState.kind !== "user"
+        || moderationState.action !== "8"
+      ) {
+        throw new Error(
+          "user moderation did not use finalized human UI path",
+        );
+      }
+      report.moderation.humanUi = {
+        status: "passed",
+        propStory: "not-requested",
+        userBanMethod: userBanAction.submissionMethod,
+        propBanMethod: null,
+        finalUiState: String(
+          moderationProperties.gate4ModerationState,
+        ),
+        rawTransitionJsonCrossedUiBoundary: false,
+      };
+      await captureScreenshot(screenshotSpecs.gate4Moderation);
+    } else if (finalizedPrefix === finalActionCheckpoint) {
+      await reusePriorScreenshot(screenshotSpecs.gate4Moderation);
+    } else {
+      throw new Error(
+        `unexpected user-only moderation checkpoint ${finalizedPrefix}`,
+      );
+    }
+  }
   await checkpointReport();
 
   phase = "gate5-preview";
-  if (finalizedPrefix < 10) {
+  if (finalizedPrefix < finalActionCheckpoint) {
     const [previewA, previewB] = await Promise.all([
       previewDoor(workers.get("a")),
       previewDoor(workers.get("b")),
@@ -6369,7 +7156,7 @@ try {
     await captureScreenshot(screenshotSpecs.gate5PreviewB);
   } else if (report.gate5.preview?.status !== "passed") {
     throw new Error(
-      "resumed action 10 lacks exact two-client preview evidence",
+      "resumed door action lacks exact two-client preview evidence",
     );
   } else {
     await reusePriorScreenshot(screenshotSpecs.gate5PreviewA);
@@ -6383,25 +7170,25 @@ try {
   await checkpointReport();
 
   phase = "gate5-finalized-door";
-  const actionTen = plan.actions[10];
-  if (finalizedPrefix < 10) {
-    const priorActionTen = previousReport?.actions?.find(
-      ({ actionId }) => actionId === "10",
+  const doorAction = plan.actions[finalActionCheckpoint];
+  if (finalizedPrefix < finalActionCheckpoint) {
+    const priorDoorAction = previousReport?.actions?.find(
+      ({ actionId }) => actionId === finalActionId,
     );
     if (
-      priorActionTen
+      priorDoorAction
       && (
-        priorActionTen.kind !== actionTen.kind
-        || priorActionTen.caller !== "b"
-        || priorActionTen.transitionSha256
-          !== actionTen.transitionSha256
+        priorDoorAction.kind !== doorAction.kind
+        || priorDoorAction.caller !== "b"
+        || priorDoorAction.transitionSha256
+          !== doorAction.transitionSha256
       )
     ) {
       throw new Error("prior Gate 5 action intent differs from plan");
     }
     const pendingJournal = await actionJournalRecord(
       "b",
-      "10",
+      finalActionId,
       true,
     );
     if (
@@ -6410,11 +7197,11 @@ try {
         ![0, 1, 2, 3, 4].includes(pendingJournal.stage)
         || (
           pendingJournal.stage >= 2
-          && !priorActionTen
+          && !priorDoorAction
         )
         || (
-          isHex64(priorActionTen?.transactionHash)
-          && priorActionTen.transactionHash
+          isHex64(priorDoorAction?.transactionHash)
+          && priorDoorAction.transactionHash
             !== pendingJournal.transactionHash
         )
       )
@@ -6422,32 +7209,32 @@ try {
       throw new Error("prior Gate 5 action journal differs from report");
     }
     report.actions = report.actions.filter(
-      ({ actionId }) => actionId !== "10",
+      ({ actionId }) => actionId !== finalActionId,
     );
-    const actionTenTimingRecord = {
-      actionId: "10",
-      kind: actionTen.kind,
+    const doorActionTimingRecord = {
+      actionId: finalActionId,
+      kind: doorAction.kind,
       caller: "b",
       callerAccountId: report.identities.b.accountId,
-      transitionSha256: actionTen.transitionSha256,
+      transitionSha256: doorAction.transitionSha256,
       transactionHash:
         pendingJournal?.transactionHash
-        ?? priorActionTen?.transactionHash,
+        ?? priorDoorAction?.transactionHash,
       status: pendingJournal?.durableStage ?? "running",
       journal: pendingJournal,
-      timings: { ...(priorActionTen?.timings ?? {}) },
+      timings: { ...(priorDoorAction?.timings ?? {}) },
       timingMeasurement: {
-        ...(priorActionTen?.timingMeasurement ?? {}),
+        ...(priorDoorAction?.timingMeasurement ?? {}),
       },
       timingBoundaries: {
-        ...(priorActionTen?.timingBoundaries ?? {}),
+        ...(priorDoorAction?.timingBoundaries ?? {}),
       },
     };
-    Object.defineProperty(actionTenTimingRecord, "hasPriorTimingRecord", {
-      value: priorActionTen !== undefined,
+    Object.defineProperty(doorActionTimingRecord, "hasPriorTimingRecord", {
+      value: priorDoorAction !== undefined,
       enumerable: false,
     });
-    report.actions.push(actionTenTimingRecord);
+    report.actions.push(doorActionTimingRecord);
     report.actions.sort(
       (left, right) => Number(left.actionId) - Number(right.actionId),
     );
@@ -6466,21 +7253,24 @@ try {
     ) {
       throw new Error("Gate 5 timing/pending evidence is incomplete");
     }
-    const actionTenJournal = await actionJournalEvidence("b", "10");
+    const doorActionJournal = await actionJournalEvidence(
+      "b",
+      finalActionId,
+    );
     report.actions = report.actions.filter(
-      ({ actionId }) => actionId !== "10",
+      ({ actionId }) => actionId !== finalActionId,
     );
     report.actions.push({
-      actionId: "10",
-      kind: actionTen.kind,
+      actionId: finalActionId,
+      kind: doorAction.kind,
       caller: "b",
       callerAccountId: report.identities.b.accountId,
-      transitionSha256: actionTen.transitionSha256,
-      transactionHash: actionTenJournal.transactionHash,
+      transitionSha256: doorAction.transitionSha256,
+      transactionHash: doorActionJournal.transactionHash,
       status: "finalized",
       durableStatus: "finalized",
       finalStatus: gate5Final.final.receipt,
-      journal: actionTenJournal,
+      journal: doorActionJournal,
       timings: gate5Final.timings,
       timingMeasurement: gate5Final.timingMeasurement,
       timingBoundaries: gate5Final.timingBoundaries,
@@ -6493,29 +7283,32 @@ try {
       ...gate5Final,
       expectedSharedRevision: plan.doorState.openedRevision,
       expectedSharedStateRoot: plan.doorState.openedStateRootHex,
-      journal: actionTenJournal,
+      journal: doorActionJournal,
     };
     report.uiEvidence.pending.push(...gate5Final.pendingEvidence);
     report.uiEvidence.finalized.push(gate5Final.final.receipt);
     await captureScreenshot(screenshotSpecs.gate5FinalB);
-    finalizedPrefix = 10;
+    finalizedPrefix = finalActionCheckpoint;
   } else {
-    const actionTenJournal = await actionJournalEvidence("b", "10");
-    const resumedActionTen = report.actions.find(
-      ({ actionId }) => actionId === "10",
+    const doorActionJournal = await actionJournalEvidence(
+      "b",
+      finalActionId,
+    );
+    const resumedDoorAction = report.actions.find(
+      ({ actionId }) => actionId === finalActionId,
     );
     if (
-      resumedActionTen?.kind !== actionTen.kind
-      || resumedActionTen?.caller !== "b"
-      || resumedActionTen?.transitionSha256
-        !== actionTen.transitionSha256
-      || resumedActionTen?.transactionHash
-        !== actionTenJournal.transactionHash
+      resumedDoorAction?.kind !== doorAction.kind
+      || resumedDoorAction?.caller !== "b"
+      || resumedDoorAction?.transitionSha256
+        !== doorAction.transitionSha256
+      || resumedDoorAction?.transactionHash
+        !== doorActionJournal.transactionHash
     ) {
       throw new Error("resumed Gate 5 finality evidence is not exact");
     }
     const unavailableTiming = recoverPersistedTimingEvidence(
-      resumedActionTen,
+      resumedDoorAction,
       "finalized",
     );
     if (unavailableTiming.length > 0) {
@@ -6529,8 +7322,8 @@ try {
         (field) =>
           !isCompleteTimingMeasurement(
             field,
-            resumedActionTen.timingMeasurement?.[field],
-            resumedActionTen.timings?.[field],
+            resumedDoorAction.timingMeasurement?.[field],
+            resumedDoorAction.timings?.[field],
           ),
       )
     ) {
@@ -6538,7 +7331,11 @@ try {
         "resumed Gate 5 finality lacks persisted measured timings",
       );
     }
-    await openExact(workers.get("b"), plan, 10);
+    await openExact(
+      workers.get("b"),
+      plan,
+      finalActionCheckpoint,
+    );
     if (report.gate5.finality?.status === "passed") {
       if (
         report.gate5.finality.expectedSharedRevision
@@ -6550,7 +7347,7 @@ try {
       }
       report.gate5.finality = {
         ...report.gate5.finality,
-        journal: actionTenJournal,
+        journal: doorActionJournal,
         resumed: true,
       };
     } else {
@@ -6562,7 +7359,7 @@ try {
         ...recoveredFinal,
         expectedSharedRevision: plan.doorState.openedRevision,
         expectedSharedStateRoot: plan.doorState.openedStateRootHex,
-        journal: actionTenJournal,
+        journal: doorActionJournal,
         recoveredAfterReportCrash: true,
       };
       report.uiEvidence.finalized.push(
@@ -6571,7 +7368,8 @@ try {
     }
     if (
       report.failureEvidence.delayedLezUpdate?.status !== "passed"
-      || report.failureEvidence.delayedLezUpdate.actionId !== "10"
+      || report.failureEvidence.delayedLezUpdate.actionId
+        !== finalActionId
       || report.failureEvidence.delayedLezUpdate.observationPaused !== true
       || !Number.isSafeInteger(
         report.failureEvidence.delayedLezUpdate.pauseMs,
@@ -6621,16 +7419,23 @@ try {
   };
   await checkpointReport();
 
-  phase = "checkpoint-ten-all-clients";
+  phase = "checkpoint-door-all-clients";
   for (const label of initialLabels) {
-    report.checkpoints[`action10${label.toUpperCase()}`] =
-      await openExact(workers.get(label), plan, 10);
+    report.checkpoints[
+      `action${finalActionId}${label.toUpperCase()}`
+    ] = await openExact(
+      workers.get(label),
+      plan,
+      finalActionCheckpoint,
+    );
   }
   if (
     resumeWithoutCreator
-    && !previousReport?.checkpoints?.action10A
+    && !previousReport?.checkpoints?.[`action${finalActionId}A`]
   ) {
-    throw new Error("creator-offline resume lacks Alice action-10 checkpoint");
+    throw new Error(
+      "creator-offline resume lacks Alice door-action checkpoint",
+    );
   }
   const authorityBundles = Object.fromEntries(
     await Promise.all(
@@ -6646,11 +7451,13 @@ try {
         .map(({ sha256: digest }) => digest),
     ).size !== 1
   ) {
-    throw new Error("action 10 finalized authority bundle digests differ");
+    throw new Error(
+      "door action finalized authority bundle digests differ",
+    );
   }
   report.gate5.convergence = {
     status: "passed",
-    checkpoint: 10,
+    checkpoint: finalActionCheckpoint,
     sharedRevision: plan.doorState.openedRevision,
     sharedStateRoot: plan.doorState.openedStateRootHex,
     authorityProjectionDigest: authorityBundles.a.sha256,
@@ -6692,14 +7499,14 @@ try {
         expectedTcpListeners("a", { delivery: true, storage: true }),
         "a",
       ),
-      frameTimingBeforeStop: await captureQsgRenderTiming(creator),
+      frameTimingBeforeStop: await captureFrameTiming(creator),
     };
     report.frameTiming.runs.aInitial =
       report.gate6.creator.frameTimingBeforeStop;
     report.gate6.lifecycle = {
       phase: "creator-stop-pending",
       creatorPid,
-      actionCheckpoint: 10,
+      actionCheckpoint: finalActionCheckpoint,
     };
     await checkpointReport();
     await creator.stop();
@@ -6716,7 +7523,7 @@ try {
   phase = "restart-bob-carol";
   for (const label of ["b", "c"]) {
     report.frameTiming.runs[`${label}Initial`] =
-      await captureQsgRenderTiming(workers.get(label));
+      await captureFrameTiming(workers.get(label));
   }
   const fullRebuildStarted = performance.now();
   const restartStarted = fullRebuildStarted;
@@ -6790,10 +7597,15 @@ try {
     ) {
       throw new Error(`identity ${label} changed across restart`);
     }
-    const checkpoint = await openExact(worker, plan, 10);
+    const checkpoint = await openExact(
+      worker,
+      plan,
+      finalActionCheckpoint,
+    );
     if (
       label === "b"
-      && checkpoint.status?.fields?.authority !== "rebuilt-10"
+      && checkpoint.status?.fields?.authority
+        !== `rebuilt-${finalActionId}`
     ) {
       throw new Error(
         `cold client did not rebuild LEZ history: ${checkpoint.status?.receipt}`,
@@ -6843,8 +7655,8 @@ try {
   if (
     sourceRecovered.mode !== "cache"
     || sourceRecovered.nativeSource !== "cache"
-    || sourceRecovered.nativeAvailable !== expectedObjectIds.length
-    || sourceRecovered.nativeTotal !== expectedObjectIds.length
+    || sourceRecovered.nativeAvailable !== catalog.ordered.length
+    || sourceRecovered.nativeTotal !== catalog.ordered.length
   ) {
     throw new Error(
       `Gate 6 Storage c mode ${sourceRecovered.mode}, expected cache`,
@@ -6897,7 +7709,7 @@ try {
     coldRecovered.mode !== "network"
     || coldRecovered.nativeSource !== "network"
     || coldRecovered.nativeAvailable !== 0
-    || coldRecovered.nativeTotal !== expectedObjectIds.length
+    || coldRecovered.nativeTotal !== catalog.ordered.length
   ) {
     throw new Error(
       `Gate 6 Storage b mode ${coldRecovered.mode}, expected network`,
@@ -6962,7 +7774,7 @@ try {
   );
   if (
     rebuiltVm.vm !== "promoted"
-    || rebuiltVm.action !== "10"
+    || rebuiltVm.action !== finalActionId
     || rebuiltVm.navigation !== "1"
     || rebuiltVm.state_root !== plan.doorState.openedStateRootHex
   ) {
@@ -7040,16 +7852,18 @@ try {
     },
     60_000,
   );
-  const hatBanned = await invoke(
-    workers.get("b"),
-    "gate2Wear",
-    ["hat"],
-    {
-      exact:
-        "rejected=delivery-publish;preflight=invalid-or-banned-payload",
-    },
-    60_000,
-  );
+  const propBanned = propStoryRequested
+    ? await invoke(
+        workers.get("b"),
+        "gate2Wear",
+        [catalog.propId],
+        {
+          exact:
+            "rejected=delivery-publish;preflight=invalid-or-banned-payload",
+        },
+        60_000,
+      )
+    : null;
   if (await originalCreatorProcessExists(creatorIdentity)) {
     throw new Error("creator restarted during Gate 6");
   }
@@ -7058,14 +7872,17 @@ try {
     bobSpeech,
     bobAtCarol,
     carolBanned,
-    hatBanned,
+    propStory: propStoryRequested
+      ? "requested"
+      : "not-requested",
+    ...(propStoryRequested ? { propBanned } : {}),
     creatorPidOffline: true,
   };
   await captureScreenshot(screenshotSpecs.gate6RestartB);
   await captureScreenshot(screenshotSpecs.gate6RestartC);
   for (const label of ["b", "c"]) {
     report.frameTiming.runs[`${label}Restart`] =
-      await captureQsgRenderTiming(workers.get(label));
+      await captureFrameTiming(workers.get(label));
   }
   report.timings.deliveryReconnectMs =
     report.delivery.restartMesh.elapsedMs;
@@ -7168,7 +7985,7 @@ try {
     throw new Error("runtime release contract evidence differs");
   }
   if (
-    report.actions.length !== 11
+    report.actions.length !== plan.actions.length
     || inexactFinalActionTiming.length > 0
     || report.actions.some(
       (action, index) =>
@@ -7215,13 +8032,13 @@ try {
     || report.storage.restart.sourceBinding
         ?.retainedCatalogVerifiedAfterColdFetch !== true
     || report.storage.restart.sourceBinding
-        ?.sourceNativeAvailable !== expectedObjectIds.length
+        ?.sourceNativeAvailable !== catalog.ordered.length
     || report.storage.restart.sourceBinding
-        ?.sourceNativeTotal !== expectedObjectIds.length
+        ?.sourceNativeTotal !== catalog.ordered.length
     || report.storage.restart.sourceBinding
         ?.coldClientNativeAvailable !== 0
     || report.storage.restart.sourceBinding
-        ?.coldClientNativeTotal !== expectedObjectIds.length
+        ?.coldClientNativeTotal !== catalog.ordered.length
     || report.storage.restart.sourceBinding?.creatorOffline !== true
     || report.storage.restart.sourceBinding
         ?.coldClientDataRootRemoved !== true
@@ -7326,8 +8143,9 @@ try {
     gate5Vm: {
       previewPayload: {
         spot: "door",
-        expectedActionId: "10",
-        transitionSha256: plan.actions[10].transitionSha256,
+        expectedActionId: finalActionId,
+        transitionSha256:
+          plan.actions[finalActionCheckpoint].transitionSha256,
       },
       previewRoundTripMs: {
         a: report.gate5.preview?.a?.elapsedMs,

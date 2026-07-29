@@ -75,7 +75,7 @@ palace::DeliveryPolicy policyFor(const palace::AuthorityProjection& authority)
     policy.roomEpoch = 9;
     policy.now = 1050;
     policy.minMotionIntervalSeconds = 1;
-    policy.allowedProps = {{"hat", "cid-hat"}};
+    policy.allowedProps = {{"test-prop", "cid-test-prop"}};
     policy.authority = &authority;
     return policy;
 }
@@ -102,11 +102,11 @@ LOGOS_TEST(finalized_authority_rejects_unauthorized_bans_and_applies_delegated_b
 
     palace::AuthoritySnapshotV1 delegated = baseSnapshot();
     delegated.bans.push_back({"ban-carol", "palace-1", "", "carol", "", "bob", true});
-    delegated.bans.push_back({"ban-hat", "palace-1", "atrium", "", "cid-hat", "bob", true});
+    delegated.bans.push_back({"ban-test-prop", "palace-1", "atrium", "", "cid-test-prop", "bob", true});
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(delegated, 902));
     LOGOS_ASSERT_TRUE(authority.isUserBanned("carol", "lounge"));
-    LOGOS_ASSERT_TRUE(authority.isAssetBanned("cid-hat", "atrium"));
-    LOGOS_ASSERT_FALSE(authority.isAssetBanned("cid-hat", "lounge"));
+    LOGOS_ASSERT_TRUE(authority.isAssetBanned("cid-test-prop", "atrium"));
+    LOGOS_ASSERT_FALSE(authority.isAssetBanned("cid-test-prop", "lounge"));
 }
 
 LOGOS_TEST(delivery_accepts_ordered_messages_then_rejects_replay_and_invalid_raw_input) {
@@ -162,12 +162,12 @@ LOGOS_TEST(delivery_rejects_out_of_bounds_motion_and_finalized_user_or_asset_ban
 
     palace::PalaceDeliveryEnvelopeV1 wear = validSpeech(1);
     wear.kind = palace::DeliveryKind::WearProp;
-    wear.payload = "hat";
+    wear.payload = "test-prop";
     sign(wear, "carol-key");
     LOGOS_ASSERT_TRUE(ingress.receive(topic, wear, policy, verifier).accepted);
 
     palace::AuthoritySnapshotV1 bannedAsset = baseSnapshot();
-    bannedAsset.bans.push_back({"ban-hat", "palace-1", "atrium", "", "cid-hat", "bob", true});
+    bannedAsset.bans.push_back({"ban-test-prop", "palace-1", "atrium", "", "cid-test-prop", "bob", true});
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(bannedAsset, 901));
     palace::DeliveryIngress assetIngress;
     LOGOS_ASSERT_EQ(assetIngress.receive(topic, wear, policy, verifier).reason,

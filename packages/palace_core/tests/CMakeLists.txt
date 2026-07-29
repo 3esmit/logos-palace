@@ -27,8 +27,10 @@ logos_test(
         ../src/palace_storage_module_codec.cpp
         ../src/palace_storage_catalog_session.cpp
         ../src/palace_storage_mvp.cpp
+        ../src/palace_storage_mvp_catalog_store.cpp
         ../src/palace_verified_asset_store.cpp
-        ../src/palace_room_backgrounds.cpp
+        ../src/palace_asset_authoring.cpp
+        ../src/palace_asset_authoring_store.cpp
         ../src/palace_identity.cpp
         ../src/palace_delivery_identity_store.cpp
         ../src/palace_lez.cpp
@@ -63,8 +65,10 @@ logos_test(
         test_storage_module_session.cpp
         test_storage_catalog_session.cpp
         test_storage_mvp.cpp
+        test_storage_mvp_catalog_store.cpp
         test_verified_asset_store.cpp
-        test_room_backgrounds.cpp
+        test_asset_authoring.cpp
+        test_asset_authoring_store.cpp
         test_identity.cpp
         test_delivery_identity_store.cpp
         test_lez_codec.cpp

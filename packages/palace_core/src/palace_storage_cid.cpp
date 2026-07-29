@@ -241,6 +241,18 @@ bool canonicalStorageCidSha256(
         return true;
     }
 
+    return canonicalStorageCidV1Sha256(value, digest);
+}
+
+bool canonicalStorageCidV1Sha256(
+    const std::string& value,
+    std::string& digest)
+{
+    digest.clear();
+    if (value.size() < 10U || value.size() > kMaximumCidBytes)
+        return false;
+
+    std::vector<std::uint8_t> decoded;
     if (value.front() == 'b') {
         const std::string body = value.substr(1U);
         if (!decodeLowerBase32(body, decoded)

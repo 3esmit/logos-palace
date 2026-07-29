@@ -83,7 +83,6 @@
             for forbidden in \
               logos-palace-storage-acceptance-holder-v1 \
               palace_delivery_acceptance_fixture.cpp \
-              fixture-cid-hat \
               9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60 \
               4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb \
               c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7
@@ -344,6 +343,7 @@
               ${acceptanceSource}/tests/basecamp_active_scope_preflight.test.mjs \
               ${acceptanceSource}/tests/basecamp_claim_lifecycle.test.mjs \
               ${acceptanceSource}/tests/basecamp_direct_child.test.mjs \
+              ${acceptanceSource}/tests/basecamp_frame_timing.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate2_settlement.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_cold_state.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_creator_identity.test.mjs \
@@ -356,6 +356,7 @@
               ${acceptanceSource}/tests/basecamp_scope.test.mjs \
               ${acceptanceSource}/tests/basecamp_scope_control.test.mjs \
               ${acceptanceSource}/tests/basecamp_scope_guardian.test.mjs \
+              ${acceptanceSource}/tests/basecamp_storage_cid.test.mjs \
               ${acceptanceSource}/tests/basecamp_standalone_scope.integration.test.mjs \
               ${acceptanceSource}/tests/basecamp_terminal_cleanup.test.mjs \
               ${acceptanceSource}/tests/test_public_evidence.mjs \

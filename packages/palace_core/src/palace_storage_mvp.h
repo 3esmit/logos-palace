@@ -36,6 +36,29 @@ struct PalaceStorageMvpArtifactV1 {
     std::string cid;
 };
 
+struct PalaceStorageMvpPropAssetV1 {
+    std::string propId;
+    std::string handle;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::uint32_t anchorX = 0U;
+    std::uint32_t anchorY = 0U;
+    std::string layer;
+};
+
+// Optional user-authored prop input. The MVP graph contains no prop leaf or
+// manifest until an administrator selects, verifies, publishes, and assigns
+// one through the authoring boundary.
+struct PalaceStorageMvpPropInputV1 {
+    std::string png;
+    std::string propId;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::uint32_t anchorX = 0U;
+    std::uint32_t anchorY = 0U;
+    std::string layer;
+};
+
 const char* palaceStorageMvpArtifactTypeName(
     PalaceStorageMvpArtifactType type);
 
@@ -49,15 +72,29 @@ selectPalaceStorageMvpFetchSource(
     const std::vector<std::optional<bool>>& nativeCidAvailability,
     std::size_t expectedArtifactCount);
 
-// Exact, bounded Gate-3 content graph. Leaves contain two verified room
-// backgrounds, one transparent prop plus anchor/layer metadata, two room
-// descriptors, and one deterministic door script. Derived catalog manifests
-// are created only after their child uploads return exact CIDs.
+// Exact, bounded Gate-3 content graph. Media leaves come only from verified
+// administrator-authored assignments. Metadata and script leaves use the
+// protocol's canonical templates. Derived manifests are created only after
+// their child uploads return exact CIDs.
 class PalaceStorageMvpBundle {
 public:
     bool initialize(
         const std::string& atriumPng,
-        const std::string& loungePng);
+        const std::string& loungePng,
+        const std::optional<PalaceStorageMvpPropInputV1>& prop =
+            std::nullopt);
+    // Compatibility overload for callers that already have an explicit
+    // user-authored prop assignment.
+    bool initialize(
+        const std::string& atriumPng,
+        const std::string& loungePng,
+        const std::string& propPng,
+        const std::string& propId,
+        std::uint32_t propWidth,
+        std::uint32_t propHeight,
+        std::uint32_t anchorX,
+        std::uint32_t anchorY,
+        const std::string& layer);
     bool initialized() const;
     bool complete() const;
     std::size_t artifactCount() const;
@@ -70,10 +107,25 @@ public:
     bool assignPublicationCid(
         const std::string& objectId,
         const std::string& cid);
+    // Validates exact catalog bytes. Visitor leaf placeholders acquire bytes
+    // only after their length and digest match the restored graph.
+    bool acceptFetchedBytes(
+        const std::string& objectId,
+        const std::string& bytes);
+    bool fetchedContentValid() const;
+    std::string propId() const;
+    // Derived exclusively from the user-authored prop identifier accepted by
+    // initialize/validated from a restored graph. Callers must not recreate
+    // prop object IDs from application-owned names.
+    std::string propManifestObjectId() const;
+    std::optional<PalaceStorageMvpPropAssetV1>
+    propAsset() const;
 
     // Canonical catalog is an untrusted transport object, not authority.
-    // restoreCanonicalCatalog reconstructs every fixed leaf and derived
-    // manifest, then requires exact type/length/hash/canonical-byte matches.
+    // Restore can start without administrator-local authored bytes. It creates
+    // digest-bound leaf placeholders for the catalog's validated graph,
+    // reconstructs every derived
+    // manifest, then requires exact graph and canonical-byte matches.
     std::string canonicalCatalog() const;
     bool restoreCanonicalCatalog(const std::string& encoded);
 
@@ -91,6 +143,7 @@ private:
         const std::vector<std::string>& childObjectIds);
 
     std::map<std::string, PalaceStorageMvpArtifactV1> m_artifacts;
+    std::optional<std::string> m_graphPropId;
     bool m_initialized = false;
 };
 

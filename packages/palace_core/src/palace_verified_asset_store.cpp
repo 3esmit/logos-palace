@@ -84,6 +84,33 @@ VerifiedAssetStore::VerifiedAssetStore(std::string instancePersistencePath)
     }
 }
 
+VerifiedAsset VerifiedAssetStore::stagePngBytes(
+    const std::string& encoded) const
+{
+    constexpr std::size_t kMaximumPngBytes =
+        10U * 1024U * 1024U;
+    if (encoded.empty()
+        || encoded.size() > kMaximumPngBytes) {
+        return reject("encoded-png-size");
+    }
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    if (!QtPngDecoder{}.decodePng(encoded, width, height))
+        return reject("raster-decoder-rejected");
+
+    const std::string digest = crypto::sha256Hex(encoded);
+    AssetRefV1 reference;
+    reference.sourceCid = digest;
+    reference.derivativeCid = digest;
+    reference.byteLength = encoded.size();
+    reference.mediaType = "image/png";
+    reference.width = width;
+    reference.height = height;
+    reference.technicalProfile = "palace-png-v1";
+    reference.contentSha256 = digest;
+    return stagePngDerivative(reference, encoded);
+}
+
 VerifiedAsset VerifiedAssetStore::stagePngDerivative(const AssetRefV1& reference,
                                                      const std::string& encoded) const
 {
@@ -107,6 +134,8 @@ VerifiedAsset VerifiedAssetStore::stagePngDerivative(const AssetRefV1& reference
     const QString destination = canonicalAssetDirectory + QLatin1Char('/') + QString::fromStdString(verified.handle)
         + QStringLiteral(".png");
     const QFileInfo existing(destination);
+    if (existing.isSymLink())
+        return reject("asset-destination-symlink");
     if (existing.exists()) {
         const QString canonicalExisting = existing.canonicalFilePath();
         if (!existing.isFile() || !isUnder(canonicalExisting, canonicalAssetDirectory))

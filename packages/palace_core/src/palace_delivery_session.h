@@ -117,6 +117,9 @@ public:
     DeliveryConnectionState connectionState() const;
 
     void replaceAllowedProps(std::map<std::string, std::string> allowedProps);
+    // Applies current finalized authority to the already-projected live room
+    // state. Returns true only when the participant snapshot changes.
+    bool reconcileAuthority();
 
     DeliverySessionTransition publish(const std::string& requestId,
                                       DeliveryKind kind,

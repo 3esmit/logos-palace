@@ -31,6 +31,10 @@ import {
   releaseProgramId as activeClaimReleaseProgramId,
   releaseRootId as activeClaimReleaseRootId,
 } from "./basecamp_claim_lifecycle.mjs";
+import {
+  palaceFrameTimingContract,
+  summarizePalaceFrameIntervals,
+} from "./basecamp_frame_timing.mjs";
 
 const execFileAsync = promisify(execFile);
 const builderPath = fileURLToPath(
@@ -43,7 +47,7 @@ const productSnapshot =
 const productSnapshotNarHash =
   "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const snapshotRunnerSha256 = "d".repeat(64);
-const basecampRevision = "b".repeat(40);
+const basecampRevision = palaceFrameTimingContract.basecampRevision;
 const basecampSha256 = "c".repeat(64);
 const releaseBytecodeSha256 = palaceRelease.programBytecodeSha256;
 const releaseImageId = palaceRelease.programIdHex;
@@ -89,11 +93,93 @@ const runScopeId = "AB12cd34";
 const processScopePrefix = `logos-palace-run-${runScopeId}`;
 const processScopeSlice = `${processScopePrefix}.slice`;
 
+const selectedAssetSpecs = [
+  {
+    assetId: "selected-a",
+    handle: "a".repeat(64),
+    role: "room-background",
+    target: { kind: "room-background", roomId: "atrium" },
+    byteLength: 64,
+    width: 4,
+    height: 4,
+  },
+  {
+    assetId: "selected-b",
+    handle: "b".repeat(64),
+    role: "room-background",
+    target: { kind: "room-background", roomId: "lounge" },
+    byteLength: 65,
+    width: 5,
+    height: 5,
+  },
+  {
+    assetId: "selected-c",
+    handle: "c".repeat(64),
+    role: "room-background",
+    target: { kind: "room-background", roomId: "atrium" },
+    byteLength: 66,
+    width: 6,
+    height: 6,
+  },
+];
+
+const selectedGraphTargets = [
+  {
+    kind: "room-background",
+    targetId: "atrium",
+    objectId: "background-atrium",
+  },
+  {
+    kind: "room-background",
+    targetId: "lounge",
+    objectId: "background-lounge",
+  },
+];
+
+const gate3ObjectOrder = [
+  "background-atrium",
+  "background-lounge",
+  "room-atrium-metadata",
+  "room-lounge-metadata",
+  "script-door",
+  "room-atrium",
+  "room-lounge",
+  "palace-1",
+];
+
+const gate3ObjectTypes = [
+  "background_png",
+  "background_png",
+  "room_metadata",
+  "room_metadata",
+  "script_bundle",
+  "room_manifest",
+  "room_manifest",
+  "palace_manifest",
+];
+
+const gate3MediaTypes = [
+  "image/png",
+  "image/png",
+  "application/vnd.logos-palace.room-v1",
+  "application/vnd.logos-palace.room-v1",
+  "application/vnd.logos-palace.script-v1",
+  "application/vnd.logos-palace.catalog-manifest-v1",
+  "application/vnd.logos-palace.catalog-manifest-v1",
+  "application/vnd.logos-palace.catalog-manifest-v1",
+];
+
+const assetAuthoringBoundary =
+  "operator-selected bounded PNG bytes -> verified handle -> approval"
+  + " -> digest-bound Storage CID -> manifest assignment";
+const assetAuthoringScreenshotFile =
+  "gate3-admin-assets-published.png";
+
 const screenshotSpecs = [
   [
     "gate4-a-three-user-atrium-converged.png",
     "gate4-delivery-convergence",
-    "three-user-atrium-with-approved-prop",
+    "three-user-atrium-converged",
     "a",
   ],
   [
@@ -105,7 +191,7 @@ const screenshotSpecs = [
   [
     "gate4-b-atrium-after-moderation.png",
     "gate4-moderation",
-    "atrium-after-human-user-and-prop-bans",
+    "atrium-after-human-moderation",
     "b",
   ],
   [
@@ -360,6 +446,45 @@ function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function stableFixture(value) {
+  if (Array.isArray(value)) return value.map(stableFixture);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, stableFixture(value[key])]),
+    );
+  }
+  return value;
+}
+
+const fixtureBase58Alphabet =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function encodeBase58(bytes) {
+  let value = 0n;
+  for (const byte of bytes) value = value * 256n + BigInt(byte);
+  let encoded = "";
+  while (value > 0n) {
+    const digit = Number(value % 58n);
+    encoded = fixtureBase58Alphabet[digit] + encoded;
+    value /= 58n;
+  }
+  let leadingZeros = 0;
+  while (leadingZeros < bytes.length && bytes[leadingZeros] === 0) {
+    encoded = fixtureBase58Alphabet[0] + encoded;
+    leadingZeros += 1;
+  }
+  return encoded;
+}
+
+function storageCidForSha256(value) {
+  return `z${encodeBase58(Buffer.concat([
+    Buffer.from([0x01, 0x55, 0x12, 0x20]),
+    Buffer.from(value, "hex"),
+  ]))}`;
+}
+
 function latency(sampleCount = 20) {
   return { sampleCount, p50Ms: 2, p95Ms: 4, maxMs: 5 };
 }
@@ -379,30 +504,29 @@ function applicationSamples(bytes) {
   }));
 }
 
-function qsgRun() {
+function frameTimingRun() {
+  const samplesUs = Array.from(
+    { length: palaceFrameTimingContract.sampleCount },
+    (_, index) => (index + 1) * 1_000,
+  );
   return {
-    parser: {
-      basecampRevision,
-      qtVersion: "6.9.2",
-      renderLoop: "software",
-      messagePattern: "%{category}: %{message}",
+    measurementContract: palaceFrameTimingContract,
+    frameWindow: {
+      startFrame: 2,
+      endFrame: 2 + palaceFrameTimingContract.sampleCount,
+      elapsedTimeUs:
+        samplesUs.reduce((total, sample) => total + sample, 0),
     },
-    sampleCount: 20,
-    summaries: Object.fromEntries(
-      [
-        "totalMs",
-        "polishMs",
-        "syncMs",
-        "renderMs",
-        "swapMs",
-        "frameDeltaMs",
-      ].map((name) => [name, { p50: 1, p95: 2, max: 3 }]),
-    ),
+    sampleCount: samplesUs.length,
+    samplesUs,
+    summaries: {
+      frameIntervalUs: summarizePalaceFrameIntervals(samplesUs),
+    },
   };
 }
 
 function rawGate4Metrics() {
-  const lezActions = Array.from({ length: 11 }, (_, index) => ({
+  const lezActions = Array.from({ length: 10 }, (_, index) => ({
     actionId: String(index),
     kind: "fixture",
     transitionSha256: String(index).padStart(64, "0"),
@@ -464,7 +588,7 @@ function rawGate4Metrics() {
     rejectedUnsupportedSize: "rejected=application-round-trip-size",
   };
   const vmMetric = (phase) => ({
-    actionId: "10",
+    actionId: "9",
     phase,
     clock: "steady_clock",
     durationNs: "1000000",
@@ -474,7 +598,7 @@ function rawGate4Metrics() {
   const gate5Vm = {
     previewPayload: {
       spot: "door",
-      expectedActionId: "10",
+      expectedActionId: "9",
       transitionSha256: "5".repeat(64),
     },
     previewRoundTripMs: { a: 5, b: 6 },
@@ -497,7 +621,7 @@ function rawGate4Metrics() {
     fullRebuildEndBoundary: "end",
   };
   const frameTiming = {
-    parserContract: qsgRun().parser,
+    measurementContract: palaceFrameTimingContract,
     runs: Object.fromEntries(
       [
         "aInitial",
@@ -505,7 +629,7 @@ function rawGate4Metrics() {
         "cInitial",
         "bRestart",
         "cRestart",
-      ].map((name) => [name, qsgRun()]),
+      ].map((name) => [name, frameTimingRun()]),
     ),
   };
   const processMemory = {
@@ -963,6 +1087,7 @@ async function fixture() {
     runtimeManifestFixture,
   );
   const png = validPng();
+  await writeFile(join(runDir, "gate3", assetAuthoringScreenshotFile), png);
   const screenshots = [];
   for (const [file, stage, state, label] of screenshotSpecs) {
     await writeFile(join(runDir, "gate4", file), png);
@@ -1108,6 +1233,128 @@ async function fixture() {
       },
     },
   };
+  const authoredAssets = selectedAssetSpecs.map((asset, index) => {
+    const cid = storageCidForSha256(asset.handle);
+    const session = (index + 1).toString(16).padStart(32, "0");
+    const assignmentReceipt = asset.target.kind === "room-background"
+      ? `ok;room=${asset.target.roomId};handle=${asset.handle}`
+      : (
+          `ok;propId=${asset.target.propId};handle=${asset.handle};`
+          + `anchorX=${asset.target.anchorX};`
+          + `anchorY=${asset.target.anchorY};`
+          + `layer=${asset.target.layer}`
+        );
+    return {
+      assetId: asset.assetId,
+      label: asset.assetId,
+      file: `${asset.assetId}.png`,
+      handle: asset.handle,
+      width: asset.width,
+      height: asset.height,
+      byteLength: asset.byteLength,
+      role: asset.role,
+      target: asset.target,
+      chunkBytes: 32768,
+      chunkCount: 1,
+      begin: {
+        receipt:
+          `ok;session=${session};next=0;maxChunkBytes=32768;`
+          + "maxTotalBytes=10485760",
+        elapsedMs: index + 1,
+      },
+      appends: [{
+        sequence: 0,
+        byteLength: asset.byteLength,
+        receipt:
+          `ok;session=${session};next=1;bytes=${asset.byteLength}`,
+        elapsedMs: index + 2,
+      }],
+      commit: {
+        receipt:
+          `ok;handle=${asset.handle};width=${asset.width};`
+          + `height=${asset.height};bytes=${asset.byteLength}`,
+        elapsedMs: index + 3,
+      },
+      review: {
+        receipt: `ok;handle=${asset.handle};review=approved`,
+        elapsedMs: index + 4,
+      },
+      publication: {
+        dispatched: {
+          receipt: "ok;asset=publishing",
+          elapsedMs: index + 5,
+        },
+        completed: {
+          receipt: `published;cid=${cid}`,
+          elapsedMs: index + 6,
+        },
+      },
+      cid,
+      assignment: {
+        receipt: assignmentReceipt,
+        elapsedMs: index + 7,
+      },
+    };
+  });
+  const selectedGraphBindings = selectedGraphTargets.map((binding) => {
+    const asset = authoredAssets.reduce(
+      (selected, candidate) =>
+        candidate.target.kind === binding.kind
+        && (
+          binding.kind !== "room-background"
+          || candidate.target.roomId === binding.targetId
+        )
+          ? candidate
+          : selected,
+      undefined,
+    );
+    return {
+      ...binding,
+      assetId: asset.assetId,
+      assignment: asset.target,
+      cid: asset.cid,
+      contentSha256: asset.handle,
+    };
+  });
+  const publicationObjects = gate3ObjectOrder.map((objectId, index) => {
+    const binding = selectedGraphBindings.find(
+      (candidate) => candidate.objectId === objectId,
+    );
+    const active = authoredAssets.find(
+      ({ assetId }) => assetId === binding?.assetId,
+    );
+    const contentSha256 = binding
+      ? active.handle
+      : digest(Buffer.from(`fixture-object:${objectId}`));
+    return {
+      objectId,
+      type: gate3ObjectTypes[index],
+      mediaType: gate3MediaTypes[index],
+      cid: storageCidForSha256(contentSha256),
+      byteLength: binding
+        ? active.byteLength
+        : 100 + index,
+      contentSha256,
+    };
+  });
+  const publicationCatalogPrefix = [
+    "logos-palace-mvp-storage-catalog-v1",
+    "version=1",
+    "root=palace-1",
+    `objects=${gate3ObjectOrder.length}`,
+    ...publicationObjects.map((object) =>
+      `object=${object.objectId};${object.type};${object.mediaType};`
+      + `${object.cid};${object.byteLength};${object.contentSha256}`),
+    "",
+  ].join("\n");
+  const publicationCatalogChecksum = digest(publicationCatalogPrefix);
+  const publicationCatalogCanonical =
+    `${publicationCatalogPrefix}checksum=${publicationCatalogChecksum}\n`;
+  const publicationCatalogEncoded =
+    Buffer.from(publicationCatalogCanonical, "utf8").toString("base64url");
+  const publicationCatalogById = Object.fromEntries(
+    publicationObjects.map((object) => [object.objectId, object]),
+  );
   const gate3 = {
     schema: "logos.palace.basecamp-gate3-report",
     version: 1,
@@ -1125,6 +1372,76 @@ async function fixture() {
       c: storageConfig(31003, 32003),
     },
     releasePreflight,
+    assetAuthoring: {
+      version: 1,
+      phase: "complete",
+      inputManifest: {
+        schema: "logos.palace.e2e-asset-inputs",
+        version: 1,
+        sha256: "e".repeat(64),
+        assetCount: selectedAssetSpecs.length,
+      },
+      selectedAssetCount: selectedAssetSpecs.length,
+      propStory: "not-requested",
+      boundary: assetAuthoringBoundary,
+      guardedBeforeApproval: {
+        receipt: "rejected=asset-not-approved",
+        elapsedMs: 1,
+      },
+      assets: authoredAssets,
+      elapsedMs: 100,
+      graphBindings: selectedGraphBindings,
+      activePropProjection: { version: 1, available: false },
+      catalogCount: selectedAssetSpecs.length,
+      assignments: {
+        rooms: {
+          atrium: selectedAssetSpecs[2].handle,
+          lounge: selectedAssetSpecs[1].handle,
+        },
+        prop: null,
+      },
+    },
+    assetAuthoringScreenshot: {
+      file: assetAuthoringScreenshotFile,
+      artifactPath: assetAuthoringScreenshotFile,
+      width: 1600,
+      height: 900,
+      byteLength: png.length,
+      sha256: digest(png),
+      stage: "gate3-admin-asset-authoring",
+      state: "admin-selected-assets-approved-published-assigned",
+      label: "a",
+      renderEvidence: {
+        schema: "logos.palace.asset-authoring-render",
+        version: 1,
+        open: true,
+        cardCount: selectedAssetSpecs.length,
+        readyImageCount: selectedAssetSpecs.length,
+        publishedCount: selectedAssetSpecs.length,
+        atriumAssigned: true,
+        loungeAssigned: true,
+        propAssigned: false,
+        fenceRequest: 1,
+        fenceState: "complete",
+        fenceFrame: 120,
+        epoch: selectedAssetSpecs.length + 1,
+      },
+    },
+    publication: {
+      dispatched: {
+        receipt: "ok;bundle=publishing",
+        elapsedMs: 1,
+      },
+      completed: {
+        receipt:
+          `state=verified;published=${publicationObjects.length};`
+          + `verified=${publicationObjects.length};`
+          + `total=${publicationObjects.length}`,
+        elapsedMs: 10,
+      },
+      checksum: publicationCatalogChecksum,
+      objects: publicationObjects,
+    },
   };
   const deliveryEntryNode =
     "/ip4/127.0.0.1/tcp/33001/p2p/12D3KooWFixtureEntry";
@@ -1465,6 +1782,62 @@ async function fixture() {
     basecampRevision,
     basecampBinarySha256: basecampSha256,
     packageHashes: lgxPackages,
+    gate3: {
+      catalogChecksum: publicationCatalogChecksum,
+      assetAuthoringEvidence: {
+        status: "passed",
+        version: 1,
+        selectedAssetCount: selectedAssetSpecs.length,
+        propStory: "not-requested",
+        manifestSha256: gate3.assetAuthoring.inputManifest.sha256,
+        approvalGuardReceipt:
+          gate3.assetAuthoring.guardedBeforeApproval.receipt,
+        assetBindingsSha256: digest(JSON.stringify(stableFixture(
+          authoredAssets.map(
+            ({ role, handle, cid, target }) => ({
+              role,
+              handle,
+              cid,
+              assigned: target !== undefined,
+            }),
+          ),
+        ))),
+        activeGraphBindings: selectedGraphBindings,
+        activePropProjection:
+          gate3.assetAuthoring.activePropProjection,
+        screenshot: {
+          file: gate3.assetAuthoringScreenshot.file,
+          width: gate3.assetAuthoringScreenshot.width,
+          height: gate3.assetAuthoringScreenshot.height,
+          byteLength: gate3.assetAuthoringScreenshot.byteLength,
+          sha256: gate3.assetAuthoringScreenshot.sha256,
+          renderEvidence:
+            gate3.assetAuthoringScreenshot.renderEvidence,
+          artifactVerified: true,
+        },
+        evidenceSha256: digest(JSON.stringify(stableFixture({
+          assetAuthoring: gate3.assetAuthoring,
+          assetAuthoringScreenshot:
+            gate3.assetAuthoringScreenshot,
+        }))),
+      },
+      activePropProjectionRecovery: {
+        status: "passed",
+        property: "gate4ActivePropAsset",
+        beforeVerification: ["a", "b", "c"].map((label) => ({
+          label,
+          projection: { version: 1, available: false },
+        })),
+        propStory: "not-requested",
+        projectionSha256: digest(JSON.stringify(stableFixture(
+          gate3.assetAuthoring.activePropProjection,
+        ))),
+        afterVerification: ["a", "b", "c"].map((label) => ({
+          label,
+          projection: gate3.assetAuthoring.activePropProjection,
+        })),
+      },
+    },
     releaseContract: {
       protocols: protocolContract,
       network: networkContract,
@@ -1491,18 +1864,20 @@ async function fixture() {
       },
     },
     plan: {
+      propStory: "not-requested",
+      propId: null,
+      doorActionId: "9",
       doorState: {
         openedStateRootHex: "8".repeat(64),
       },
+      actions: gate4Actions.map(({ actionId }) => ({ actionId })),
     },
     catalog: {
-      checksum: "6".repeat(64),
-      byId: {
-        "background-atrium": {
-          cid: atriumBackgroundCid,
-          contentSha256: atriumBackgroundSha256,
-        },
-      },
+      checksum: publicationCatalogChecksum,
+      encoded: publicationCatalogEncoded,
+      encodedSha256: digest(publicationCatalogEncoded),
+      canonicalSha256: digest(publicationCatalogCanonical),
+      byId: publicationCatalogById,
     },
     storage: {
       restart: {
@@ -1512,29 +1887,29 @@ async function fixture() {
               mode: "network",
               nativeSource: "network",
               nativeAvailable: 0,
-              nativeTotal: 11,
+              nativeTotal: publicationObjects.length,
             },
           },
           c: {
             recovered: {
               mode: "cache",
               nativeSource: "cache",
-              nativeAvailable: 11,
-              nativeTotal: 11,
+              nativeAvailable: publicationObjects.length,
+              nativeTotal: publicationObjects.length,
             },
           },
         },
         sourceBinding: {
           sourceLabel: "c",
           sourceAccountId: "7".repeat(64),
-          exactCatalogChecksum: "6".repeat(64),
+          exactCatalogChecksum: publicationCatalogChecksum,
           retainedDataRootBeforeRestart: retainedStorageRoot,
           retainedCatalogVerifiedBeforeColdFetch: true,
           retainedCatalogVerifiedAfterColdFetch: true,
-          sourceNativeAvailable: 11,
-          sourceNativeTotal: 11,
+          sourceNativeAvailable: publicationObjects.length,
+          sourceNativeTotal: publicationObjects.length,
           coldClientNativeAvailable: 0,
-          coldClientNativeTotal: 11,
+          coldClientNativeTotal: publicationObjects.length,
           creatorOffline: true,
           coldClientDataRootRemoved: true,
           coldClientStorageNotStarted: true,
@@ -1613,7 +1988,7 @@ async function fixture() {
     failureEvidence: {
       delayedLezUpdate: {
         status: "passed",
-        actionId: "10",
+        actionId: "9",
         observationPaused: true,
         pauseMs: 1500,
       },
@@ -1621,8 +1996,9 @@ async function fixture() {
         status: "passed",
         objectId: "background-atrium",
         missingSourceCid: missingStorageSourceCid,
-        derivativeCid: atriumBackgroundCid,
-        expectedContentSha256: atriumBackgroundSha256,
+        derivativeCid:
+          storageCidForSha256(selectedAssetSpecs[2].handle),
+        expectedContentSha256: selectedAssetSpecs[2].handle,
         states: ["missing", "fetching", "degraded"],
         before: { receipt: "missing" },
         dispatched: {
@@ -1693,7 +2069,7 @@ async function fixture() {
         storageRecoveryMode: "network",
         vmProjection: {
           phase: "promoted",
-          actionId: "10",
+          actionId: "9",
           navigation: "1",
           stateRoot: "8".repeat(64),
         },
@@ -1872,7 +2248,7 @@ test("keeps exact-ten screenshot contract synchronized", async () => {
       objectScreenshotSpecs(exactSourceBlock(
         builderSource,
         "const screenshotSpecs = Object.freeze([",
-        "\n]);\n\nconst dependencySpecs",
+        "\n]);\n\nfunction gate3ObjectOrder",
         "public evidence screenshot contract",
       )),
     ],
@@ -1967,6 +2343,71 @@ test("builds exact allowlist-only public evidence", async () => {
         ),
       ),
     );
+    const gate3Report = await readJson(
+      join(runDir, "gate3", "gate3-report.json"),
+    );
+    assert.deepEqual(reopened.assetAuthoring, {
+      status: "passed",
+      version: 1,
+      selectedAssetCount: selectedAssetSpecs.length,
+      propStory: "not-requested",
+      boundary: assetAuthoringBoundary,
+      roles: {
+        roomBackground: 3,
+        propImage: 0,
+      },
+      assignments: {
+        atrium: true,
+        lounge: true,
+        prop: false,
+      },
+      projection: {
+        propVerified: false,
+        observerCount: 3,
+      },
+      approvalGuard: {
+        status: "rejected=asset-not-approved",
+        elapsedMs: 1,
+      },
+      ingestion: {
+        chunkBytes: 32768,
+        chunkCount: selectedAssetSpecs.length,
+        totalBytes: selectedAssetSpecs.reduce(
+          (total, asset) => total + asset.byteLength,
+          0,
+        ),
+      },
+      publication: {
+        publishedCount: selectedAssetSpecs.length,
+        graphLeafCount: 2,
+        catalogObjectCount: gate3ObjectOrder.length,
+        catalogChecksum: gate3Report.publication.checksum,
+      },
+      screenshot: {
+        file: `gate3/${assetAuthoringScreenshotFile}`,
+        stage: "gate3-admin-asset-authoring",
+        state: "admin-selected-assets-approved-published-assigned",
+        width: 1600,
+        height: 900,
+        byteLength: validPng().length,
+        sha256: digest(validPng()),
+        render: {
+          schema: "logos.palace.asset-authoring-render",
+          version: 1,
+          open: true,
+          cardCount: selectedAssetSpecs.length,
+          readyImageCount: selectedAssetSpecs.length,
+          publishedCount: selectedAssetSpecs.length,
+          atriumAssigned: true,
+          loungeAssigned: true,
+          propAssigned: false,
+          fenceRequest: 1,
+          fenceState: "complete",
+          fenceFrame: 120,
+          epoch: selectedAssetSpecs.length + 1,
+        },
+      },
+    });
     assert.equal(reopened.screenshots.length, 10);
     assert.equal(reopened.metrics.delivery.orderedMessageCount, 300);
     assert.equal(
@@ -2061,8 +2502,9 @@ test("builds exact allowlist-only public evidence", async () => {
         objectId: "background-atrium",
         missingSourceCid: missingStorageSourceCid,
         sourceAbsentFromCatalog: true,
-        derivativeCid: atriumBackgroundCid,
-        expectedContentSha256: atriumBackgroundSha256,
+        derivativeCid:
+          storageCidForSha256(selectedAssetSpecs[2].handle),
+        expectedContentSha256: selectedAssetSpecs[2].handle,
         states: ["missing", "fetching", "degraded"],
         transitionEvidence: {
           before: "missing",
@@ -2105,7 +2547,11 @@ test("builds exact allowlist-only public evidence", async () => {
           reopened.recoveryEvidence.coldClientRebuild.retainedSource
             .retainedHolderNativeTotal,
       },
-      { cold: 0, retained: 11, total: 11 },
+      {
+        cold: 0,
+        retained: gate3ObjectOrder.length,
+        total: gate3ObjectOrder.length,
+      },
     );
     assert.deepEqual(
       {
@@ -2177,6 +2623,7 @@ test("builds exact allowlist-only public evidence", async () => {
       "artifactPath",
       "sandboxTestOutput",
       "receiptSha256",
+      "\"receipt\":",
       "accountId",
       "\"ports\":",
       "\"device\":",
@@ -3269,6 +3716,74 @@ test("rejects each compiled application aggregate differing from raw samples", a
   });
 });
 
+test("rejects malformed raw Palace frame timing evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate4/gate4-report.json");
+    const baseline = await readJson(path);
+    const cases = [
+      {
+        name: "missing sample",
+        mutate: (frameTiming) => {
+          frameTiming.runs.aInitial.samplesUs.pop();
+        },
+      },
+      {
+        name: "sample count mismatch",
+        mutate: (frameTiming) => {
+          frameTiming.runs.aInitial.sampleCount = 19;
+        },
+      },
+      {
+        name: "aggregate differs from samples",
+        mutate: (frameTiming) => {
+          frameTiming.runs.aInitial.summaries.frameIntervalUs.p95 += 1;
+        },
+      },
+      {
+        name: "extra run",
+        mutate: (frameTiming) => {
+          frameTiming.runs.unverified = frameTimingRun();
+        },
+      },
+      {
+        name: "coherent contract drift",
+        mutate: (frameTiming) => {
+          frameTiming.measurementContract.clock = "wall clock";
+          for (const run of Object.values(frameTiming.runs)) {
+            run.measurementContract.clock = "wall clock";
+          }
+        },
+      },
+    ];
+    for (const entry of cases) {
+      const gate4 = structuredClone(baseline);
+      entry.mutate(gate4.metrics.frameTiming);
+      await writeJson(path, gate4);
+      await writeCompiled(runDir);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /frame metrics|frame timing evidence/,
+        entry.name,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    }
+  });
+});
+
+test("rejects compiled Palace frame timing differing from raw evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "compiled-mvp-report.json");
+    const compiled = await readJson(path);
+    compiled.metrics.frameTiming.runs.aInitial.samplesUs[0] += 1;
+    await writeJson(path, compiled);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /compiled frame metrics differ from raw evidence/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
 test("rejects extra raw application envelope fields", async () => {
   await withFixture(async ({ runDir, output }) => {
     const path = join(runDir, "gate4/gate4-report.json");
@@ -3632,6 +4147,64 @@ test("rejects changed public application samples and aggregates", async () => {
   });
 });
 
+test("rejects changed public Palace frame timing samples and frame window", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    const mutations = [
+      {
+        name: "contract",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.measurementContract.clock =
+            "wall clock";
+        },
+      },
+      {
+        name: "sample count",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.runs[0].sampleCount -= 1;
+        },
+      },
+      {
+        name: "sample",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.runs[0].samplesUs[0] +=
+            Math.ceil(palaceFrameTimingContract.sampleCount / 2) + 1;
+        },
+      },
+      {
+        name: "summary",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.runs[0]
+            .summaries.frameIntervalUs.p95 += 1;
+        },
+      },
+      {
+        name: "frame advance",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.runs[0].frameWindow.endFrame += 1;
+        },
+      },
+      {
+        name: "elapsed time",
+        mutate: (candidate) => {
+          candidate.metrics.frameTiming.runs[0]
+            .frameWindow.elapsedTimeUs +=
+              Math.ceil(palaceFrameTimingContract.sampleCount / 2) + 1;
+        },
+      },
+    ];
+    for (const mutation of mutations) {
+      const candidate = structuredClone(evidence);
+      mutation.mutate(candidate);
+      assert.throws(
+        () => validatePublicEvidence(candidate),
+        /public evidence schema/,
+        mutation.name,
+      );
+    }
+  });
+});
+
 test("rejects direct Storage provider attribution overclaim", async () => {
   await withFixture(async ({ runDir, output }) => {
     const evidence = await buildPublicEvidence(runDir, output);
@@ -3641,6 +4214,171 @@ test("rejects direct Storage provider attribution overclaim", async () => {
       () => validatePublicEvidence(evidence),
       /public evidence schema/,
     );
+  });
+});
+
+test("rejects changed raw admin asset authoring evidence", async () => {
+  const mutations = [
+    {
+      name: "selected asset count",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.selectedAssetCount += 1;
+      },
+    },
+    {
+      name: "approval guard",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.guardedBeforeApproval.receipt =
+          "ok;asset=publishing";
+      },
+    },
+    {
+      name: "chunk sequence",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.assets[0].appends[0].sequence = 1;
+      },
+    },
+    {
+      name: "verified handle",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.assets[2].handle = "0".repeat(64);
+      },
+    },
+    {
+      name: "CID digest binding",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.assets[2].cid =
+          gate3.assetAuthoring.assets[1].cid;
+      },
+    },
+    {
+      name: "active graph binding",
+      mutate: (gate3) => {
+        gate3.assetAuthoring.graphBindings[0].objectId =
+          "background-lounge";
+      },
+    },
+    {
+      name: "render fence",
+      mutate: (gate3) => {
+        gate3.assetAuthoringScreenshot.renderEvidence.fenceState =
+          "waiting";
+      },
+    },
+  ];
+  for (const mutation of mutations) {
+    await withFixture(async ({ runDir, output }) => {
+      const path = join(runDir, "gate3/gate3-report.json");
+      const gate3 = await readJson(path);
+      mutation.mutate(gate3);
+      await writeJson(path, gate3);
+      await writeCompiled(runDir);
+      await assert.rejects(
+        buildPublicEvidence(runDir, output),
+        /asset|authoring/,
+        mutation.name,
+      );
+      await assert.rejects(access(output), { code: "ENOENT" });
+    });
+  }
+});
+
+test("rejects changed Gate 3 asset authoring screenshot bytes", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate3", assetAuthoringScreenshotFile);
+    const bytes = await readFile(path);
+    bytes[Math.floor(bytes.length / 2)] ^= 0xff;
+    await writeFile(path, bytes);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /asset authoring screenshot bytes changed/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects malformed Gate 3 PNG with matching length and digest", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const screenshotPath = join(
+      runDir,
+      "gate3",
+      assetAuthoringScreenshotFile,
+    );
+    const bytes = await readFile(screenshotPath);
+    bytes[45] ^= 0xff;
+    await writeFile(screenshotPath, bytes);
+
+    const reportPath = join(runDir, "gate3/gate3-report.json");
+    const gate3 = await readJson(reportPath);
+    gate3.assetAuthoringScreenshot.sha256 = digest(bytes);
+    await writeJson(reportPath, gate3);
+    await writeCompiled(runDir);
+
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /invalid IDAT CRC/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
+test("rejects changed public asset authoring evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const evidence = await buildPublicEvidence(runDir, output);
+    const mutations = [
+      {
+        name: "approval guard field",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.approvalGuard.status =
+            "ok;asset=publishing";
+        },
+      },
+      {
+        name: "role count",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.roles.roomBackground -= 1;
+        },
+      },
+      {
+        name: "chunk count",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.ingestion.chunkCount = 0;
+        },
+      },
+      {
+        name: "graph leaf count",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.publication.graphLeafCount = 3;
+        },
+      },
+      {
+        name: "catalog object count",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.publication.catalogObjectCount = 11;
+        },
+      },
+      {
+        name: "screenshot digest",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.screenshot.sha256 = "0".repeat(63);
+        },
+      },
+      {
+        name: "render fence",
+        mutate: (candidate) => {
+          candidate.assetAuthoring.screenshot.render.fenceFrame = -1;
+        },
+      },
+    ];
+    for (const mutation of mutations) {
+      const candidate = structuredClone(evidence);
+      mutation.mutate(candidate);
+      assert.throws(
+        () => validatePublicEvidence(candidate),
+        /public evidence schema/,
+        mutation.name,
+      );
+    }
   });
 });
 

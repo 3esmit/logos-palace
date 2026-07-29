@@ -393,7 +393,7 @@ LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
     palace::PalaceDeliverySession session(authority);
     LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
-    session.replaceAllowedProps({{"hat", "cid-hat"}});
+    session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
     bringOnline(session);
     CanonicalVerifier verifier;
 
@@ -415,12 +415,12 @@ LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
     LOGOS_ASSERT_TRUE(session.receive(
         roomTopic(), wire(envelope(
             "carol", "carol-key", 3, 4,
-            palace::DeliveryKind::WearProp, "hat")),
+            palace::DeliveryKind::WearProp, "test-prop")),
         1050, verifier).projectionChanged);
     LOGOS_ASSERT_TRUE(session.receive(
         roomTopic(), wire(envelope(
             "carol", "carol-key", 3, 5,
-            palace::DeliveryKind::RemoveProp, "hat")),
+            palace::DeliveryKind::RemoveProp, "test-prop")),
         1050, verifier).projectionChanged);
 
     std::vector<palace::DeliveryParticipantProjectionV1> snapshot =
@@ -484,12 +484,118 @@ LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
     LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
 }
 
+LOGOS_TEST(delivery_session_reconciles_finalized_user_ban_from_live_projection) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 1,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1050, verifier).projectionChanged);
+    LOGOS_ASSERT_EQ(
+        session.participantSnapshot().size(), static_cast<std::size_t>(1));
+    const palace::DeliverySessionReceive buffered = session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 3,
+            palace::DeliveryKind::Speech, "stale")),
+        1050, verifier);
+    LOGOS_ASSERT_TRUE(buffered.accepted);
+    LOGOS_ASSERT_FALSE(buffered.projectionChanged);
+
+    palace::AuthoritySnapshotV1 banned = authoritySnapshot();
+    banned.bans.push_back({
+        "ban-carol", "palace-1", "atrium", "carol", "", "alice", true});
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(banned, 1051));
+
+    LOGOS_ASSERT_TRUE(session.reconcileAuthority());
+    LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
+    LOGOS_ASSERT_FALSE(session.reconcileAuthority());
+
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1052));
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 2,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1052, verifier).projectionChanged);
+    const auto reentered = session.participantSnapshot();
+    LOGOS_ASSERT_EQ(reentered.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(reentered.front().speech.empty());
+}
+
+LOGOS_TEST(delivery_session_reconciles_removed_prop_mapping_from_live_projection) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 1,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1050, verifier).projectionChanged);
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 2,
+            palace::DeliveryKind::WearProp, "test-prop")),
+        1050, verifier).projectionChanged);
+
+    session.replaceAllowedProps({});
+    LOGOS_ASSERT_TRUE(session.reconcileAuthority());
+    const auto snapshot = session.participantSnapshot();
+    LOGOS_ASSERT_EQ(snapshot.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(snapshot.front().propIds.empty());
+    LOGOS_ASSERT_FALSE(session.reconcileAuthority());
+}
+
+LOGOS_TEST(delivery_session_reconciles_finalized_asset_ban_from_worn_props) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 1,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1050, verifier).projectionChanged);
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 2,
+            palace::DeliveryKind::WearProp, "test-prop")),
+        1050, verifier).projectionChanged);
+    LOGOS_ASSERT_TRUE(
+        session.participantSnapshot().front().propIds.find("test-prop")
+        != session.participantSnapshot().front().propIds.end());
+
+    palace::AuthoritySnapshotV1 banned = authoritySnapshot();
+    banned.bans.push_back({
+        "ban-test-prop", "palace-1", "atrium", "", "cid-test-prop", "alice", true});
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(banned, 1051));
+
+    LOGOS_ASSERT_TRUE(session.reconcileAuthority());
+    const auto snapshot = session.participantSnapshot();
+    LOGOS_ASSERT_EQ(snapshot.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(snapshot.front().propIds.empty());
+    LOGOS_ASSERT_FALSE(session.reconcileAuthority());
+}
+
 LOGOS_TEST(delivery_session_drains_cross_kind_reordering_in_sender_sequence) {
     palace::AuthorityProjection authority;
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
     palace::PalaceDeliverySession session(authority);
     LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
-    session.replaceAllowedProps({{"hat", "cid-hat"}});
+    session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
     bringOnline(session);
     CanonicalVerifier verifier;
 
@@ -501,7 +607,7 @@ LOGOS_TEST(delivery_session_drains_cross_kind_reordering_in_sender_sequence) {
     const palace::DeliverySessionReceive bufferedProp = session.receive(
         roomTopic(), wire(envelope(
             "carol", "carol-key", 3, 43,
-            palace::DeliveryKind::WearProp, "hat")),
+            palace::DeliveryKind::WearProp, "test-prop")),
         1050, verifier);
     LOGOS_ASSERT_TRUE(bufferedProp.accepted);
     LOGOS_ASSERT_FALSE(bufferedProp.projectionChanged);
@@ -520,7 +626,7 @@ LOGOS_TEST(delivery_session_drains_cross_kind_reordering_in_sender_sequence) {
     LOGOS_ASSERT_EQ(snapshot.front().motionX, static_cast<std::int64_t>(25));
     LOGOS_ASSERT_EQ(snapshot.front().motionY, static_cast<std::int64_t>(50));
     LOGOS_ASSERT_TRUE(
-        snapshot.front().propIds.find("hat")
+        snapshot.front().propIds.find("test-prop")
         != snapshot.front().propIds.end());
 }
 
@@ -563,7 +669,7 @@ LOGOS_TEST(delivery_session_rejects_duplicate_buffer_and_oversized_gap) {
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
     palace::PalaceDeliverySession session(authority);
     LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
-    session.replaceAllowedProps({{"hat", "cid-hat"}});
+    session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
     bringOnline(session);
     CanonicalVerifier verifier;
 
@@ -574,7 +680,7 @@ LOGOS_TEST(delivery_session_rejects_duplicate_buffer_and_oversized_gap) {
         1050, verifier).accepted);
     const std::vector<std::uint8_t> pending = wire(envelope(
         "carol", "carol-key", 3, 43,
-        palace::DeliveryKind::WearProp, "hat"));
+        palace::DeliveryKind::WearProp, "test-prop"));
     LOGOS_ASSERT_TRUE(
         session.receive(roomTopic(), pending, 1050, verifier).accepted);
     LOGOS_ASSERT_EQ(

@@ -217,19 +217,28 @@ attestation.
 
 ### Verified assets
 
-“Verified” means a manifest-bound PNG crossed both trust boundaries:
+“Verified” means a PNG crossed both trust boundaries with its byte identity
+and technical constraints:
 
-1. Palace Core checked the expected CID, media type, encoded size, dimensions,
-   SHA-256 digest, 10 MiB encoded limit, 4096-pixel dimension limits,
-   16 MiPixels (16,777,216 pixels), PNG structure, and a full bounded decode
-   before atomically staging it inside that Core instance.
+1. Palace Core either binds Storage-fetched bytes to typed catalog metadata or
+   derives metadata from an administrator-selected room or prop image streamed
+   through its bounded authoring protocol. Basecamp supplies an opaque
+   per-view selection capability, never a host path. Core checks media type,
+   encoded size,
+   dimensions, SHA-256 digest, the 10 MiB encoded limit, 4096-pixel dimension
+   limits, 16 MiPixels (16,777,216 pixels), PNG structure, and a full bounded
+   decode before atomically staging the bytes inside that Core instance.
 2. Basecamp accepted only
    `image://basecamp-verified/<lowercase-sha256>` from a declared direct Core
    dependency, proved canonical producer-root containment, and rechecked the
    digest, PNG format, bounded decode, dimensions, and pixel budget.
 
-QML receives only the opaque digest handle. It never receives the source CID,
-filesystem path, network URL, Storage client, or decoder authority.
+Image loading receives only the opaque digest handle. The authoring surface
+also receives bounded display, review, publication, and draft-assignment
+metadata, but no host path, Storage client, or decoder authority.
+When a graph contains an administrator-authored prop, the avatar renderer
+consumes only its graph-derived metadata and verified handle; it contains no
+compiled prop artwork.
 Verification does not mean moderation approval, permanent availability, or a
 provider-retention guarantee.
 
@@ -283,10 +292,11 @@ child wait.
 
 If interrupted, use the exact resume command printed by the runner. Do not
 copy state into a new run or rerun Gate 3 separately. Review and sanitize the
-generated JSON, logs, account IDs, peer IDs, timing data, and the exact ten
-fully decoded 1600×900 PNG screenshots before publishing them. Until the
-compiled report says `fullMvp: "passed"` with no pending gates, this command
-has not established MVP completion.
+generated JSON, logs, account IDs, peer IDs, timing data, ten exact Gate 4–6
+screenshots, and the separate Gate 3 Moderation screenshot. All eleven are
+fully decoded 1600×900 PNG files. Until the compiled report says
+`fullMvp: "passed"` with no pending gates, this command has not established
+MVP completion.
 
 ## Security and limitations
 

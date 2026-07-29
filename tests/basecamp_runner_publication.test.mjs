@@ -32,8 +32,20 @@ const gate3HarnessPath = fileURLToPath(
 const gate3WorkerPath = fileURLToPath(
   new URL("./basecamp_gate3_worker.mjs", import.meta.url),
 );
+const gate3AssetInputsPath = fileURLToPath(
+  new URL("./basecamp_gate3_asset_inputs.mjs", import.meta.url),
+);
 const gate4HarnessPath = fileURLToPath(
   new URL("./basecamp_gate4.mjs", import.meta.url),
+);
+const frameTimingPath = fileURLToPath(
+  new URL("./basecamp_frame_timing.mjs", import.meta.url),
+);
+const palaceQmlPath = fileURLToPath(
+  new URL(
+    "../packages/logos_palace_ui/src/qml/Main.qml",
+    import.meta.url,
+  ),
 );
 const standaloneScopeRunnerPath = fileURLToPath(
   new URL("../scripts/run-basecamp-standalone-scoped.sh", import.meta.url),
@@ -198,19 +210,47 @@ test("gate descendants never receive the release lock descriptor", async () => {
   }
 });
 
-test("render timing parsers match the exact Basecamp source pin", async () => {
+test("FrameAnimation timing matches the exact Basecamp and Qt source pin", async () => {
   const flake = await readFile(flakePath, "utf8");
   const pinnedRevision = flake.match(
     /basecamp\.url = "github:3esmit\/logos-basecamp\/([0-9a-f]{40})";/,
   )?.[1];
   assert.match(pinnedRevision ?? "", /^[0-9a-f]{40}$/);
+  const timing = await readFile(frameTimingPath, "utf8");
+  assert.match(
+    timing,
+    new RegExp(`basecampRevision: "${pinnedRevision}"`),
+  );
+  assert.match(timing, /qtVersion: "6\.9\.2"/);
+  assert.match(timing, /source: "QtQuick\.FrameAnimation\.frameTime"/);
+  assert.match(
+    timing,
+    /qtSourceSha256:\s+"d7b72073642d8d053908da70536bb11bf084a60d24f67c89bfede3da752ac7f2"/,
+  );
+  assert.match(
+    timing,
+    /clock: "QElapsedTimer monotonic nanoseconds exposed by Qt as seconds"/,
+  );
+  assert.match(
+    timing,
+    /Qt Quick animation-frame update interval associated with rendered animation frames/,
+  );
   for (const path of [gate2WorkerPath, gate3WorkerPath]) {
     const worker = await readFile(path, "utf8");
-    assert.match(
-      worker,
-      new RegExp(`basecampRevision: "${pinnedRevision}"`),
-    );
+    assert.match(worker, /capturePalaceFrameTiming/);
+    assert.match(worker, /case "frameTimings":/);
+    assert.doesNotMatch(worker, /QSG_RENDER_TIMING|renderTimings/);
   }
+  const qml = await readFile(palaceQmlPath, "utf8");
+  assert.match(qml, /readonly property int gateFrameTimingSampleTarget: 120/);
+  assert.match(qml, /readonly property int gateFrameTimingWarmupFrames: 2/);
+  assert.match(qml, /function gateFrameTimingStart\(sampleCount\)/);
+  assert.match(qml, /FrameAnimation \{/);
+  assert.match(qml, /running: root\.gateFrameTimingRunning/);
+  assert.match(qml, /Math\.round\(frameTime \* 1000000\)/);
+  assert.match(qml, /gateFrameTimingStartFrame/);
+  assert.match(qml, /gateFrameTimingEndFrame/);
+  assert.match(qml, /gateFrameTimingElapsedTimeUs/);
 });
 
 test("runner uses exact close-on-exec kill-coupled lock handoff", async () => {
@@ -452,6 +492,98 @@ test("Gate 2 publication binds accepted traffic to persisted sequences", async (
     validator,
     /received_accepted\s*\+\s*300/,
   );
+});
+
+test("Gate 3 binds external admin-selected assets to Storage and pixels", async () => {
+  const [runner, gate3, gate3Worker, gate4, assetInputs] =
+    await Promise.all([
+    readFile(runnerPath, "utf8"),
+    readFile(gate3HarnessPath, "utf8"),
+    readFile(gate3WorkerPath, "utf8"),
+    readFile(gate4HarnessPath, "utf8"),
+    readFile(gate3AssetInputsPath, "utf8"),
+  ]);
+  const validatorStart = runner.indexOf(
+    "def valid_asset_authoring_evidence:",
+  );
+  const validatorEnd = runner.indexOf(
+    "\n\n      def valid_gate3_release_evidence:",
+    validatorStart,
+  );
+  assert.notEqual(validatorStart, -1);
+  assert.notEqual(validatorEnd, -1);
+  const validator = runner.slice(validatorStart, validatorEnd);
+  for (const marker of [
+    "logos.palace.e2e-asset-inputs",
+    "selectedAssetCount",
+    "propStory",
+    "guardedBeforeApproval",
+    "rejected=asset-not-approved",
+    "assetCount >= 2",
+    "assetCount <= 128",
+    "room-background",
+    "prop-image",
+    "map(.cid) | unique | length",
+    "background-atrium",
+    "background-lounge",
+    "publication.objects[]",
+    "gate3-admin-assets-published.png",
+    "readyImageCount",
+    "publishedCount",
+    "propAssigned",
+    'fenceState == "complete"',
+  ]) {
+    assert.match(
+      validator,
+      new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  }
+  assert.match(
+    runner,
+    /def valid_gate3_release_evidence:[\s\S]*?and valid_asset_authoring_evidence/,
+  );
+  assert.match(runner, /\.chunkBytes == 32768/);
+  assert.match(runner, /maxTotalBytes=10485760/);
+  for (const marker of [
+    "beginAssetStage",
+    "appendAssetStageChunk",
+    "commitAssetStage",
+    "reviewAsset",
+    "publishAsset",
+    "assignRoomBackground",
+    "assignPropAsset",
+    "refreshAssetAuthoring",
+  ]) {
+    assert.match(gate3, new RegExp(marker));
+    assert.match(gate3Worker, new RegExp(marker));
+  }
+  assert.match(gate4, /validateGate3AssetAuthoring\(gate3, byId\)/);
+  assert.match(
+    gate4,
+    /screenshotFileEvidenceAt\(\s*dirname\(gate3ReportPath\),/,
+  );
+  assert.match(
+    gate4,
+    /report\.gate3\.assetAuthoringEvidence = \{/,
+  );
+  assert.match(assetInputs, /realpath\(/);
+  assert.match(assetInputs, /lstat\(/);
+  assert.match(assetInputs, /maxAssetBytes = 10 \* 1024 \* 1024/);
+  assert.match(runner, /PALACE_E2E_ASSET_INPUT_ROOT/);
+  assert.match(runner, /PALACE_E2E_ASSET_MANIFEST/);
+
+  const publicSources = [
+    runner,
+    gate3,
+    gate3Worker,
+    gate4,
+    assetInputs,
+  ].join("\n");
+  assert.doesNotMatch(
+    publicSources,
+    /cms-press\.logos\.co|\/uploads\/[^\s"']+\.(?:png|jpe?g)/i,
+  );
+  assert.doesNotMatch(publicSources, /\bcurated\b/i);
 });
 
 test("Gate 4 provides the exact pidfd helper before worker startup", async () => {

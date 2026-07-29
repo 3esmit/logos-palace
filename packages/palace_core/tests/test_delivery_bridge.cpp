@@ -382,7 +382,7 @@ LOGOS_TEST(delivery_bridge_projection_is_deterministic_and_length_framed) {
     participant.motionExpiresAt = 90;
     participant.speech = "hello; lounge";
     participant.speechExpiresAt = 80;
-    participant.propIds = {"badge", "hat"};
+    participant.propIds = {"badge", "test-prop"};
 
     LOGOS_ASSERT_EQ(
         palace::canonicalParticipantProjection({participant}),
@@ -391,7 +391,7 @@ LOGOS_TEST(delivery_bridge_projection_is_deterministic_and_length_framed) {
             "participant=5:alice;present=1;display=12:Alice; Admin"
             ";presence_expires=100;motion=25,50,90"
             ";speech=13:hello; lounge;speech_expires=80"
-            ";props=2:5:badge3:hat\n"));
+            ";props=2:5:badge9:test-prop\n"));
 }
 
 LOGOS_TEST(delivery_acceptance_fixture_uses_real_bound_ed25519_identities) {
@@ -434,7 +434,6 @@ LOGOS_TEST(delivery_acceptance_fixture_uses_real_bound_ed25519_identities) {
     LOGOS_ASSERT_EQ(
         palace::deliveryAcceptanceRoomEpoch("atrium"),
         static_cast<std::int64_t>(9));
-    LOGOS_ASSERT_EQ(
-        palace::deliveryAcceptanceAllowedProps().at("hat"),
-        std::string("fixture-cid-hat"));
+    LOGOS_ASSERT_TRUE(
+        palace::deliveryAcceptanceAllowedProps().empty());
 }

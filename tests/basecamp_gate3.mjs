@@ -37,6 +37,12 @@ import {
   signalDirectChild,
   waitForDirectChildExit,
 } from "./basecamp_direct_child.mjs";
+import {
+  canonicalStorageCidSha256 as cidSha256,
+} from "./basecamp_storage_cid.mjs";
+import {
+  loadGate3AssetInputs,
+} from "./basecamp_gate3_asset_inputs.mjs";
 
 const [
   basecampArgument,
@@ -74,50 +80,42 @@ const labels = ["a", "b", "c"];
 const displayNames = { a: "Alice", b: "Bob", c: "Carol" };
 const productionIdentityMode =
   process.env.PALACE_GATE3_PRODUCTION_IDENTITIES === "1";
-const pngAssets = [
-  {
-    role: "room-background-atrium",
-    handle:
-      "3bd13dc41f3e27a7eabf45c73188498b95e3e5e475e6fcb967308477afd522be",
-    byteLength: 172,
-    width: 16,
-    height: 9,
-  },
-  {
-    role: "room-background-lounge",
-    handle:
-      "d2068f9cc4848b29882e532580c2b455ef5d243e7b38f16d590937fbef720486",
-    byteLength: 173,
-    width: 16,
-    height: 9,
-  },
-];
-const objectOrder = [
-  "background-atrium",
-  "background-lounge",
-  "prop-hat-image",
-  "prop-hat-metadata",
-  "room-atrium-metadata",
-  "room-lounge-metadata",
-  "script-door",
-  "prop-hat",
-  "room-atrium",
-  "room-lounge",
-  "palace-1",
-];
-const objectTypes = [
-  "background_png",
-  "background_png",
-  "prop_png",
-  "prop_metadata",
-  "room_metadata",
-  "room_metadata",
-  "script_bundle",
-  "prop_manifest",
-  "room_manifest",
-  "room_manifest",
-  "palace_manifest",
-];
+const assetInputs = await loadGate3AssetInputs({
+  manifestPath: process.env.PALACE_E2E_ASSET_MANIFEST,
+  inputRoot: process.env.PALACE_E2E_ASSET_INPUT_ROOT,
+});
+const assetFixtures = assetInputs.fixtures;
+function graphObjectContract(propId) {
+  if (
+    propId !== null
+    && !/^[a-z][a-z0-9_-]{0,63}$/.test(propId)
+  ) {
+    throw new Error("active prop ID cannot form graph object IDs");
+  }
+  return [
+    ["background-atrium", "background_png"],
+    ["background-lounge", "background_png"],
+    ...(propId === null
+      ? []
+      : [
+          [`prop-${propId}-image`, "prop_png"],
+          [`prop-${propId}-metadata`, "prop_metadata"],
+        ]),
+    ["room-atrium-metadata", "room_metadata"],
+    ["room-lounge-metadata", "room_metadata"],
+    ["script-door", "script_bundle"],
+    ...(propId === null
+      ? []
+      : [[`prop-${propId}`, "prop_manifest"]]),
+    ["room-atrium", "room_manifest"],
+    ["room-lounge", "room_manifest"],
+    ["palace-1", "palace_manifest"],
+  ];
+}
+
+function graphObjectOrder(propId) {
+  return graphObjectContract(propId).map(([objectId]) => objectId);
+}
 const holderProfiles = {
   a: "alice",
   b: "bob",
@@ -717,119 +715,694 @@ function statusFields(receipt) {
   );
 }
 
-function decodeBase32(value) {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-  let accumulator = 0;
-  let bitCount = 0;
-  const bytes = [];
-  for (const character of value) {
-    const digit = alphabet.indexOf(character);
-    if (digit < 0) throw new Error("CID contains non-base32 character");
-    accumulator = (accumulator << 5) | digit;
-    bitCount += 5;
-    while (bitCount >= 8) {
-      bitCount -= 8;
-      bytes.push((accumulator >> bitCount) & 0xff);
-      accumulator &= bitCount === 0 ? 0 : (1 << bitCount) - 1;
-    }
-  }
-  if (bitCount > 0 && accumulator !== 0) {
-    throw new Error("CID has non-canonical base32 tail bits");
-  }
-  return Buffer.from(bytes);
+function exactObjectKeys(value, keys) {
+  return (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === [...keys].sort().join(",")
+  );
 }
 
-const base58Alphabet =
-  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function decodeBase58(value) {
-  if (!value) throw new Error("CID base58 payload is empty");
-  let decoded = 0n;
-  for (const character of value) {
-    const digit = base58Alphabet.indexOf(character);
-    if (digit < 0) throw new Error("CID contains non-base58 character");
-    decoded = decoded * 58n + BigInt(digit);
+function parseAssetAuthoringCatalog(encoded) {
+  let catalog;
+  try {
+    catalog = JSON.parse(String(encoded));
+  } catch {
+    throw new Error("asset authoring catalog is not JSON");
   }
-  let hex = decoded.toString(16);
-  if (hex.length % 2 !== 0) hex = `0${hex}`;
-  const payload =
-    decoded === 0n ? Buffer.alloc(0) : Buffer.from(hex, "hex");
-  let leadingZeros = 0;
-  while (
-    leadingZeros < value.length &&
-    value[leadingZeros] === base58Alphabet[0]
-  ) {
-    leadingZeros += 1;
-  }
-  return Buffer.concat([Buffer.alloc(leadingZeros), payload]);
-}
-
-function encodeBase58(bytes) {
-  let value = 0n;
-  for (const byte of bytes) value = value * 256n + BigInt(byte);
-  let encoded = "";
-  while (value > 0n) {
-    const digit = Number(value % 58n);
-    encoded = base58Alphabet[digit] + encoded;
-    value /= 58n;
-  }
-  let leadingZeros = 0;
-  while (leadingZeros < bytes.length && bytes[leadingZeros] === 0) {
-    encoded = base58Alphabet[0] + encoded;
-    leadingZeros += 1;
-  }
-  return encoded;
-}
-
-function readVarint(bytes, cursor) {
-  let value = 0;
-  let multiplier = 1;
-  const start = cursor.offset;
-  while (cursor.offset < bytes.length) {
-    const byte = bytes[cursor.offset++];
-    value += (byte & 0x7f) * multiplier;
-    if (!Number.isSafeInteger(value)) throw new Error("CID varint overflow");
-    if ((byte & 0x80) === 0) {
-      if (cursor.offset - start > 1 && byte === 0) {
-        throw new Error("CID varint is not canonical");
-      }
-      return value;
-    }
-    multiplier *= 128;
-  }
-  throw new Error("CID varint is truncated");
-}
-
-function cidSha256(cid) {
-  let bytes;
-  if (/^b[a-z2-7]+$/.test(cid)) {
-    bytes = decodeBase32(cid.slice(1));
-  } else if (/^z[1-9A-HJ-NP-Za-km-z]+$/.test(cid)) {
-    bytes = decodeBase58(cid.slice(1));
-    if (`z${encodeBase58(bytes)}` !== cid) {
-      throw new Error(`CID is not canonical base58btc: ${cid}`);
-    }
-  } else {
-    throw new Error(`CID is not canonical CIDv1 base32/base58btc: ${cid}`);
-  }
-  const cursor = { offset: 0 };
-  const version = readVarint(bytes, cursor);
-  const codec = readVarint(bytes, cursor);
-  const multihash = readVarint(bytes, cursor);
-  const digestLength = readVarint(bytes, cursor);
   if (
-    version !== 1 ||
-    codec === 0 ||
-    multihash !== 0x12 ||
-    digestLength !== 32 ||
-    cursor.offset + digestLength !== bytes.length
+    !exactObjectKeys(
+      catalog,
+      [
+        "version",
+        "count",
+        "sessionCount",
+        "bundleLocked",
+        "roomAssignments",
+        "propAssignment",
+        "assets",
+      ],
+    )
+    || catalog.version !== 1
+    || !Number.isSafeInteger(catalog.count)
+    || catalog.count < 0
+    || catalog.count > 1024
+    || !Number.isSafeInteger(catalog.sessionCount)
+    || catalog.sessionCount < 0
+    || catalog.sessionCount > 4
+    || typeof catalog.bundleLocked !== "boolean"
+    || !exactObjectKeys(catalog.roomAssignments, ["atrium", "lounge"])
+    || Object.values(catalog.roomAssignments).some(
+      (handle) => handle !== "" && !isHex64(handle),
+    )
+    || (
+      catalog.propAssignment !== null
+      && (
+        !exactObjectKeys(
+          catalog.propAssignment,
+          ["propId", "handle", "anchorX", "anchorY", "layer"],
+        )
+        || !/^[a-z][a-z0-9_-]{0,63}$/.test(
+          catalog.propAssignment.propId,
+        )
+        || !isHex64(catalog.propAssignment.handle)
+        || !Number.isSafeInteger(catalog.propAssignment.anchorX)
+        || catalog.propAssignment.anchorX < 0
+        || !Number.isSafeInteger(catalog.propAssignment.anchorY)
+        || catalog.propAssignment.anchorY < 0
+        || !["head", "body", "hand", "back"].includes(
+          catalog.propAssignment.layer,
+        )
+      )
+    )
+    || !Array.isArray(catalog.assets)
+    || catalog.assets.length !== catalog.count
   ) {
-    throw new Error(`CID has unexpected envelope: ${cid}`);
+    throw new Error("asset authoring catalog envelope mismatch");
   }
-  return bytes.subarray(cursor.offset).toString("hex");
+  const entryKeys = [
+    "handle",
+    "label",
+    "width",
+    "height",
+    "byteLength",
+    "reviewState",
+    "publicationState",
+    "cid",
+    "roles",
+    "roomAssignments",
+    "propAssignments",
+  ];
+  for (const actual of catalog.assets) {
+    if (
+      !exactObjectKeys(actual, entryKeys)
+      || !isHex64(actual.handle)
+      || typeof actual.label !== "string"
+      || actual.label.length < 1
+      || actual.label.length > 128
+      || !Number.isSafeInteger(actual.width)
+      || actual.width <= 0
+      || !Number.isSafeInteger(actual.height)
+      || actual.height <= 0
+      || !Number.isSafeInteger(actual.byteLength)
+      || actual.byteLength <= 0
+      || actual.byteLength > 10 * 1024 * 1024
+      || !["pending", "approved", "rejected"].includes(
+        actual.reviewState,
+      )
+      || (
+        !["not-uploaded", "publishing", "published"].includes(
+          actual.publicationState,
+        )
+        && !actual.publicationState.startsWith("publish-failed")
+      )
+      || (
+        actual.publicationState === "published"
+          ? cidSha256(actual.cid) !== actual.handle
+          : actual.cid !== ""
+      )
+      || !Array.isArray(actual.roles)
+      || actual.roles.some(
+        (role) => !["room-background", "prop-image"].includes(role),
+      )
+      || new Set(actual.roles).size !== actual.roles.length
+      || !Array.isArray(actual.roomAssignments)
+      || actual.roomAssignments.some(
+        (roomId) => !["atrium", "lounge"].includes(roomId),
+      )
+      || new Set(actual.roomAssignments).size
+        !== actual.roomAssignments.length
+      || !Array.isArray(actual.propAssignments)
+      || actual.propAssignments.some(
+        (propId) => !/^[a-z][a-z0-9_-]{0,63}$/.test(propId),
+      )
+      || new Set(actual.propAssignments).size
+        !== actual.propAssignments.length
+      || (
+        actual.roomAssignments.length > 0
+        && !actual.roles.includes("room-background")
+      )
+      || (
+        actual.propAssignments.length > 0
+        && !actual.roles.includes("prop-image")
+      )
+    ) {
+      throw new Error("asset authoring catalog entry mismatch");
+    }
+  }
+  if (
+    new Set(catalog.assets.map(({ handle }) => handle)).size
+      !== catalog.assets.length
+  ) {
+    throw new Error("asset authoring catalog is not deduplicated");
+  }
+  const byHandle = Object.fromEntries(
+    catalog.assets.map((asset) => [asset.handle, asset]),
+  );
+  for (const roomId of ["atrium", "lounge"]) {
+    const handle = catalog.roomAssignments[roomId];
+    if (
+      handle !== ""
+      && (
+        !byHandle[handle]
+        || !byHandle[handle].roomAssignments.includes(roomId)
+      )
+    ) {
+      throw new Error("background asset assignment is inconsistent");
+    }
+    if (
+      catalog.assets.some(
+        (asset) =>
+          asset.roomAssignments.includes(roomId)
+          && asset.handle !== handle,
+      )
+    ) {
+      throw new Error("room asset reverse assignment is inconsistent");
+    }
+  }
+  if (catalog.propAssignment !== null) {
+    const asset = byHandle[catalog.propAssignment.handle];
+    if (
+      !asset
+      || !asset.propAssignments.includes(catalog.propAssignment.propId)
+    ) {
+      throw new Error("prop asset assignment is inconsistent");
+    }
+  }
+  if (
+    catalog.assets.some(
+      (asset) =>
+        asset.propAssignments.some(
+          (propId) =>
+            catalog.propAssignment?.propId !== propId
+            || catalog.propAssignment?.handle !== asset.handle,
+        ),
+    )
+  ) {
+    throw new Error("prop asset reverse assignment is inconsistent");
+  }
+  return catalog;
 }
 
-function parseMvpCatalog(receipt) {
+async function readAssetAuthoringCatalog(worker) {
+  const properties = await worker.call("properties", {}, 30_000);
+  return parseAssetAuthoringCatalog(
+    properties.gate3AssetAuthoringState,
+  );
+}
+
+function parseActivePropAsset(
+  value,
+  description,
+  expectedAvailable,
+) {
+  let projection;
+  try {
+    projection = JSON.parse(String(value));
+  } catch {
+    throw new Error(`${description} is not JSON`);
+  }
+  if (!expectedAvailable) {
+    if (
+      !exactObjectKeys(projection, ["version", "available"])
+      || projection.version !== 1
+      || projection.available !== false
+    ) {
+      throw new Error(`${description} is invalid`);
+    }
+    return projection;
+  }
+  if (
+    !exactObjectKeys(
+      projection,
+      [
+        "version",
+        "available",
+        "propId",
+        "handle",
+        "contentSha256",
+        "width",
+        "height",
+        "anchorX",
+        "anchorY",
+        "layer",
+      ],
+    )
+    || projection.version !== 1
+    || projection.available !== true
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(projection.propId)
+    || !/^[0-9a-f]{64}$/.test(projection.handle)
+    || projection.contentSha256 !== projection.handle
+    || !Number.isSafeInteger(projection.width)
+    || projection.width <= 0
+    || !Number.isSafeInteger(projection.height)
+    || projection.height <= 0
+    || !Number.isSafeInteger(projection.anchorX)
+    || projection.anchorX < 0
+    || !Number.isSafeInteger(projection.anchorY)
+    || projection.anchorY < 0
+    || !["head", "body", "hand", "back"].includes(projection.layer)
+  ) {
+    throw new Error(`${description} is invalid`);
+  }
+  return projection;
+}
+
+function validatedPriorAssetGuard(previousEvidence) {
+  const guarded = previousEvidence?.guardedBeforeApproval;
+  if (
+    !exactObjectKeys(guarded, ["receipt", "elapsedMs"])
+    || guarded.receipt !== "rejected=asset-not-approved"
+    || !Number.isSafeInteger(guarded.elapsedMs)
+    || guarded.elapsedMs < 0
+  ) {
+    throw new Error(
+      "approved asset resume lacks prior guard proof",
+    );
+  }
+  return {
+    receipt: guarded.receipt,
+    elapsedMs: guarded.elapsedMs,
+  };
+}
+
+function matchingFixtureAsset(catalog, fixture) {
+  const asset = catalog.assets.find(
+    ({ handle }) => handle === fixture.handle,
+  );
+  if (
+    asset
+    && (
+      asset.label !== fixture.assetId
+      || asset.width !== fixture.width
+      || asset.height !== fixture.height
+      || asset.byteLength !== fixture.byteLength
+    )
+  ) {
+    throw new Error(`asset metadata mismatch: ${fixture.assetId}`);
+  }
+  return asset;
+}
+
+function validatePriorStage(prior, fixture) {
+  if (
+    !prior
+    || prior.assetId !== fixture.assetId
+    || prior.label !== fixture.assetId
+    || prior.file !== fixture.file
+    || prior.handle !== fixture.handle
+    || prior.width !== fixture.width
+    || prior.height !== fixture.height
+    || prior.byteLength !== fixture.byteLength
+    || prior.role !== fixture.role
+    || JSON.stringify(prior.target ?? null)
+      !== JSON.stringify(fixture.assignment ?? null)
+    || prior.chunkBytes !== 32 * 1024
+    || !Number.isSafeInteger(prior.chunkCount)
+    || prior.chunkCount <= 0
+    || !Array.isArray(prior.appends)
+    || prior.appends.length !== prior.chunkCount
+    || prior.commit?.receipt
+      !== `ok;handle=${fixture.handle};width=${fixture.width};`
+        + `height=${fixture.height};bytes=${fixture.byteLength}`
+  ) {
+    throw new Error(`prior asset stage is invalid: ${fixture.assetId}`);
+  }
+  return prior;
+}
+
+async function stageAssetFixture(worker, fixture, prior) {
+  const existing = matchingFixtureAsset(
+    await readAssetAuthoringCatalog(worker),
+    fixture,
+  );
+  if (existing) return validatePriorStage(prior, fixture);
+
+  const begin = await invoke(
+    worker,
+    "beginAssetStage",
+    [fixture.assetId],
+    { prefix: "ok;session=" },
+  );
+  const beginFields = statusFields(begin.receipt);
+  if (
+    !/^[0-9a-f]{32}$/.test(beginFields.session)
+    || beginFields.next !== "0"
+    || beginFields.maxChunkBytes !== String(32 * 1024)
+    || beginFields.maxTotalBytes !== String(10 * 1024 * 1024)
+  ) {
+    throw new Error(`asset stage begin is invalid: ${fixture.assetId}`);
+  }
+  const appends = [];
+  let totalBytes = 0;
+  let sequence = 0;
+  try {
+    for (
+      let offset = 0;
+      offset < fixture.bytes.length;
+      offset += 32 * 1024
+    ) {
+      const chunk = fixture.bytes.subarray(offset, offset + 32 * 1024);
+      const appended = await invoke(
+        worker,
+        "appendAssetStageChunk",
+        [beginFields.session, sequence, chunk.toString("base64")],
+        { prefix: `ok;session=${beginFields.session};` },
+      );
+      totalBytes += chunk.length;
+      const fields = statusFields(appended.receipt);
+      if (
+        fields.next !== String(sequence + 1)
+        || fields.bytes !== String(totalBytes)
+      ) {
+        throw new Error(
+          `asset stage append is invalid: ${fixture.assetId}/${sequence}`,
+        );
+      }
+      appends.push({
+        sequence,
+        byteLength: chunk.length,
+        ...appended,
+      });
+      sequence += 1;
+    }
+    const commit = await invoke(
+      worker,
+      "commitAssetStage",
+      [beginFields.session],
+      {
+        exact:
+          `ok;handle=${fixture.handle};width=${fixture.width};`
+          + `height=${fixture.height};bytes=${fixture.byteLength}`,
+      },
+    );
+    matchingFixtureAsset(
+      await readAssetAuthoringCatalog(worker),
+      fixture,
+    );
+    return {
+      assetId: fixture.assetId,
+      label: fixture.assetId,
+      file: fixture.file,
+      handle: fixture.handle,
+      width: fixture.width,
+      height: fixture.height,
+      byteLength: fixture.byteLength,
+      role: fixture.role,
+      target: fixture.assignment,
+      chunkBytes: 32 * 1024,
+      chunkCount: appends.length,
+      begin,
+      appends,
+      commit,
+    };
+  } catch (error) {
+    await invoke(
+      worker,
+      "cancelAssetStage",
+      [beginFields.session],
+      undefined,
+      true,
+    ).catch(() => {});
+    throw error;
+  }
+}
+
+function priorAssetEvidence(previousEvidence, fixture) {
+  return previousEvidence?.assets?.find(
+    ({ assetId }) => assetId === fixture.assetId,
+  );
+}
+
+async function authorAssetFixtures(
+  worker,
+  previousEvidence,
+  checkpoint,
+) {
+  const startedAt = performance.now();
+  const evidence = {
+    version: 1,
+    phase: "input-validated",
+    inputManifest: assetInputs.manifest,
+    selectedAssetCount: assetFixtures.length,
+    propStory: assetFixtures.some(({ role }) => role === "prop-image")
+      ? "requested"
+      : "not-requested",
+    boundary:
+      "operator-selected bounded PNG bytes -> verified handle -> approval"
+      + " -> digest-bound Storage CID -> manifest assignment",
+    guardedBeforeApproval: previousEvidence?.guardedBeforeApproval,
+    assets: [],
+    graphBindings: previousEvidence?.graphBindings ?? [],
+    elapsedMs: 0,
+  };
+  await checkpoint(evidence);
+
+  for (const fixture of assetFixtures) {
+    const previousAsset = priorAssetEvidence(previousEvidence, fixture);
+    const staged = await stageAssetFixture(
+      worker,
+      fixture,
+      previousAsset,
+    );
+    evidence.assets.push({
+      ...staged,
+      review: previousAsset?.review,
+      publication: previousAsset?.publication,
+      assignment: previousAsset?.assignment,
+    });
+    evidence.phase = "staging";
+    evidence.elapsedMs = Math.round(performance.now() - startedAt);
+    await checkpoint(evidence);
+  }
+  evidence.phase = "staged";
+  await checkpoint(evidence);
+
+  const beforeGuard = await readAssetAuthoringCatalog(worker);
+  const guardFixture = assetFixtures.find(
+    (fixture) =>
+      matchingFixtureAsset(beforeGuard, fixture)?.reviewState !== "approved",
+  );
+  evidence.guardedBeforeApproval = guardFixture
+    ? await invoke(
+        worker,
+        "publishAsset",
+        [guardFixture.handle],
+        { exact: "rejected=asset-not-approved" },
+      )
+    : validatedPriorAssetGuard(previousEvidence);
+  const afterGuard = await readAssetAuthoringCatalog(worker);
+  if (JSON.stringify(afterGuard) !== JSON.stringify(beforeGuard)) {
+    throw new Error("rejected asset upload mutated catalog");
+  }
+  evidence.phase = "approval-guarded";
+  evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  await checkpoint(evidence);
+
+  for (const fixture of assetFixtures) {
+    const entry = matchingFixtureAsset(
+      await readAssetAuthoringCatalog(worker),
+      fixture,
+    );
+    const assetEvidence = evidence.assets.find(
+      ({ assetId }) => assetId === fixture.assetId,
+    );
+    if (entry.reviewState === "approved") {
+      if (!assetEvidence.review) {
+        throw new Error(
+          `approved asset lacks prior review: ${fixture.assetId}`,
+        );
+      }
+    } else {
+      assetEvidence.review = await invoke(
+        worker,
+        "reviewAsset",
+        [fixture.handle, "approve"],
+        { exact: `ok;handle=${fixture.handle};review=approved` },
+      );
+    }
+  }
+  evidence.phase = "approved";
+  evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  await checkpoint(evidence);
+
+  for (const fixture of assetFixtures) {
+    let entry = matchingFixtureAsset(
+      await readAssetAuthoringCatalog(worker),
+      fixture,
+    );
+    const assetEvidence = evidence.assets.find(
+      ({ assetId }) => assetId === fixture.assetId,
+    );
+    if (entry.publicationState !== "published") {
+      assetEvidence.publication = {
+        dispatched: await invoke(
+          worker,
+          "publishAsset",
+          [fixture.handle],
+          { exact: "ok;asset=publishing" },
+        ),
+      };
+    } else if (!assetEvidence.publication?.dispatched) {
+      throw new Error(
+        `published asset lacks prior dispatch: ${fixture.assetId}`,
+      );
+    }
+    const deadline = Date.now() + 180_000;
+    const pollStartedAt = performance.now();
+    while (Date.now() < deadline) {
+      await invoke(
+        worker,
+        "refreshAssetAuthoring",
+        [],
+        { prefix: "ok;" },
+      );
+      entry = matchingFixtureAsset(
+        await readAssetAuthoringCatalog(worker),
+        fixture,
+      );
+      if (
+        entry.reviewState !== "approved"
+        || entry.publicationState.startsWith("publish-failed")
+      ) {
+        throw new Error(`asset upload failed: ${fixture.assetId}`);
+      }
+      if (entry.publicationState === "published") break;
+      await sleep(250);
+    }
+    if (
+      entry?.publicationState !== "published"
+      || cidSha256(entry.cid) !== fixture.handle
+    ) {
+      throw new Error(`asset upload timed out: ${fixture.assetId}`);
+    }
+    assetEvidence.publication.completed = {
+      receipt: `published;cid=${entry.cid}`,
+      elapsedMs: Math.round(performance.now() - pollStartedAt),
+    };
+    assetEvidence.cid = entry.cid;
+  }
+  evidence.phase = "published";
+  evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  await checkpoint(evidence);
+
+  for (const fixture of assetFixtures.filter(
+    ({ assignment }) => assignment !== undefined,
+  )) {
+    const assetEvidence = evidence.assets.find(
+      ({ assetId }) => assetId === fixture.assetId,
+    );
+    const current = await readAssetAuthoringCatalog(worker);
+    const matches = fixture.assignment.kind === "room-background"
+      ? current.roomAssignments[fixture.assignment.roomId] === fixture.handle
+      : (
+          current.propAssignment?.propId === fixture.assignment.propId
+          && current.propAssignment?.handle === fixture.handle
+          && current.propAssignment?.anchorX === fixture.assignment.anchorX
+          && current.propAssignment?.anchorY === fixture.assignment.anchorY
+          && current.propAssignment?.layer === fixture.assignment.layer
+        );
+    if (matches) {
+      if (!assetEvidence.assignment) {
+        throw new Error(
+          `assigned asset lacks prior receipt: ${fixture.assetId}`,
+        );
+      }
+    } else if (fixture.assignment.kind === "room-background") {
+      assetEvidence.assignment = await invoke(
+        worker,
+        "assignRoomBackground",
+        [fixture.assignment.roomId, fixture.handle],
+        {
+          exact:
+            `ok;room=${fixture.assignment.roomId};handle=${fixture.handle}`,
+        },
+      );
+    } else {
+      assetEvidence.assignment = await invoke(
+        worker,
+        "assignPropAsset",
+        [
+          fixture.assignment.propId,
+          fixture.handle,
+          fixture.assignment.anchorX,
+          fixture.assignment.anchorY,
+          fixture.assignment.layer,
+        ],
+        {
+          exact:
+            `ok;propId=${fixture.assignment.propId};handle=${fixture.handle};`
+            + `anchorX=${fixture.assignment.anchorX};`
+            + `anchorY=${fixture.assignment.anchorY};`
+            + `layer=${fixture.assignment.layer}`,
+        },
+      );
+    }
+  }
+  evidence.phase = "assigned";
+  evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  await checkpoint(evidence);
+
+  const completed = await readAssetAuthoringCatalog(worker);
+  const finalRoomHandles = {};
+  for (const fixture of assetFixtures) {
+    if (fixture.assignment?.kind === "room-background") {
+      finalRoomHandles[fixture.assignment.roomId] = fixture.handle;
+    }
+  }
+  for (const fixture of assetFixtures) {
+    const entry = matchingFixtureAsset(completed, fixture);
+    const assignmentMatches = fixture.assignment === undefined
+      || (
+        fixture.assignment.kind === "room-background"
+          ? (
+              finalRoomHandles[fixture.assignment.roomId] === fixture.handle
+                ? (
+                    completed.roomAssignments[fixture.assignment.roomId]
+                      === fixture.handle
+                    && entry.roles.includes("room-background")
+                    && entry.roomAssignments.includes(
+                      fixture.assignment.roomId,
+                    )
+                  )
+                : !entry.roomAssignments.includes(fixture.assignment.roomId)
+            )
+          : (
+              completed.propAssignment?.propId === fixture.assignment.propId
+              && completed.propAssignment?.handle === fixture.handle
+              && completed.propAssignment?.anchorX
+                === fixture.assignment.anchorX
+              && completed.propAssignment?.anchorY
+                === fixture.assignment.anchorY
+              && completed.propAssignment?.layer === fixture.assignment.layer
+              && entry.roles.includes("prop-image")
+              && entry.propAssignments.includes(fixture.assignment.propId)
+            )
+      );
+    if (
+      entry.reviewState !== "approved"
+      || entry.publicationState !== "published"
+      || cidSha256(entry.cid) !== fixture.handle
+      || !assignmentMatches
+    ) {
+      throw new Error(`asset authoring incomplete: ${fixture.assetId}`);
+    }
+  }
+  evidence.phase = "complete";
+  evidence.catalogCount = completed.count;
+  evidence.assignments = {
+    rooms: completed.roomAssignments,
+    prop: completed.propAssignment,
+  };
+  evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  await checkpoint(evidence);
+  return evidence;
+}
+
+function parseMvpCatalog(receipt, propId) {
+  const objectContract = graphObjectContract(propId);
+  const objectOrder = objectContract.map(([objectId]) => objectId);
   const encoded = statusFields(receipt).catalog;
   if (!encoded) throw new Error("MVP bundle status omitted catalog");
   const decoded = Buffer.from(encoded, "base64url");
@@ -841,28 +1414,31 @@ function parseMvpCatalog(receipt) {
     throw new Error("MVP catalog lacks terminal newline");
   }
   const lines = catalog.slice(0, -1).split("\n");
+  const objectCount = Number(lines[3]?.slice("objects=".length));
   if (
-    lines.length !== 16 ||
+    lines.length !== objectOrder.length + 5 ||
     lines[0] !== "logos-palace-mvp-storage-catalog-v1" ||
     lines[1] !== "version=1" ||
     lines[2] !== "root=palace-1" ||
-    lines[3] !== "objects=11"
+    !lines[3].startsWith("objects=")
+    || objectCount !== objectOrder.length
   ) {
     throw new Error("MVP catalog envelope mismatch");
   }
   const checksumPrefix = "checksum=";
-  if (!lines[15].startsWith(checksumPrefix)) {
+  const checksumLine = lines[4 + objectCount];
+  if (!checksumLine.startsWith(checksumPrefix)) {
     throw new Error("MVP catalog checksum missing");
   }
   const checksumOffset = catalog.lastIndexOf(checksumPrefix);
   const expectedChecksum = createHash("sha256")
     .update(catalog.slice(0, checksumOffset))
     .digest("hex");
-  if (lines[15].slice(checksumPrefix.length) !== expectedChecksum) {
+  if (checksumLine.slice(checksumPrefix.length) !== expectedChecksum) {
     throw new Error("MVP catalog checksum mismatch");
   }
 
-  const objects = lines.slice(4, 15).map((line, index) => {
+  const objects = lines.slice(4, 4 + objectCount).map((line, index) => {
     if (!line.startsWith("object=")) {
       throw new Error(`MVP catalog object ${index} missing prefix`);
     }
@@ -875,7 +1451,7 @@ function parseMvpCatalog(receipt) {
     const byteLength = Number(lengthText);
     if (
       objectId !== objectOrder[index] ||
-      type !== objectTypes[index] ||
+      type !== objectContract[index][1] ||
       !mediaType ||
       !Number.isSafeInteger(byteLength) ||
       byteLength <= 0 ||
@@ -900,7 +1476,8 @@ function parseMvpCatalog(receipt) {
   return { encoded, catalog, checksum: expectedChecksum, objects };
 }
 
-async function publishBundle(worker) {
+async function publishBundle(worker, propId) {
+  const expectedObjectCount = graphObjectOrder(propId).length;
   const dispatched = await invoke(
     worker,
     "gate3PublishBundle",
@@ -916,9 +1493,9 @@ async function publishBundle(worker) {
       const fields = statusFields(receipt);
       return (
         fields.state === "verified" &&
-        fields.published === "11" &&
-        fields.verified === "11" &&
-        fields.total === "11" &&
+        fields.published === String(expectedObjectCount) &&
+        fields.verified === String(expectedObjectCount) &&
+        fields.total === String(expectedObjectCount) &&
         Boolean(fields.catalog)
       );
     },
@@ -926,11 +1503,15 @@ async function publishBundle(worker) {
   return {
     dispatched,
     completed,
-    catalog: parseMvpCatalog(completed.receipt),
+    catalog: parseMvpCatalog(completed.receipt, propId),
   };
 }
 
-async function ensurePublishedBundle(worker, priorPublication) {
+async function ensurePublishedBundle(
+  worker,
+  priorPublication,
+  propId,
+) {
   const current = await invoke(
     worker,
     "gate3BundleStatus",
@@ -940,7 +1521,7 @@ async function ensurePublishedBundle(worker, priorPublication) {
   );
   const fields = statusFields(current.receipt);
   if (fields.state === "verified" && fields.catalog) {
-    const catalog = parseMvpCatalog(current.receipt);
+    const catalog = parseMvpCatalog(current.receipt, propId);
     if (
       priorPublication
       && (
@@ -966,7 +1547,7 @@ async function ensurePublishedBundle(worker, priorPublication) {
       `publication is not resumable: ${current.receipt}`,
     );
   }
-  return publishBundle(worker);
+  return publishBundle(worker, propId);
 }
 
 async function fetchBundle(worker, catalog) {
@@ -1035,9 +1616,9 @@ async function fetchBundle(worker, catalog) {
       const fields = statusFields(receipt);
       return (
         fields.state === "verified" &&
-        fields.published === "11" &&
-        fields.verified === "11" &&
-        fields.total === "11" &&
+        fields.published === String(catalog.objects.length) &&
+        fields.verified === String(catalog.objects.length) &&
+        fields.total === String(catalog.objects.length) &&
         fields.catalog === catalog.encoded
       );
     },
@@ -1099,7 +1680,7 @@ async function verifyRetention(worker, catalog, round) {
         fields.state === "verified" &&
         fields.retention === "verified" &&
         fields.retention_round === String(round) &&
-        fields.verified === "11" &&
+        fields.verified === String(catalog.objects.length) &&
         fields.catalog === catalog.encoded
       );
     },
@@ -1420,6 +2001,11 @@ if (
     || JSON.stringify(canonicalHashes(previousReport.packageHashes))
       !== JSON.stringify(canonicalHashes(currentPackageHashes))
     || previousReport.productionIdentityMode !== productionIdentityMode
+    || (
+      previousReport.assetAuthoring?.inputManifest
+      && JSON.stringify(previousReport.assetAuthoring.inputManifest)
+        !== JSON.stringify(assetInputs.manifest)
+    )
   )
 ) {
   throw new Error(
@@ -1455,6 +2041,10 @@ const report = {
   storageConfigs: { ...(previousReport?.storageConfigs ?? {}) },
   startup: { ...(previousReport?.startup ?? {}) },
   storageStartup: { ...(previousReport?.storageStartup ?? {}) },
+  assetAuthoring:
+    previousReport?.assetAuthoring,
+  assetAuthoringScreenshot:
+    previousReport?.assetAuthoringScreenshot,
   publication: previousReport?.publication,
   providerBFetch: previousReport?.providerBFetch,
   providerBCachedFetch: previousReport?.providerBCachedFetch,
@@ -1650,10 +2240,135 @@ try {
 
   const creator = workers.get("a");
   const provider = workers.get("b");
+  report.assetAuthoring =
+    await authorAssetFixtures(
+      creator,
+      previousReport?.assetAuthoring,
+      async (evidence) => {
+        report.assetAuthoring = evidence;
+        await checkpointReport();
+      },
+    );
+  const assetAuthoringRender = await creator.call(
+    "assetAuthoring",
+    {
+      open: true,
+      expectedCount: assetFixtures.length,
+      expectedProp:
+        report.assetAuthoring.assignments.prop !== null,
+    },
+    30_000,
+  );
+  report.assetAuthoringScreenshot = {
+    ...(await creator.call(
+      "screenshot",
+      { name: "gate3-admin-assets-published.png" },
+      60_000,
+    )),
+    stage: "gate3-admin-asset-authoring",
+    state: "admin-selected-assets-approved-published-assigned",
+    label: "a",
+    renderEvidence: assetAuthoringRender,
+  };
+  await creator.call(
+    "assetAuthoring", { open: false }, 30_000,
+  );
+  await checkpointReport();
   const published = await ensurePublishedBundle(
     creator,
     report.publication,
+    report.assetAuthoring.assignments.prop?.propId ?? null,
   );
+  const authoredAssets = Object.fromEntries(
+    report.assetAuthoring.assets.map(
+      (asset) => [asset.assetId, asset],
+    ),
+  );
+  const propAssignment = report.assetAuthoring.assignments.prop;
+  const graphBindings = [
+    {
+      kind: "room-background",
+      targetId: "atrium",
+      objectId: "background-atrium",
+    },
+    {
+      kind: "room-background",
+      targetId: "lounge",
+      objectId: "background-lounge",
+    },
+    ...(propAssignment === null
+      ? []
+      : [{
+          kind: "prop-image",
+          objectId: `prop-${propAssignment.propId}-image`,
+        }]),
+  ].map((binding) => {
+    const fixture = assetFixtures.reduce(
+      (selected, candidate) =>
+        candidate.assignment?.kind === binding.kind
+        && (
+          binding.kind !== "room-background"
+          || candidate.assignment.roomId === binding.targetId
+        )
+          ? candidate
+          : selected,
+      undefined,
+    );
+    if (!fixture) {
+      throw new Error(`assigned asset fixture is missing: ${binding.kind}`);
+    }
+    const assetId = fixture.assetId;
+    const authored = authoredAssets[assetId];
+    const object = published.catalog.objects.find(
+      ({ objectId }) => objectId === binding.objectId,
+    );
+    if (
+      !authored
+      || !object
+      || object.cid !== authored.cid
+      || object.contentSha256 !== authored.handle
+    ) {
+      throw new Error(
+        `authored asset is not active graph leaf: ${binding.kind}`,
+      );
+    }
+    return {
+      ...binding,
+      assetId,
+      assignment: fixture.assignment,
+      cid: authored.cid,
+      contentSha256: authored.handle,
+    };
+  });
+  const propBinding = graphBindings.find(
+    ({ kind }) => kind === "prop-image",
+  );
+  const propAsset = authoredAssets[propBinding?.assetId];
+  const activePropProjection = parseActivePropAsset(
+    (await creator.call("properties", {}, 30_000)).gate3ActivePropAsset,
+    "Gate 3 active prop projection",
+    propAssignment !== null,
+  );
+  if (propAssignment === null ? propBinding !== undefined : (
+    !propBinding
+      || !propAsset
+      || activePropProjection.propId !== propBinding.assignment.propId
+      || activePropProjection.handle !== propBinding.contentSha256
+      || activePropProjection.contentSha256 !== propBinding.contentSha256
+      || activePropProjection.width !== propAsset.width
+      || activePropProjection.height !== propAsset.height
+      || activePropProjection.anchorX !== propBinding.assignment.anchorX
+      || activePropProjection.anchorY !== propBinding.assignment.anchorY
+      || activePropProjection.layer !== propBinding.assignment.layer
+  )) {
+    throw new Error(
+      "Gate 3 active prop projection differs from verified graph leaf",
+    );
+  }
+  report.assetAuthoring.graphBindings =
+    graphBindings;
+  report.assetAuthoring.activePropProjection =
+    activePropProjection;
   report.publication = {
     dispatched: published.dispatched,
     completed: published.completed,
@@ -1719,7 +2434,15 @@ try {
     ({ objectId }) => objectId === "background-atrium",
   );
   const atriumAsset = {
-    ...pngAssets[0],
+    role: "room-background-atrium",
+    ...assetFixtures.reduce(
+      (selected, candidate) =>
+        candidate.assignment?.kind === "room-background"
+        && candidate.assignment.roomId === "atrium"
+          ? candidate
+          : selected,
+      undefined,
+    ),
     cid: atriumObject.cid,
     byteLength: atriumObject.byteLength,
     handle: atriumObject.contentSha256,

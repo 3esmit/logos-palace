@@ -31,6 +31,7 @@
 #include "palace_lez_intent.h"
 #include "palace_lez_release_lock.h"
 #include "palace_sha256.h"
+#include "palace_storage_cid.h"
 #include "palace_vm_finalized_replay.h"
 
 namespace {
@@ -192,19 +193,14 @@ struct ActiveGate3Content {
     std::string propCid;
 };
 
-ActiveGate3Content activeGate3Content(
+ActiveGate3Content gate3AuthorityLinkedContent(
     const palace::PalaceLezFinalizedAuthorityBundleV1&
         authority,
-    const palace::PalaceStorageMvpBundle& storage,
-    const std::string& storageMode,
-    const std::size_t verifiedObjects)
+    const palace::PalaceStorageMvpBundle& storage)
 {
     ActiveGate3Content result;
-    if ((storageMode != "verified"
-            && storageMode != "retained")
-        || !storage.complete()
-        || verifiedObjects != storage.artifactCount()) {
-        result.reason = "gate3-bundle-not-verified";
+    if (!storage.complete()) {
+        result.reason = "gate3-bundle-incomplete";
         return result;
     }
 
@@ -214,20 +210,18 @@ ActiveGate3Content activeGate3Content(
     const auto* loungeManifest =
         storage.artifact("room-lounge");
     const auto* script = storage.artifact("script-door");
-    const auto* prop = storage.artifact("prop-hat");
+    const auto* prop = storage.artifact(
+        storage.propManifestObjectId());
     if (palaceManifest == nullptr
         || atriumManifest == nullptr
         || loungeManifest == nullptr
-        || script == nullptr || prop == nullptr
+        || script == nullptr
         || !palace::isSafePalaceCid(palaceManifest->cid)
         || !palace::isSafePalaceCid(atriumManifest->cid)
         || !palace::isSafePalaceCid(loungeManifest->cid)
         || !palace::isSafePalaceCid(script->cid)
-        || !palace::isSafePalaceCid(prop->cid)
-        || script->bytes
-            != "ON SELECT door\n"
-               "SET door_open 1\n"
-               "GOTOROOM lounge\n") {
+        || (prop != nullptr
+            && !palace::isSafePalaceCid(prop->cid))) {
         result.reason = "gate3-content-mismatch";
         return result;
     }
@@ -310,8 +304,66 @@ ActiveGate3Content activeGate3Content(
     result.lounge = *lounge;
     result.script = script->bytes;
     result.scriptCid = script->cid;
-    result.propCid = prop->cid;
+    result.propCid = prop == nullptr
+        ? std::string{} : prop->cid;
     return result;
+}
+
+ActiveGate3Content activeGate3Content(
+    const palace::PalaceLezFinalizedAuthorityBundleV1&
+        authority,
+    const palace::PalaceStorageMvpBundle& storage,
+    const std::string& storageMode,
+    const std::size_t verifiedObjects)
+{
+    ActiveGate3Content result;
+    if ((storageMode != "verified"
+            && storageMode != "retained")
+        || verifiedObjects != storage.artifactCount()) {
+        result.reason = "gate3-bundle-not-verified";
+        return result;
+    }
+
+    result = gate3AuthorityLinkedContent(authority, storage);
+    if (!result.accepted)
+        return result;
+    if (result.script
+        != "ON SELECT door\n"
+           "SET door_open 1\n"
+           "GOTOROOM lounge\n") {
+        result.accepted = false;
+        result.reason = "gate3-content-mismatch";
+    }
+    return result;
+}
+
+std::optional<palace::PalaceLezRootRecordV3>
+finalizedAuthorityRootRecord(
+    const palace::PalaceLezFinalizedAuthorityBundleV1& authority)
+{
+    const palace::PalaceLezRootRecordV3* root = nullptr;
+    for (const palace::PalaceLezFinalizedAuthorityAccountV1& stored
+         : authority.accounts) {
+        if (stored.accountIdHex != authority.scope.rootAccountIdHex)
+            continue;
+        const palace::PalaceLezPublicAccountV3 decoded =
+            palace::PalaceLezCodec::decodePublicAccount(
+                stored.responseJson, authority.scope.programIdHex);
+        const auto* candidate = decoded.accepted
+            ? std::get_if<palace::PalaceLezRootRecordV3>(
+                  &decoded.record)
+            : nullptr;
+        if (candidate == nullptr || root != nullptr)
+            return std::nullopt;
+        root = candidate;
+    }
+    if (root == nullptr
+        || root->lastOrderedActionId
+            != authority.checkpoint.lastOrderedActionId
+        || !palace::isSafePalaceCid(root->activeManifestCid)) {
+        return std::nullopt;
+    }
+    return *root;
 }
 
 std::optional<std::string> palaceIdFromUri(
@@ -693,9 +745,26 @@ void PalaceCoreImpl::onContextReady()
         std::make_unique<
             palace::PalaceDeliveryIdentityRegistration>(
                 instancePersistencePath());
-    m_roomBackgrounds.stageBuiltInFixtures(*m_verifiedAssetStore);
+    const bool assetAuthoringReady =
+        m_assetAuthoring.initialize(
+            instancePersistencePath(),
+            *m_verifiedAssetStore);
+    if (assetAuthoringReady) {
+        for (const palace::AssetAuthoringAssetV1& asset
+             : m_assetAuthoring.assets()) {
+            if (!asset.publishedCid.empty()) {
+                m_publicationStatus[asset.handle] =
+                    "published;cid=" + asset.publishedCid;
+            }
+        }
+    }
     if (!m_projectionStore->load(m_projection)) {
         m_projection.setSyncHealth(palace::SyncHealth::Degraded);
+        persistStartupProjection();
+    }
+    if (!assetAuthoringReady) {
+        m_projection.setSyncHealth(
+            palace::SyncHealth::Degraded);
         persistStartupProjection();
     }
     if (!m_actionJournalStore->load(m_actionJournal) && m_actionJournalStore->exists()) {
@@ -763,6 +832,9 @@ void PalaceCoreImpl::onContextReady()
     m_lezAuthorityBundleStore =
         std::make_unique<palace::PalaceLezAuthorityBundleStore>(
             instancePersistencePath(), authorityExpectation);
+    m_storageMvpCatalogStore =
+        std::make_unique<palace::PalaceStorageMvpCatalogStore>(
+            instancePersistencePath());
     palace::PalaceLezFinalizedAuthorityBundleV1 restoredAuthority;
     const palace::PalaceLezAuthorityBundleStoreStatus authorityStatus =
         m_lezAuthorityBundleStore->load(restoredAuthority);
@@ -792,6 +864,11 @@ void PalaceCoreImpl::onContextReady()
             + std::string(
                 palace::palaceLezAuthorityBundleStoreStatusName(
                     authorityStatus));
+        m_projection.setSyncHealth(palace::SyncHealth::Degraded);
+        persistStartupProjection();
+    }
+
+    if (m_lezAuthorityReady && !restoreStorageMvpCatalog()) {
         m_projection.setSyncHealth(palace::SyncHealth::Degraded);
         persistStartupProjection();
     }
@@ -1360,7 +1437,12 @@ PalaceCoreImpl::productionDeliveryAllowedProps() const
             m_storageMvpFetchedObjects.size());
     if (!content.accepted)
         return {};
-    return {{"hat", content.propCid}};
+    const std::string propId = m_storageMvpBundle.propId();
+    return propId.empty()
+        ? std::map<std::string, std::string>{}
+        : std::map<std::string, std::string>{
+            {propId, content.propCid},
+        };
 }
 
 void PalaceCoreImpl::refreshDeliveryAllowedProps()
@@ -1371,16 +1453,23 @@ void PalaceCoreImpl::refreshDeliveryAllowedProps()
         || !m_deliverySession) {
         return;
     }
+    const auto replaceAndReconcile =
+        [this](std::map<std::string, std::string> allowedProps) {
+            m_deliverySession->replaceAllowedProps(
+                std::move(allowedProps));
+            if (m_deliverySession->reconcileAuthority())
+                persistDeliverySessionLocked();
+        };
 #if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
     if (m_deliverySession->hasConfiguration()
         && m_deliverySession->configuration().networkId
             == "logos.test") {
-        m_deliverySession->replaceAllowedProps(
+        replaceAndReconcile(
             palace::deliveryAcceptanceAllowedProps());
         return;
     }
     if (!m_lezAuthorityReady) {
-        m_deliverySession->replaceAllowedProps(
+        replaceAndReconcile(
             m_lezAuthorityState == "missing"
                 ? palace::deliveryAcceptanceAllowedProps()
                 : std::map<std::string, std::string>{});
@@ -1388,12 +1477,11 @@ void PalaceCoreImpl::refreshDeliveryAllowedProps()
     }
 #else
     if (!m_lezAuthorityReady) {
-        m_deliverySession->replaceAllowedProps({});
+        replaceAndReconcile({});
         return;
     }
 #endif
-    m_deliverySession->replaceAllowedProps(
-        productionDeliveryAllowedProps());
+    replaceAndReconcile(productionDeliveryAllowedProps());
 }
 
 void PalaceCoreImpl::persistDeliverySessionLocked()
@@ -4747,6 +4835,7 @@ std::string PalaceCoreImpl::startStorage(const std::string& nodeConfig)
     if (!started.accepted)
         return "rejected=storage-start;" + started.reason;
     executeStorageCommands(started.commands);
+    startRestoredStorageMvpFetchIfReady();
     return "ok;" + storageSessionStatus();
 }
 
@@ -4842,6 +4931,12 @@ std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
         || !m_storageSession.running()) {
         return "rejected=storage-not-running";
     }
+    const palace::AssetAuthoringAssetV1* asset =
+        m_assetAuthoring.asset(handle);
+    if (asset == nullptr)
+        return "rejected=asset-unknown";
+    if (asset->reviewState != "approved")
+        return "rejected=asset-not-approved";
     const auto existing = m_publicationStatus.find(handle);
     if (existing != m_publicationStatus.end()
         && (existing->second == "publishing" || existing->second.rfind("published;cid=", 0) == 0)) {
@@ -4875,7 +4970,7 @@ std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
     executeStorageCommands(upload.commands);
     const auto current = m_publicationStatus.find(handle);
     if (current != m_publicationStatus.end()
-        && current->second == "publish-failed") {
+        && current->second.rfind("publish-failed", 0U) == 0U) {
         return "rejected=storage-upload-dispatch";
     }
     return "ok;asset=publishing";
@@ -4885,6 +4980,280 @@ std::string PalaceCoreImpl::publicationStatus(const std::string& handle) const
 {
     const auto found = m_publicationStatus.find(handle);
     return found == m_publicationStatus.end() ? "unknown" : found->second;
+}
+
+std::string PalaceCoreImpl::beginAssetStage(
+    const std::string& label)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.begin(label);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;session=" + result.sessionId
+        + ";next=0;maxChunkBytes="
+        + std::to_string(
+            palace::AssetAuthoringCatalog::MaximumChunkBytes)
+        + ";maxTotalBytes="
+        + std::to_string(
+            palace::AssetAuthoringCatalog::MaximumAssetBytes);
+}
+
+std::string PalaceCoreImpl::appendAssetStageChunk(
+    const std::string& sessionId,
+    std::uint64_t sequence,
+    const std::string& canonicalBase64)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.append(
+            sessionId, sequence, canonicalBase64);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;session=" + result.sessionId
+        + ";next=" + std::to_string(result.nextSequence)
+        + ";bytes=" + std::to_string(result.byteLength);
+}
+
+std::string PalaceCoreImpl::commitAssetStage(
+    const std::string& sessionId)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.commit(sessionId);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;handle=" + result.handle
+        + ";width=" + std::to_string(result.width)
+        + ";height=" + std::to_string(result.height)
+        + ";bytes=" + std::to_string(result.byteLength);
+}
+
+std::string PalaceCoreImpl::cancelAssetStage(
+    const std::string& sessionId)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.cancel(sessionId);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;session=" + result.sessionId
+        + ";cancelled=1";
+}
+
+std::string PalaceCoreImpl::assetAuthoringCatalog() const
+{
+    const palace::AssetAuthoringStateV1& authoringState =
+        m_assetAuthoring.state();
+
+    QJsonArray entries;
+    for (const palace::AssetAuthoringAssetV1& asset
+         : m_assetAuthoring.assets()) {
+        const auto publication =
+            m_publicationStatus.find(asset.handle);
+        const std::string publicationState =
+            publication == m_publicationStatus.end()
+            ? "not-uploaded" : publication->second;
+
+        std::string publicationLabel = publicationState;
+        std::string cid = asset.publishedCid;
+        constexpr char kPublishedPrefix[] = "published;cid=";
+        if (publicationState.rfind(kPublishedPrefix, 0U) == 0U) {
+            publicationLabel = "published";
+            cid = publicationState.substr(
+                sizeof(kPublishedPrefix) - 1U);
+        } else if (publicationState.rfind(
+                       "publish-failed", 0U) == 0U) {
+            publicationLabel = "publish-failed";
+        }
+
+        QJsonObject entry;
+        entry.insert(
+            QStringLiteral("handle"),
+            QString::fromStdString(asset.handle));
+        entry.insert(
+            QStringLiteral("label"),
+            QString::fromStdString(asset.label));
+        entry.insert(
+            QStringLiteral("width"),
+            static_cast<qint64>(asset.width));
+        entry.insert(
+            QStringLiteral("height"),
+            static_cast<qint64>(asset.height));
+        entry.insert(
+            QStringLiteral("byteLength"),
+            static_cast<qint64>(asset.byteLength));
+        entry.insert(
+            QStringLiteral("reviewState"),
+            QString::fromStdString(asset.reviewState));
+        entry.insert(
+            QStringLiteral("publicationState"),
+            QString::fromStdString(publicationLabel));
+        entry.insert(
+            QStringLiteral("cid"),
+            QString::fromStdString(cid));
+        QJsonArray roomAssignments;
+        bool hasRoomRole = false;
+        for (const auto& [roomId, assignedHandle]
+             : authoringState.roomAssignments) {
+            if (assignedHandle == asset.handle) {
+                roomAssignments.append(
+                    QString::fromStdString(roomId));
+                hasRoomRole = true;
+            }
+        }
+        QJsonArray propAssignments;
+        const bool hasPropRole =
+            authoringState.propAssignment.has_value()
+            && authoringState.propAssignment->handle
+                == asset.handle;
+        if (hasPropRole) {
+            propAssignments.append(
+                QString::fromStdString(
+                    authoringState.propAssignment->propId));
+        }
+        QJsonArray roles;
+        if (hasRoomRole)
+            roles.append(QStringLiteral("room-background"));
+        if (hasPropRole)
+            roles.append(QStringLiteral("prop-image"));
+        entry.insert(
+            QStringLiteral("roles"),
+            std::move(roles));
+        entry.insert(
+            QStringLiteral("roomAssignments"),
+            std::move(roomAssignments));
+        entry.insert(
+            QStringLiteral("propAssignments"),
+            std::move(propAssignments));
+        entries.append(std::move(entry));
+    }
+
+    QJsonObject roomAssignments;
+    for (const std::string roomId : {
+             std::string("atrium"),
+             std::string("lounge"),
+         }) {
+        const auto assigned =
+            authoringState.roomAssignments.find(roomId);
+        roomAssignments.insert(
+            QString::fromStdString(roomId),
+            QString::fromStdString(
+                assigned == authoringState.roomAssignments.end()
+                ? std::string{} : assigned->second));
+    }
+
+    QJsonObject catalog;
+    catalog.insert(QStringLiteral("version"), 1);
+    catalog.insert(QStringLiteral("count"), entries.size());
+    catalog.insert(
+        QStringLiteral("sessionCount"),
+        static_cast<qint64>(
+            m_assetAuthoring.sessionCount()));
+    catalog.insert(
+        QStringLiteral("bundleLocked"),
+        authoringState.bundleLocked);
+    catalog.insert(
+        QStringLiteral("roomAssignments"),
+        std::move(roomAssignments));
+    if (!authoringState.propAssignment.has_value()) {
+        catalog.insert(
+            QStringLiteral("propAssignment"),
+            QJsonValue(QJsonValue::Null));
+    } else {
+        const palace::AssetAuthoringPropAssignmentV1& prop =
+            *authoringState.propAssignment;
+        QJsonObject encodedProp;
+        encodedProp.insert(
+            QStringLiteral("propId"),
+            QString::fromStdString(prop.propId));
+        encodedProp.insert(
+            QStringLiteral("handle"),
+            QString::fromStdString(prop.handle));
+        encodedProp.insert(
+            QStringLiteral("anchorX"),
+            static_cast<qint64>(prop.anchorX));
+        encodedProp.insert(
+            QStringLiteral("anchorY"),
+            static_cast<qint64>(prop.anchorY));
+        encodedProp.insert(
+            QStringLiteral("layer"),
+            QString::fromStdString(prop.layer));
+        catalog.insert(
+            QStringLiteral("propAssignment"),
+            std::move(encodedProp));
+    }
+    catalog.insert(QStringLiteral("assets"), std::move(entries));
+    return QJsonDocument(catalog)
+        .toJson(QJsonDocument::Compact)
+        .toStdString();
+}
+
+std::string PalaceCoreImpl::reviewAsset(
+    const std::string& handle,
+    const std::string& decision)
+{
+    const auto publication =
+        m_publicationStatus.find(handle);
+    const bool publicationLocked =
+        publication != m_publicationStatus.end()
+        && (publication->second == "publishing"
+            || publication->second.rfind(
+                   "published;cid=", 0U) == 0U);
+    const palace::AssetAuthoringAssetV1* asset =
+        m_assetAuthoring.asset(handle);
+    const std::string wantedReview =
+        decision == "approve" ? "approved"
+        : decision == "reject" ? "rejected"
+        : std::string{};
+    if (publicationLocked && asset != nullptr
+        && asset->reviewState != wantedReview) {
+        return "rejected=asset-review-locked";
+    }
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.review(handle, decision);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;handle=" + handle
+        + ";review=" + result.reason;
+}
+
+std::string PalaceCoreImpl::publishAsset(
+    const std::string& handle)
+{
+    const palace::AssetAuthoringAssetV1* asset =
+        m_assetAuthoring.asset(handle);
+    if (asset == nullptr)
+        return "rejected=asset-unknown";
+    if (asset->reviewState != "approved")
+        return "rejected=asset-not-approved";
+    return publishVerifiedPng(handle);
+}
+
+std::string PalaceCoreImpl::assignRoomBackground(
+    const std::string& roomId,
+    const std::string& handle)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.assign(roomId, handle);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;room=" + roomId + ";handle=" + handle;
+}
+
+std::string PalaceCoreImpl::assignPropAsset(
+    const std::string& propId,
+    const std::string& handle,
+    std::uint32_t anchorX,
+    std::uint32_t anchorY,
+    const std::string& layer)
+{
+    const palace::AssetAuthoringResult result =
+        m_assetAuthoring.assignProp(
+            propId, handle, anchorX, anchorY, layer);
+    if (!result.accepted)
+        return "rejected=" + result.reason;
+    return "ok;propId=" + propId
+        + ";handle=" + handle
+        + ";anchorX=" + std::to_string(anchorX)
+        + ";anchorY=" + std::to_string(anchorY)
+        + ";layer=" + layer;
 }
 
 std::string PalaceCoreImpl::publishMvpStorageBundle()
@@ -4899,9 +5268,16 @@ std::string PalaceCoreImpl::publishMvpStorageBundle()
         && m_storageMvpMode != "verified") {
         return "rejected=storage-bundle-mode-" + m_storageMvpMode;
     }
+    if (!m_assetAuthoring.ready()) {
+        return "rejected=asset-state-unavailable";
+    }
     if (m_storageMvpMode == "idle") {
+        m_storageMvpPendingRoomBackgrounds.clear();
+        m_storageMvpResolvedRoomBackgrounds.clear();
         if (!initializeStorageMvpBundle())
-            return "rejected=storage-bundle-fixtures";
+            return "rejected=storage-bundle-assets";
+        if (!m_assetAuthoring.lockAssignments())
+            return "rejected=asset-state-persistence";
         m_storageMvpMode = "publishing";
     }
     scheduleStorageMvpPublications();
@@ -4926,6 +5302,8 @@ std::string PalaceCoreImpl::mvpStorageBundleStatus()
         state = "fetching";
     if (m_storageMvpMode == "fetching")
         state = "fetching";
+    if (m_storageMvpMode == "catalog-restored")
+        state = "catalog-restored";
     if (m_storageMvpMode == "verified"
         || m_storageMvpMode == "retained") {
         state = "verified";
@@ -4981,82 +5359,15 @@ std::string PalaceCoreImpl::fetchMvpStorageBundle(
         return "rejected=storage-bundle-mode-" + m_storageMvpMode;
     const auto catalog = decodeBase64Url(
         catalogBase64, 16U * 1024U);
-    if (!catalog.has_value() || !initializeStorageMvpBundle()
-        || !m_storageMvpBundle.restoreCanonicalCatalog(*catalog)) {
+    if (!catalog.has_value()
+        || !m_storageMvpBundle.restoreCanonicalCatalog(
+            *catalog)) {
         return "rejected=storage-catalog-invalid";
     }
-
-    const std::vector<palace::PalaceStorageMvpArtifactV1>
-        artifacts = m_storageMvpBundle.artifacts();
-    for (const palace::PalaceStorageMvpArtifactV1& artifact
-         : artifacts) {
-        const palace::StorageCatalogTransition tracked =
-            m_storageCatalog.trackPublishedObject(
-                artifact.specification, artifact.cid);
-        if (!tracked.accepted) {
-            m_storageMvpFailures[artifact.objectId] =
-                tracked.reason;
-            m_storageMvpMode = "degraded";
-            return "rejected=storage-catalog-track;"
-                + tracked.reason;
-        }
-    }
-
-    std::vector<std::optional<bool>> nativeCidAvailability;
-    nativeCidAvailability.reserve(artifacts.size());
-    m_storageMvpNativeAvailableCount = 0U;
-    m_storageMvpNativeTotalCount = artifacts.size();
-    std::string invalidNativeExistsObject;
-    for (const palace::PalaceStorageMvpArtifactV1& artifact
-         : artifacts) {
-        const StdLogosResult exists =
-            modules().storage_module.exists(artifact.cid);
-        if (!exists.success || !exists.value.is_boolean()) {
-            nativeCidAvailability.push_back(std::nullopt);
-            if (invalidNativeExistsObject.empty())
-                invalidNativeExistsObject = artifact.objectId;
-            continue;
-        }
-        const bool available = exists.value.get<bool>();
-        nativeCidAvailability.push_back(available);
-        if (available)
-            ++m_storageMvpNativeAvailableCount;
-    }
-    const std::optional<palace::PalaceStorageMvpFetchSource>
-        selectedSource =
-        palace::selectPalaceStorageMvpFetchSource(
-            nativeCidAvailability, artifacts.size());
-    if (!selectedSource.has_value()) {
-        m_storageMvpFailures[
-            invalidNativeExistsObject.empty()
-                ? std::string("catalog")
-                : invalidNativeExistsObject] =
-            "native-exists";
-        m_storageMvpMode = "degraded";
-        return "rejected=storage-native-exists";
-    }
-    m_storageMvpFetchSource = *selectedSource;
-    const bool localOnly =
-        *m_storageMvpFetchSource
-        == palace::PalaceStorageMvpFetchSource::Cache;
-
-    m_storageMvpMode = "fetching";
-    for (const palace::PalaceStorageMvpArtifactV1& artifact
-         : artifacts) {
-        const palace::StorageCatalogTransition fetch =
-            m_storageCatalog.beginLocalFetch(artifact.objectId);
-        if (!fetch.accepted || !fetch.operation.has_value()
-            || !startStorageMvpCatalogDownload(
-                *fetch.operation,
-                localOnly,
-                StorageMvpTransferPurpose::NetworkFetch)) {
-            m_storageMvpFailures[artifact.objectId] =
-                fetch.accepted ? "network-fetch-dispatch"
-                               : fetch.reason;
-            m_storageMvpMode = "degraded";
-            return "rejected=storage-catalog-fetch";
-        }
-    }
+    clearStorageMvpRuntimeState();
+    std::string reason;
+    if (!beginStorageMvpFetch(reason))
+        return "rejected=" + reason;
     return "ok;" + mvpStorageBundleStatus();
 }
 
@@ -5188,7 +5499,77 @@ std::string PalaceCoreImpl::roomTitle() const
 
 std::string PalaceCoreImpl::roomBackgroundHandle() const
 {
-    return m_roomBackgrounds.handleForRoom(m_projection.currentRoomId());
+    if (m_storageMvpCatalogStale
+        || m_storageMvpMode == "catalog-restored"
+        || m_storageMvpMode == "fetching"
+        || m_storageMvpMode == "degraded") {
+        return {};
+    }
+    const auto resolved =
+        m_storageMvpResolvedRoomBackgrounds.find(
+            m_projection.currentRoomId());
+    if (resolved
+        != m_storageMvpResolvedRoomBackgrounds.end()) {
+        return resolved->second;
+    }
+    return m_assetAuthoring.handleForRoom(m_projection.currentRoomId());
+}
+
+std::string PalaceCoreImpl::activePropAsset() const
+{
+    QJsonObject encoded;
+    encoded.insert(QStringLiteral("version"), 1);
+    std::optional<palace::PalaceStorageMvpPropAssetV1>
+        prop;
+    if (m_storageMvpMode == "verified"
+        || m_storageMvpMode == "retained") {
+        prop = m_storageMvpBundle.propAsset();
+    }
+    if (prop.has_value()) {
+        const palace::PalaceStorageMvpArtifactV1* manifest =
+            m_storageMvpBundle.artifact(
+                m_storageMvpBundle.propManifestObjectId());
+        if (manifest == nullptr
+            || m_deliveryAuthority.isAssetBanned(
+                manifest->cid, m_projection.currentRoomId())) {
+            prop.reset();
+        }
+    }
+    if (!prop.has_value()) {
+        encoded.insert(
+            QStringLiteral("available"), false);
+        return QJsonDocument(encoded)
+            .toJson(QJsonDocument::Compact)
+            .toStdString();
+    }
+    encoded.insert(QStringLiteral("available"), true);
+    encoded.insert(
+        QStringLiteral("propId"),
+        QString::fromStdString(prop->propId));
+    encoded.insert(
+        QStringLiteral("handle"),
+        QString::fromStdString(prop->handle));
+    encoded.insert(
+        QStringLiteral("contentSha256"),
+        QString::fromStdString(prop->handle));
+    encoded.insert(
+        QStringLiteral("width"),
+        static_cast<qint64>(prop->width));
+    encoded.insert(
+        QStringLiteral("height"),
+        static_cast<qint64>(prop->height));
+    encoded.insert(
+        QStringLiteral("anchorX"),
+        static_cast<qint64>(prop->anchorX));
+    encoded.insert(
+        QStringLiteral("anchorY"),
+        static_cast<qint64>(prop->anchorY));
+    encoded.insert(
+        QStringLiteral("layer"),
+        QString::fromStdString(prop->layer));
+    return QJsonDocument(encoded)
+        .toJson(QJsonDocument::Compact)
+        .toStdString();
 }
 
 std::string PalaceCoreImpl::syncHealth() const
@@ -5316,10 +5697,12 @@ std::string PalaceCoreImpl::submitHumanModeration(
     std::string target = selectedTarget;
     if (targetKind
         == palace::PalaceHumanModerationTargetV1::AssetCid) {
-        if (selectedTarget != "hat")
+        if (selectedTarget
+            != m_storageMvpBundle.propId())
             return "rejected=moderation-prop-unknown";
         const palace::PalaceStorageMvpArtifactV1* prop =
-            m_storageMvpBundle.artifact("prop-hat");
+            m_storageMvpBundle.artifact(
+                m_storageMvpBundle.propManifestObjectId());
         if (!m_storageMvpBundle.complete() || prop == nullptr
             || !palace::isSafePalaceCid(prop->cid)) {
             return "rejected=moderation-prop-unavailable";
@@ -6777,6 +7160,7 @@ bool PalaceCoreImpl::completePalaceHistoryRebuild(
     m_deliveryAuthority = std::move(candidateAuthority);
     m_lezAuthorityBundle = std::move(candidateBundle);
     m_lezAuthorityReady = true;
+    persistStorageMvpCatalogIfFinalized();
     refreshDeliveryAllowedProps();
     m_lezAuthorityState =
         "rebuilt-" + std::to_string(
@@ -6876,6 +7260,7 @@ bool PalaceCoreImpl::persistFinalizedAuthorityState(
     m_deliveryAuthority = std::move(candidateAuthority);
     m_lezAuthorityBundle = std::move(candidateBundle);
     m_lezAuthorityReady = true;
+    persistStorageMvpCatalogIfFinalized();
     refreshDeliveryAllowedProps();
     m_lezAuthorityState =
         "finalized-" + std::to_string(transaction.orderedActionId);
@@ -7222,13 +7607,14 @@ bool PalaceCoreImpl::initializeStorageMvpBundle()
     if (!m_verifiedAssetStore)
         return false;
     const auto atriumPath = m_verifiedAssetStore->verifiedPngPath(
-        m_roomBackgrounds.handleForRoom("atrium"));
+        m_assetAuthoring.handleForRoom("atrium"));
     const auto loungePath = m_verifiedAssetStore->verifiedPngPath(
-        m_roomBackgrounds.handleForRoom("lounge"));
+        m_assetAuthoring.handleForRoom("lounge"));
+    const auto& authoringState = m_assetAuthoring.state();
     if (!atriumPath.has_value() || !loungePath.has_value())
         return false;
 
-    auto readFixture = [](const std::string& path) {
+    auto readAsset = [](const std::string& path) {
         QFile input(QString::fromStdString(path));
         if (!input.open(QIODevice::ReadOnly))
             return std::string{};
@@ -7239,9 +7625,296 @@ bool PalaceCoreImpl::initializeStorageMvpBundle()
         }
         return bytes.toStdString();
     };
-    const std::string atrium = readFixture(*atriumPath);
-    const std::string lounge = readFixture(*loungePath);
-    return m_storageMvpBundle.initialize(atrium, lounge);
+    const std::string atrium = readAsset(*atriumPath);
+    const std::string lounge = readAsset(*loungePath);
+    std::optional<palace::PalaceStorageMvpPropInputV1>
+        propInput;
+    if (authoringState.propAssignment.has_value()) {
+        const palace::AssetAuthoringPropAssignmentV1& propAssignment =
+            *authoringState.propAssignment;
+        const palace::AssetAuthoringAssetV1* propAsset =
+            m_assetAuthoring.asset(propAssignment.handle);
+        const auto propPath = m_verifiedAssetStore->verifiedPngPath(
+            propAssignment.handle);
+        if (!propPath.has_value() || propAsset == nullptr)
+            return false;
+        propInput = palace::PalaceStorageMvpPropInputV1{
+            readAsset(*propPath),
+            propAssignment.propId,
+            propAsset->width,
+            propAsset->height,
+            propAssignment.anchorX,
+            propAssignment.anchorY,
+            propAssignment.layer,
+        };
+    }
+    return m_storageMvpBundle.initialize(
+        atrium, lounge, propInput);
+}
+
+std::optional<palace::PalaceStorageMvpCatalogBindingV1>
+PalaceCoreImpl::storageMvpCatalogBinding() const
+{
+    if (!m_lezAuthorityReady)
+        return std::nullopt;
+    const auto root = finalizedAuthorityRootRecord(
+        m_lezAuthorityBundle);
+    if (!root.has_value())
+        return std::nullopt;
+
+    palace::PalaceStorageMvpCatalogBindingV1 binding;
+    binding.networkId = m_lezAuthorityBundle.scope.networkId;
+    binding.programIdHex = m_lezAuthorityBundle.scope.programIdHex;
+    binding.rootAccountIdHex =
+        m_lezAuthorityBundle.scope.rootAccountIdHex;
+    binding.finalizedCheckpoint =
+        m_lezAuthorityBundle.checkpoint.finalizedBlockId;
+    binding.finalizedHash =
+        m_lezAuthorityBundle.checkpoint.finalizedBlockHashHex;
+    binding.rootManifestCid = root->activeManifestCid;
+    return binding;
+}
+
+void PalaceCoreImpl::clearStorageMvpRuntimeState()
+{
+    m_storageMvpTransfers.clear();
+    m_storageMvpScheduledPublications.clear();
+    m_storageMvpFetchedObjects.clear();
+    m_storageMvpRetainedObjects.clear();
+    m_storageMvpPendingRoomBackgrounds.clear();
+    m_storageMvpResolvedRoomBackgrounds.clear();
+    m_storageMvpFailures.clear();
+    m_storageMvpFetchSource.reset();
+    m_storageMvpNativeAvailableCount = 0U;
+    m_storageMvpNativeTotalCount = 0U;
+    m_storageRetentionRound = 0U;
+    m_storageRetentionInProgress = false;
+}
+
+bool PalaceCoreImpl::restoreStorageMvpCatalog()
+{
+    if (!m_storageMvpCatalogStore || !m_lezAuthorityReady)
+        return true;
+
+    const auto binding = storageMvpCatalogBinding();
+    const auto reject = [this](const std::string& reason) {
+        clearStorageMvpRuntimeState();
+        m_storageMvpBundle = palace::PalaceStorageMvpBundle{};
+        m_storageMvpFailures["catalog"] = reason;
+        m_storageMvpMode = "degraded";
+        return false;
+    };
+    if (!binding.has_value())
+        return true;
+
+    palace::PalaceStorageMvpCatalogRecordV1 record;
+    const palace::PalaceStorageMvpCatalogStoreStatus loaded =
+        m_storageMvpCatalogStore->load(*binding, record);
+    const palace::PalaceStorageMvpCatalogRecoveryAction action =
+        palace::palaceStorageMvpCatalogRecoveryAction(loaded);
+    if (action
+        == palace::PalaceStorageMvpCatalogRecoveryAction::Idle) {
+        if (loaded
+            == palace::PalaceStorageMvpCatalogStoreStatus::
+                BindingMismatch) {
+            clearStorageMvpRuntimeState();
+            m_storageMvpBundle = palace::PalaceStorageMvpBundle{};
+            m_storageMvpCatalogStale = true;
+            m_storageMvpMode = "idle";
+        }
+        return true;
+    }
+    if (action
+        != palace::PalaceStorageMvpCatalogRecoveryAction::Restore) {
+        return reject(
+            "sealed-catalog-"
+            + std::string(
+                palace::palaceStorageMvpCatalogStoreStatusName(
+                    loaded)));
+    }
+
+    palace::PalaceStorageMvpBundle restored;
+    if (!restored.restoreCanonicalCatalog(record.canonicalCatalog)
+        || restored.canonicalCatalog() != record.canonicalCatalog) {
+        return reject("sealed-catalog-graph-invalid");
+    }
+    const ActiveGate3Content linked = gate3AuthorityLinkedContent(
+        m_lezAuthorityBundle, restored);
+    if (!linked.accepted)
+        return reject("sealed-catalog-" + linked.reason);
+
+    clearStorageMvpRuntimeState();
+    m_storageMvpBundle = std::move(restored);
+    m_storageMvpCatalogStale = true;
+    // Catalog CIDs are only a transport plan. Exact bytes must be fetched
+    // again before room backgrounds, props, or Delivery are enabled.
+    m_storageMvpMode = "catalog-restored";
+    return true;
+}
+
+bool PalaceCoreImpl::beginStorageMvpFetch(std::string& reason)
+{
+    reason.clear();
+    if (!m_storageSession.running()
+        || !m_storageCatalog.hasConfiguration()) {
+        reason = "storage-not-running";
+        return false;
+    }
+    if (m_storageMvpMode != "idle"
+        && m_storageMvpMode != "catalog-restored") {
+        reason = "storage-bundle-mode-" + m_storageMvpMode;
+        return false;
+    }
+    if (!m_storageMvpBundle.complete()
+        || !m_storageMvpTransfers.empty()) {
+        reason = "storage-catalog-state";
+        return false;
+    }
+
+    const std::vector<palace::PalaceStorageMvpArtifactV1>
+        artifacts = m_storageMvpBundle.artifacts();
+    if (artifacts.empty()) {
+        reason = "storage-catalog-empty";
+        return false;
+    }
+    for (const palace::PalaceStorageMvpArtifactV1& artifact
+         : artifacts) {
+        const palace::StorageCatalogTransition tracked =
+            m_storageCatalog.trackPublishedObject(
+                artifact.specification, artifact.cid);
+        if (!tracked.accepted) {
+            m_storageMvpFailures[artifact.objectId] =
+                tracked.reason;
+            m_storageMvpMode = "degraded";
+            reason = "storage-catalog-track;" + tracked.reason;
+            return false;
+        }
+    }
+
+    std::vector<std::optional<bool>> nativeCidAvailability;
+    nativeCidAvailability.reserve(artifacts.size());
+    m_storageMvpNativeAvailableCount = 0U;
+    m_storageMvpNativeTotalCount = artifacts.size();
+    std::string invalidNativeExistsObject;
+    for (const palace::PalaceStorageMvpArtifactV1& artifact
+         : artifacts) {
+        const StdLogosResult exists =
+            modules().storage_module.exists(artifact.cid);
+        if (!exists.success || !exists.value.is_boolean()) {
+            nativeCidAvailability.push_back(std::nullopt);
+            if (invalidNativeExistsObject.empty())
+                invalidNativeExistsObject = artifact.objectId;
+            continue;
+        }
+        const bool available = exists.value.get<bool>();
+        nativeCidAvailability.push_back(available);
+        if (available)
+            ++m_storageMvpNativeAvailableCount;
+    }
+    const std::optional<palace::PalaceStorageMvpFetchSource>
+        selectedSource = palace::selectPalaceStorageMvpFetchSource(
+            nativeCidAvailability, artifacts.size());
+    if (!selectedSource.has_value()) {
+        m_storageMvpFailures[
+            invalidNativeExistsObject.empty()
+                ? std::string("catalog")
+                : invalidNativeExistsObject] = "native-exists";
+        m_storageMvpMode = "degraded";
+        reason = "storage-native-exists";
+        return false;
+    }
+    m_storageMvpFetchSource = *selectedSource;
+    const bool localOnly =
+        *m_storageMvpFetchSource
+        == palace::PalaceStorageMvpFetchSource::Cache;
+
+    m_storageMvpMode = "fetching";
+    for (const palace::PalaceStorageMvpArtifactV1& artifact
+         : artifacts) {
+        const palace::StorageCatalogTransition fetch =
+            m_storageCatalog.beginLocalFetch(artifact.objectId);
+        if (!fetch.accepted || !fetch.operation.has_value()
+            || !startStorageMvpCatalogDownload(
+                *fetch.operation,
+                localOnly,
+                StorageMvpTransferPurpose::NetworkFetch)) {
+            m_storageMvpFailures[artifact.objectId] =
+                fetch.accepted ? "network-fetch-dispatch"
+                               : fetch.reason;
+            m_storageMvpMode = "degraded";
+            reason = "storage-catalog-fetch";
+            return false;
+        }
+    }
+    return true;
+}
+
+void PalaceCoreImpl::startRestoredStorageMvpFetchIfReady()
+{
+    if (m_storageMvpMode != "catalog-restored"
+        || !m_storageSession.running()
+        || !m_storageCatalog.hasConfiguration()) {
+        return;
+    }
+    std::string reason;
+    if (!beginStorageMvpFetch(reason)
+        && m_storageMvpMode != "degraded") {
+        m_storageMvpFailures["catalog"] =
+            reason.empty() ? "restored-fetch-dispatch" : reason;
+        m_storageMvpMode = "degraded";
+    }
+}
+
+void PalaceCoreImpl::persistStorageMvpCatalogIfFinalized()
+{
+    if (!m_storageMvpCatalogStore
+        || (m_storageMvpMode != "verified"
+            && m_storageMvpMode != "retained")
+        || !m_storageMvpBundle.complete()
+        || !m_storageMvpBundle.fetchedContentValid()
+        || m_storageMvpFetchedObjects.size()
+            != m_storageMvpBundle.artifactCount()
+        || !m_storageMvpFailures.empty()) {
+        return;
+    }
+
+    const auto binding = storageMvpCatalogBinding();
+    const ActiveGate3Content linked = gate3AuthorityLinkedContent(
+        m_lezAuthorityBundle, m_storageMvpBundle);
+    if (!binding.has_value() || !linked.accepted)
+        return;
+
+    palace::PalaceStorageMvpCatalogRecordV1 record;
+    record.binding = *binding;
+    record.canonicalCatalog = m_storageMvpBundle.canonicalCatalog();
+    record.catalogChecksumHex =
+        palace::crypto::sha256Hex(record.canonicalCatalog);
+    const palace::PalaceStorageMvpCatalogStoreStatus saved =
+        m_storageMvpCatalogStore->save(record);
+    if (saved == palace::PalaceStorageMvpCatalogStoreStatus::Saved) {
+        m_storageMvpCatalogStale = false;
+        return;
+    }
+
+    m_storageMvpFailures["catalog"] =
+        "sealed-catalog-"
+        + std::string(
+            palace::palaceStorageMvpCatalogStoreStatusName(saved));
+    m_storageMvpMode = "degraded";
+}
+
+bool PalaceCoreImpl::promoteStorageMvpBackgrounds()
+{
+    if (m_storageMvpPendingRoomBackgrounds.size() != 2U
+        || m_storageMvpPendingRoomBackgrounds.find("atrium")
+            == m_storageMvpPendingRoomBackgrounds.end()
+        || m_storageMvpPendingRoomBackgrounds.find("lounge")
+            == m_storageMvpPendingRoomBackgrounds.end()) {
+        return false;
+    }
+    m_storageMvpResolvedRoomBackgrounds =
+        m_storageMvpPendingRoomBackgrounds;
+    return true;
 }
 
 bool PalaceCoreImpl::writeStorageMvpArtifact(
@@ -7410,7 +8083,15 @@ void PalaceCoreImpl::scheduleStorageMvpPublications()
         }
     }
     if (m_storageMvpBundle.complete()) {
+        if (!m_storageMvpBundle.fetchedContentValid()
+            || !promoteStorageMvpBackgrounds()) {
+            m_storageMvpFailures["backgrounds"] =
+                "verified-background-resolution";
+            m_storageMvpMode = "degraded";
+            return;
+        }
         m_storageMvpMode = "verified";
+        persistStorageMvpCatalogIfFinalized();
         refreshDeliveryAllowedProps();
     }
 }
@@ -7559,7 +8240,7 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
     }
 
     std::string bytes;
-    const bool succeeded =
+    bool succeeded =
         terminal.outcome
             == palace::StorageTransferOutcome::Succeeded
         && readStorageMvpTransfer(
@@ -7567,6 +8248,38 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
             artifact->specification.byteLength,
             bytes);
     QFile::remove(QString::fromStdString(transfer.path));
+
+    succeeded = succeeded
+        && m_storageMvpBundle.acceptFetchedBytes(
+            transfer.objectId, bytes);
+    const bool pngAsset =
+        artifact->type
+            == palace::PalaceStorageMvpArtifactType::
+                BackgroundPng
+        || artifact->type
+            == palace::PalaceStorageMvpArtifactType::PropPng;
+    if (succeeded
+        && pngAsset
+        && transfer.purpose
+            != StorageMvpTransferPurpose::
+                RetentionVerification) {
+        const palace::VerifiedAsset verified =
+            m_verifiedAssetStore
+            ? m_verifiedAssetStore->stagePngBytes(bytes)
+            : palace::VerifiedAsset{};
+        const std::string roomId =
+            transfer.objectId == "background-atrium"
+            ? "atrium"
+            : transfer.objectId == "background-lounge"
+                ? "lounge" : std::string{};
+        succeeded = verified.accepted
+            && verified.handle
+                == artifact->specification.contentSha256;
+        if (succeeded && !roomId.empty()) {
+            m_storageMvpPendingRoomBackgrounds[roomId] =
+                verified.handle;
+        }
+    }
 
     if (transfer.purpose
         == StorageMvpTransferPurpose::RetentionVerification) {
@@ -7651,7 +8364,15 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
     }
     if (m_storageMvpFetchedObjects.size()
         == m_storageMvpBundle.artifactCount()) {
+        if (!m_storageMvpBundle.fetchedContentValid()
+            || !promoteStorageMvpBackgrounds()) {
+            m_storageMvpFailures["backgrounds"] =
+                "verified-background-resolution";
+            m_storageMvpMode = "degraded";
+            return;
+        }
         m_storageMvpMode = "verified";
+        persistStorageMvpCatalogIfFinalized();
         refreshDeliveryAllowedProps();
         std::string recoveryReason;
         recoverFinalizedPalaceVmTurn(
@@ -7693,6 +8414,7 @@ void PalaceCoreImpl::drainStorageCallbacks()
     if (drained.commands.empty() && drained.terminals.empty()
         && drained.processedCallbacks == 0U
         && drained.rejectedCallbacks == 0U) {
+        startRestoredStorageMvpFetchIfReady();
         return;
     }
     std::deque<palace::StorageModuleCommand> commands;
@@ -7701,6 +8423,7 @@ void PalaceCoreImpl::drainStorageCallbacks()
         std::vector<palace::StorageModuleCommand>(
             std::make_move_iterator(commands.begin()),
             std::make_move_iterator(commands.end())));
+    startRestoredStorageMvpFetchIfReady();
 }
 
 void PalaceCoreImpl::executeStorageCommands(
@@ -7871,10 +8594,37 @@ void PalaceCoreImpl::applyStorageTerminal(
             return;
         const std::string handle = publication->second;
         m_storagePublicationByOperation.erase(publication);
-        m_publicationStatus[handle] =
-            terminal.outcome == palace::StorageTransferOutcome::Succeeded
-            ? "published;cid=" + terminal.cid
-            : "publish-failed";
+        const palace::AssetAuthoringAssetV1* background =
+            m_assetAuthoring.asset(handle);
+        std::string cidDigest;
+        const bool validTerminalCid =
+            terminal.outcome
+                == palace::StorageTransferOutcome::Succeeded
+            && (background != nullptr
+                ? palace::canonicalStorageCidV1Sha256(
+                      terminal.cid, cidDigest)
+                : palace::canonicalStorageCidSha256(
+                      terminal.cid, cidDigest));
+        if (terminal.outcome
+                != palace::StorageTransferOutcome::Succeeded) {
+            m_publicationStatus[handle] = "publish-failed";
+        } else if (!validTerminalCid || cidDigest != handle) {
+            m_publicationStatus[handle] =
+                "publish-failed;reason=cid-digest-mismatch";
+        } else {
+            if (background != nullptr) {
+                const palace::AssetAuthoringResult persisted =
+                    m_assetAuthoring.recordPublishedCid(
+                        handle, terminal.cid);
+                if (!persisted.accepted) {
+                    m_publicationStatus[handle] =
+                        "publish-failed;reason=state-persistence";
+                    return;
+                }
+            }
+            m_publicationStatus[handle] =
+                "published;cid=" + terminal.cid;
+        }
         return;
     }
 

@@ -38,11 +38,12 @@
 #include "palace_lez_submission_intent_store.h"
 #include "palace_projection.h"
 #include "palace_room_transition.h"
-#include "palace_room_backgrounds.h"
+#include "palace_asset_authoring.h"
 #include "palace_sha256.h"
 #include "palace_storage.h"
 #include "palace_storage_catalog_session.h"
 #include "palace_storage_mvp.h"
+#include "palace_storage_mvp_catalog_store.h"
 #include "palace_storage_module_codec.h"
 #include "palace_storage_module_session.h"
 #include "palace_verified_asset_store.h"
@@ -329,6 +330,30 @@ public:
     std::string assetStatus(const std::string& derivativeCid) const;
     std::string publishVerifiedPng(const std::string& handle);
     std::string publicationStatus(const std::string& handle) const;
+    std::string beginAssetStage(const std::string& label);
+    std::string appendAssetStageChunk(
+        const std::string& sessionId,
+        std::uint64_t sequence,
+        const std::string& canonicalBase64);
+    std::string commitAssetStage(
+        const std::string& sessionId);
+    std::string cancelAssetStage(
+        const std::string& sessionId);
+    std::string assetAuthoringCatalog() const;
+    std::string reviewAsset(
+        const std::string& handle,
+        const std::string& decision);
+    std::string publishAsset(
+        const std::string& handle);
+    std::string assignRoomBackground(
+        const std::string& roomId,
+        const std::string& handle);
+    std::string assignPropAsset(
+        const std::string& propId,
+        const std::string& handle,
+        std::uint32_t anchorX,
+        std::uint32_t anchorY,
+        const std::string& layer);
     std::string publishMvpStorageBundle();
     std::string mvpStorageBundleStatus();
     std::string fetchMvpStorageBundle(const std::string& catalogBase64);
@@ -336,6 +361,7 @@ public:
     std::string storageObjectStatus(const std::string& objectId);
     std::string roomTitle() const;
     std::string roomBackgroundHandle() const;
+    std::string activePropAsset() const;
     std::string syncHealth() const;
     std::string localProjection() const;
     // Human moderation commands derive authority context and exact schema-v3
@@ -597,6 +623,14 @@ private:
     std::string palaceFinalityReason(
         const std::string& actionId) const;
     bool initializeStorageMvpBundle();
+    bool promoteStorageMvpBackgrounds();
+    std::optional<palace::PalaceStorageMvpCatalogBindingV1>
+    storageMvpCatalogBinding() const;
+    void clearStorageMvpRuntimeState();
+    bool restoreStorageMvpCatalog();
+    bool beginStorageMvpFetch(std::string& reason);
+    void startRestoredStorageMvpFetchIfReady();
+    void persistStorageMvpCatalogIfFinalized();
     bool writeStorageMvpArtifact(
         const palace::PalaceStorageMvpArtifactV1& artifact,
         std::string& path) const;
@@ -643,7 +677,7 @@ private:
     palace::Ed25519EnvelopeVerifier m_deliveryVerifier;
     palace::DeliveryRequestCorrelation m_deliveryRequestCorrelation;
     palace::DeliveryRecoveryCoordinator m_deliveryRecovery;
-    palace::RoomBackgroundCatalog m_roomBackgrounds;
+    palace::AssetAuthoringCatalog m_assetAuthoring;
     std::unique_ptr<palace::ProjectionStore> m_projectionStore;
     std::unique_ptr<palace::VerifiedAssetStore> m_verifiedAssetStore;
     palace::PalaceLezTransactionCoordinator m_lezCoordinator;
@@ -673,10 +707,16 @@ private:
     palace::PalaceStorageModuleSession m_storageSession;
     palace::PalaceStorageCatalogSession m_storageCatalog;
     palace::PalaceStorageMvpBundle m_storageMvpBundle;
+    std::unique_ptr<palace::PalaceStorageMvpCatalogStore>
+        m_storageMvpCatalogStore;
     std::map<std::string, StorageMvpTransfer> m_storageMvpTransfers;
     std::set<std::string> m_storageMvpScheduledPublications;
     std::set<std::string> m_storageMvpFetchedObjects;
     std::set<std::string> m_storageMvpRetainedObjects;
+    std::map<std::string, std::string>
+        m_storageMvpPendingRoomBackgrounds;
+    std::map<std::string, std::string>
+        m_storageMvpResolvedRoomBackgrounds;
     std::map<std::string, std::string> m_storageMvpFailures;
     std::map<std::string, std::string> m_assetStatus;
     std::map<std::string, std::string> m_storagePublicationByOperation;
@@ -730,6 +770,9 @@ private:
     std::uint64_t m_nextStoragePublicationId = 0;
     std::uint64_t m_storageRetentionRound = 0;
     bool m_storageRetentionInProgress = false;
+    // A valid catalog from a different finalized authority snapshot must not
+    // revive local authoring previews while recovery waits for a new graph.
+    bool m_storageMvpCatalogStale = false;
     bool m_storageCallbacksRegistered = false;
     bool m_storageCallbackRegistrationAttempted = false;
 };

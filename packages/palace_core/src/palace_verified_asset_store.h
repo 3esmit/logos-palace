@@ -14,6 +14,9 @@ class VerifiedAssetStore {
 public:
     explicit VerifiedAssetStore(std::string instancePersistencePath);
 
+    // Computes digest and decoded dimensions from complete PNG bytes, then
+    // stages them through the same covenant used for Storage derivatives.
+    VerifiedAsset stagePngBytes(const std::string& encoded) const;
     VerifiedAsset stagePngDerivative(const AssetRefV1& reference,
                                      const std::string& encoded) const;
     // Resolves a digest handle only after rechecking containment, file type,

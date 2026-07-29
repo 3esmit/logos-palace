@@ -1934,10 +1934,6 @@ try {
     ["a", "gate2Move", [1200, 2300]],
     ["b", "gate2Move", [3400, 4500]],
     ["c", "gate2Move", [5600, 6700]],
-    ["a", "gate2Wear", ["hat"]],
-    ["b", "gate2Wear", ["hat"]],
-    ["c", "gate2Wear", ["hat"]],
-    ["b", "gate2Remove", ["hat"]],
   ];
   for (const [label, name, args] of actionCalls) {
     const accepted = await invoke(
@@ -1955,7 +1951,7 @@ try {
       speech: renderProbeMessage,
       x: 1200,
       y: 2300,
-      props: ["hat"],
+      props: [],
     },
     bob: {
       displayName: "Bob",
@@ -1969,7 +1965,7 @@ try {
       speech: finalSpeech.carol,
       x: 5600,
       y: 6700,
-      props: ["hat"],
+      props: [],
     },
   };
   const actionSnapshots = Object.fromEntries(
@@ -2003,11 +1999,11 @@ try {
       }),
     );
   }
-  const qsgRenderTimingBeforeRestart = Object.fromEntries(
+  const frameTimingBeforeRestart = Object.fromEntries(
     await Promise.all(
-      allWorkerLabels.map(async (label) => [
+      labels.map(async (label) => [
         label,
-        await workers[label].call("renderTimings"),
+        await workers[label].call("frameTimings"),
       ]),
     ),
   );
@@ -2075,8 +2071,6 @@ try {
     ["a", "gate2Move", [1200, 2300]],
     ["b", "gate2Move", [3400, 4500]],
     ["c", "gate2Move", [5600, 6700]],
-    ["a", "gate2Wear", ["hat"]],
-    ["c", "gate2Wear", ["hat"]],
   ];
   const rebuildReceipts = [];
   for (const [label, name, args] of rebuildCalls) {
@@ -2144,11 +2138,12 @@ try {
       name: "gate2-b-restored.png",
     }),
   );
-  const qsgRenderTimingAfterRestart = {
-    b: await workers.b.call("renderTimings"),
+  const frameTimingAfterRestart = {
+    b: await workers.b.call("frameTimings"),
   };
 
   reportData = {
+    propStory: "not-requested",
     launches,
     ports: {
       inspectors: Object.fromEntries(
@@ -2233,9 +2228,9 @@ try {
       sendToReceiveLatency: speechDeliveryLatency,
     },
     renderProbe,
-    qsgRenderTiming: {
-      beforeRestart: qsgRenderTimingBeforeRestart,
-      afterRestart: qsgRenderTimingAfterRestart,
+    frameTiming: {
+      beforeRestart: frameTimingBeforeRestart,
+      afterRestart: frameTimingAfterRestart,
     },
     liveActions,
     actionSnapshots,

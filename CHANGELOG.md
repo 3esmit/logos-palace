@@ -61,7 +61,14 @@ after its first published release.
   size.
 - Strict compiled/public evidence bindings for runtime NARs, process
   executable mappings, command outcomes, claim completion, metrics, and ten
-  fully decoded screenshot files.
+  fully decoded Gate 4–6 screenshot files.
+- Administrator-authored room and prop images with opaque Basecamp file
+  selection, bounded chunked staging, durable moderation and draft
+  assignments, approval-gated Logos Storage publication, CID-to-content
+  binding, and one separately bound, fully decoded Gate 3 authoring
+  screenshot.
+- Qt Quick animation-frame interval evidence with an exact 120-frame window,
+  source-pinned timing semantics, and a separate framebuffer capture fence.
 
 ### Changed
 

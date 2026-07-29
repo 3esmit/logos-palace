@@ -38,6 +38,39 @@ for forbidden_override in \
   fi
 done
 
+asset_input_root="${PALACE_E2E_ASSET_INPUT_ROOT:-}"
+asset_manifest="${PALACE_E2E_ASSET_MANIFEST:-}"
+canonical_asset_root="$(
+  realpath -e -- "${asset_input_root}" 2>/dev/null || true
+)"
+canonical_asset_manifest="$(
+  realpath -e -- "${asset_manifest}" 2>/dev/null || true
+)"
+if [ -z "${asset_input_root}" ] \
+  || [ "${asset_input_root}" != "${canonical_asset_root}" ] \
+  || [ -L "${asset_input_root}" ] \
+  || [ ! -d "${canonical_asset_root}" ]; then
+  printf 'E2E asset input root must be a canonical directory\n' >&2
+  exit 1
+fi
+case "${canonical_asset_manifest}" in
+  "${canonical_asset_root}"/*)
+    ;;
+  *)
+    printf 'E2E asset manifest must be an input-root descendant\n' >&2
+    exit 1
+    ;;
+esac
+if [ "${asset_manifest}" != "${canonical_asset_manifest}" ] \
+  || [ -L "${asset_manifest}" ] \
+  || [ ! -f "${canonical_asset_manifest}" ] \
+  || [ "$(stat -c '%s' -- "${canonical_asset_manifest}")" -le 0 ] \
+  || [ "$(stat -c '%s' -- "${canonical_asset_manifest}")" \
+    -gt 1048576 ]; then
+  printf 'E2E asset manifest must be a bounded regular file\n' >&2
+  exit 1
+fi
+
 if [ -L "${runs_root}" ]; then
   printf 'MVP artifacts root must not be a symlink\n' >&2
   exit 1
@@ -1873,8 +1906,450 @@ gate_report_passes() {
           and .["disc-port"] >= 1024
           and .["disc-port"] <= 65535;
 
+      def valid_asset_invocation:
+        exact_object_keys(["receipt", "elapsedMs"])
+          and (.receipt | type) == "string"
+          and (.receipt | length) > 0
+          and (.receipt | length) <= 65536
+          and (.elapsedMs | valid_nonnegative_integer)
+          and .elapsedMs <= 180000;
+
+      def valid_asset_target:
+        (
+          exact_object_keys(["kind", "roomId"])
+          and .kind == "room-background"
+          and (.roomId == "atrium" or .roomId == "lounge")
+        )
+        or
+        (
+          exact_object_keys([
+            "kind",
+            "propId",
+            "anchorX",
+            "anchorY",
+            "layer"
+          ])
+          and .kind == "prop-image"
+          and (.propId | test("^[a-z][a-z0-9_-]{0,63}$"))
+          and (.anchorX | valid_nonnegative_integer)
+          and (.anchorY | valid_nonnegative_integer)
+          and (
+            .layer == "head"
+            or .layer == "body"
+            or .layer == "hand"
+            or .layer == "back"
+          )
+        );
+
+      def valid_authored_asset:
+        . as $asset
+        | (
+            keys | sort
+          ) == (
+            ([
+              "assetId",
+              "label",
+              "file",
+              "handle",
+              "width",
+              "height",
+              "byteLength",
+              "role",
+              "chunkBytes",
+              "chunkCount",
+              "begin",
+              "appends",
+              "commit",
+              "review",
+              "publication",
+              "cid"
+            ] + (
+              if has("target")
+              then ["target", "assignment"]
+              else []
+              end
+            )) | sort
+          )
+          and (.assetId | test("^[a-z][a-z0-9_-]{0,63}$"))
+          and .label == .assetId
+          and (.file | test("^[a-z0-9][a-z0-9._-]{0,127}\\.png$"))
+          and (.handle | valid_sha256)
+          and (.width | valid_nonnegative_integer)
+          and .width > 0
+          and (.height | valid_nonnegative_integer)
+          and .height > 0
+          and (.byteLength | valid_nonnegative_integer)
+          and .byteLength > 0
+          and .byteLength <= 10485760
+          and (.role == "room-background" or .role == "prop-image")
+          and (
+            (has("target") | not)
+            or (
+              (.target | valid_asset_target)
+              and .target.kind == .role
+            )
+          )
+          and .chunkBytes == 32768
+          and (.chunkCount | valid_nonnegative_integer)
+          and .chunkCount > 0
+          and (.begin | valid_asset_invocation)
+          and (
+            .begin.receipt
+            | test(
+                "^ok;session=[0-9a-f]{32};next=0;maxChunkBytes=32768;maxTotalBytes=10485760$"
+              )
+          )
+          and (.appends | type) == "array"
+          and (.appends | length) == .chunkCount
+          and (
+            [.appends[].byteLength] | add
+          ) == .byteLength
+          and all(
+            range(0; .chunkCount);
+            . as $index
+            | $asset.appends[$index] as $append
+            | (
+                $append
+                | exact_object_keys([
+                    "sequence",
+                    "byteLength",
+                    "receipt",
+                    "elapsedMs"
+                  ])
+              )
+              and $append.sequence == $index
+              and ($append.byteLength | valid_nonnegative_integer)
+              and $append.byteLength > 0
+              and $append.byteLength <= 32768
+              and (
+                {
+                  receipt: $append.receipt,
+                  elapsedMs: $append.elapsedMs
+                }
+                | valid_asset_invocation
+              )
+              and (
+                $append.receipt
+                | test(
+                    "^ok;session=[0-9a-f]{32};next=[0-9]+;bytes=[0-9]+$"
+                  )
+              )
+          )
+          and (.commit | valid_asset_invocation)
+          and .commit.receipt
+            == "ok;handle=\(.handle);width=\(.width);height=\(.height);bytes=\(.byteLength)"
+          and (.review | valid_asset_invocation)
+          and .review.receipt
+            == "ok;handle=\(.handle);review=approved"
+          and (
+            .publication
+            | exact_object_keys(["dispatched", "completed"])
+          )
+          and (.publication.dispatched | valid_asset_invocation)
+          and .publication.dispatched.receipt == "ok;asset=publishing"
+          and (.publication.completed | valid_asset_invocation)
+          and .publication.completed.receipt == "published;cid=\(.cid)"
+          and (
+            .cid
+            | test("^(b[a-z2-7]+|z[1-9A-HJ-NP-Za-km-z]+)$")
+          )
+          and (
+            if has("target")
+            then (
+              (.assignment | valid_asset_invocation)
+              and (
+                (
+                  .target.kind == "room-background"
+                  and .assignment.receipt
+                    == "ok;room=\(.target.roomId);handle=\(.handle)"
+                )
+                or
+                (
+                  .target.kind == "prop-image"
+                  and .assignment.receipt
+                    == "ok;propId=\(.target.propId);handle=\(.handle);anchorX=\(.target.anchorX);anchorY=\(.target.anchorY);layer=\(.target.layer)"
+                )
+              )
+            )
+            else true
+            end
+          );
+
+      def valid_asset_authoring_evidence:
+        . as $report
+        | $report.assetAuthoring as $authoring
+        | $report.assetAuthoringScreenshot as $screenshot
+        | (
+            $authoring
+            | exact_object_keys([
+              "version",
+              "phase",
+              "inputManifest",
+              "selectedAssetCount",
+              "propStory",
+              "boundary",
+              "guardedBeforeApproval",
+              "assets",
+              "graphBindings",
+              "activePropProjection",
+              "elapsedMs",
+              "catalogCount",
+              "assignments"
+            ])
+          )
+          and $authoring.version == 1
+          and $authoring.phase == "complete"
+          and (
+            $authoring.inputManifest
+            | exact_object_keys([
+                "schema",
+                "version",
+                "sha256",
+                "assetCount"
+              ])
+          )
+          and $authoring.inputManifest.schema
+            == "logos.palace.e2e-asset-inputs"
+          and $authoring.inputManifest.version == 1
+          and ($authoring.inputManifest.sha256 | valid_sha256)
+          and ($authoring.inputManifest.assetCount
+            | valid_nonnegative_integer)
+          and $authoring.inputManifest.assetCount >= 2
+          and $authoring.inputManifest.assetCount <= 128
+          and $authoring.selectedAssetCount
+            == $authoring.inputManifest.assetCount
+          and (
+            $authoring.propStory == "requested"
+            or $authoring.propStory == "not-requested"
+          )
+          and $authoring.boundary
+            == "operator-selected bounded PNG bytes -> verified handle -> approval -> digest-bound Storage CID -> manifest assignment"
+          and (
+            $authoring.guardedBeforeApproval
+            | valid_asset_invocation
+          )
+          and $authoring.guardedBeforeApproval.receipt
+            == "rejected=asset-not-approved"
+          and ($authoring.elapsedMs | valid_nonnegative_integer)
+          and $authoring.elapsedMs <= 1800000
+          and ($authoring.catalogCount | valid_nonnegative_integer)
+          and $authoring.catalogCount >= $authoring.selectedAssetCount
+          and ($authoring.assets | type) == "array"
+          and ($authoring.assets | length) == $authoring.selectedAssetCount
+          and all($authoring.assets[]; valid_authored_asset)
+          and (
+            $authoring.assets | map(.assetId) | unique | length
+          ) == $authoring.selectedAssetCount
+          and (
+            $authoring.assets | map(.handle) | unique | length
+          ) == $authoring.selectedAssetCount
+          and (
+            $authoring.assets | map(.cid) | unique | length
+          ) == $authoring.selectedAssetCount
+          and (
+            $authoring.assignments
+            | exact_object_keys(["rooms", "prop"])
+          )
+          and (
+            $authoring.assignments.rooms
+            | exact_object_keys(["atrium", "lounge"])
+          )
+          and ($authoring.assignments.rooms.atrium | valid_sha256)
+          and ($authoring.assignments.rooms.lounge | valid_sha256)
+          and all($authoring.assets[]; has("target"))
+          and (
+            $authoring.assets
+            | map(select(.target.kind? == "room-background"))
+            | length
+          ) >= 2
+          and (
+            reduce $authoring.assets[] as $asset (
+              {atrium: "", lounge: ""};
+              if $asset.target.kind == "room-background"
+              then .[$asset.target.roomId] = $asset.handle
+              else .
+              end
+            )
+          ) == $authoring.assignments.rooms
+          and (
+            if $authoring.propStory == "requested"
+            then (
+              (
+                $authoring.assignments.prop
+                | exact_object_keys([
+                    "propId",
+                    "handle",
+                    "anchorX",
+                    "anchorY",
+                    "layer"
+                  ])
+              )
+              and ($authoring.assignments.prop.handle | valid_sha256)
+              and (
+                $authoring.assets
+                | map(select(.target.kind? == "prop-image"))
+                | length
+              ) == 1
+              and (
+                $authoring.assets
+                | map(select(.target.kind == "prop-image"))
+                | .[0] as $prop
+                | (
+                    {
+                      propId: $prop.target.propId,
+                      handle: $prop.handle,
+                      anchorX: $prop.target.anchorX,
+                      anchorY: $prop.target.anchorY,
+                      layer: $prop.target.layer
+                    } == $authoring.assignments.prop
+                    and $authoring.activePropProjection == {
+                      version: 1,
+                      available: true,
+                      propId: $prop.target.propId,
+                      handle: $prop.handle,
+                      contentSha256: $prop.handle,
+                      width: $prop.width,
+                      height: $prop.height,
+                      anchorX: $prop.target.anchorX,
+                      anchorY: $prop.target.anchorY,
+                      layer: $prop.target.layer
+                    }
+                  )
+              )
+            )
+            else (
+              $authoring.assignments.prop == null
+              and (
+                $authoring.assets
+                | map(select(.target.kind? == "prop-image"))
+                | length
+              ) == 0
+              and $authoring.activePropProjection == {
+                version: 1,
+                available: false
+              }
+            )
+            end
+          )
+          and ($authoring.graphBindings | type) == "array"
+          and ($authoring.graphBindings | length)
+            == (if $authoring.propStory == "requested" then 3 else 2 end)
+          and (
+            $authoring.graphBindings
+            | map(.objectId) | sort
+          ) == (
+            [
+              "background-atrium",
+              "background-lounge"
+            ] + (
+              if $authoring.propStory == "requested"
+              then [
+                "prop-\($authoring.assignments.prop.propId)-image"
+              ]
+              else []
+              end
+            ) | sort
+          )
+          and all(
+            $authoring.graphBindings[];
+            . as $binding
+            | ($binding.contentSha256 | valid_sha256)
+              and any(
+                $authoring.assets[];
+                .assetId == $binding.assetId
+                  and .handle == $binding.contentSha256
+                  and .cid == $binding.cid
+              )
+              and any(
+                $report.publication.objects[];
+                .objectId == $binding.objectId
+                  and .cid == $binding.cid
+                  and .contentSha256 == $binding.contentSha256
+              )
+          )
+          and (
+            $screenshot
+            | exact_object_keys([
+              "file",
+              "artifactPath",
+              "width",
+              "height",
+              "byteLength",
+              "sha256",
+              "stage",
+              "state",
+              "label",
+              "renderEvidence"
+            ])
+          )
+          and $screenshot.file
+            == "gate3-admin-assets-published.png"
+          and $screenshot.artifactPath == $screenshot.file
+          and $screenshot.width == 1600
+          and $screenshot.height == 900
+          and ($screenshot.byteLength | valid_nonnegative_integer)
+          and $screenshot.byteLength >= 24
+          and $screenshot.byteLength <= 67108864
+          and ($screenshot.sha256 | valid_sha256)
+          and $screenshot.stage
+            == "gate3-admin-asset-authoring"
+          and $screenshot.state
+            == "admin-selected-assets-approved-published-assigned"
+          and $screenshot.label == "a"
+          and (
+            $screenshot.renderEvidence
+            | exact_object_keys([
+              "schema",
+              "version",
+              "open",
+              "cardCount",
+              "readyImageCount",
+              "publishedCount",
+              "atriumAssigned",
+              "loungeAssigned",
+              "propAssigned",
+              "fenceRequest",
+              "fenceState",
+              "fenceFrame",
+              "epoch"
+            ])
+          )
+          and $screenshot.renderEvidence.schema
+            == "logos.palace.asset-authoring-render"
+          and $screenshot.renderEvidence.version == 1
+          and $screenshot.renderEvidence.open == true
+          and $screenshot.renderEvidence.cardCount
+            >= $authoring.selectedAssetCount
+          and $screenshot.renderEvidence.readyImageCount
+            == $screenshot.renderEvidence.cardCount
+          and $screenshot.renderEvidence.publishedCount
+            >= $authoring.selectedAssetCount
+          and $screenshot.renderEvidence.atriumAssigned == true
+          and $screenshot.renderEvidence.loungeAssigned == true
+          and $screenshot.renderEvidence.propAssigned
+            == ($authoring.propStory == "requested")
+          and (
+            $screenshot.renderEvidence.fenceRequest
+            | valid_nonnegative_integer
+          )
+          and $screenshot.renderEvidence.fenceRequest > 0
+          and $screenshot.renderEvidence.fenceState == "complete"
+          and (
+            $screenshot.renderEvidence.fenceFrame
+            | valid_nonnegative_integer
+          )
+          and (
+            $screenshot.renderEvidence.epoch
+            | valid_nonnegative_integer
+          )
+          and $screenshot.renderEvidence.epoch
+            >= $authoring.selectedAssetCount;
+
       def valid_gate3_release_evidence:
-        (.releasePreflight | valid_release_preflight)
+        . as $report
+        | ($report.publication.objects | length) as $object_count
+        | (.releasePreflight | valid_release_preflight)
+          and valid_asset_authoring_evidence
           and (
             .identities
             | exact_object_keys(["a", "b", "c"])
@@ -1915,13 +2390,13 @@ gate_report_passes() {
             [.providerBFetch, .coldCFetch][];
             .mode == "network"
               and (.endToEndMs | valid_nonnegative_integer)
-              and (.verified | length) == 11
+              and (.verified | length) == $object_count
           )
           and all(
             [.providerBCachedFetch, .coldCCachedFetch][];
             .mode == "cache"
               and (.endToEndMs | valid_nonnegative_integer)
-              and (.verified | length) == 11
+              and (.verified | length) == $object_count
           );
 
       def expected_screenshots:
@@ -1929,7 +2404,7 @@ gate_report_passes() {
           {
             file: "gate4-a-three-user-atrium-converged.png",
             stage: "gate4-delivery-convergence",
-            state: "three-user-atrium-with-approved-prop",
+            state: "three-user-atrium-converged",
             label: "a"
           },
           {
@@ -1941,7 +2416,7 @@ gate_report_passes() {
           {
             file: "gate4-b-atrium-after-moderation.png",
             stage: "gate4-moderation",
-            state: "atrium-after-human-user-and-prop-bans",
+            state: "atrium-after-human-moderation",
             label: "b"
           },
           {
@@ -2021,6 +2496,9 @@ gate_report_passes() {
 
       def valid_gate4_behaviors:
         . as $gate4
+        | ($gate4.catalog.byId | length) as $object_count
+        | ($gate4.plan.propStory == "requested") as $prop_requested
+        | $gate4.plan.doorActionId as $door_action_id
         | .processModel.runtimeArtifacts as $process_artifacts
         | .processModel.loaderSelection as $loader_selection
         | $process_artifacts.wrapperExecution as $wrapper_execution
@@ -2035,7 +2513,7 @@ gate_report_passes() {
             .mode == "cache"
               and (.endToEndMs | valid_nonnegative_integer)
               and (.retentionMs | valid_nonnegative_integer)
-              and (.objects | length) == 11
+              and (.objects | length) == $object_count
           )
           and .storage.restart.status == "passed"
           and .storage.restart.retainedDataRoots == true
@@ -2043,25 +2521,28 @@ gate_report_passes() {
           and .storage.restart.clients.b.recovered.nativeSource
             == "network"
           and .storage.restart.clients.b.recovered.nativeAvailable == 0
-          and .storage.restart.clients.b.recovered.nativeTotal == 11
+          and .storage.restart.clients.b.recovered.nativeTotal
+            == $object_count
           and (
             .storage.restart.clients.b.recovered.endToEndMs
             | valid_nonnegative_integer
           )
           and (
             .storage.restart.clients.b.recovered.objects | length
-          ) == 11
+          ) == $object_count
           and .storage.restart.clients.c.recovered.mode == "cache"
           and .storage.restart.clients.c.recovered.nativeSource == "cache"
-          and .storage.restart.clients.c.recovered.nativeAvailable == 11
-          and .storage.restart.clients.c.recovered.nativeTotal == 11
+          and .storage.restart.clients.c.recovered.nativeAvailable
+            == $object_count
+          and .storage.restart.clients.c.recovered.nativeTotal
+            == $object_count
           and (
             .storage.restart.clients.c.recovered.endToEndMs
             | valid_nonnegative_integer
           )
           and (
             .storage.restart.clients.c.recovered.objects | length
-          ) == 11
+          ) == $object_count
           and .storage.restart.sourceBinding.sourceLabel == "c"
           and .storage.restart.sourceBinding.sourceAccountId
             == .identities.c.accountId
@@ -2071,10 +2552,13 @@ gate_report_passes() {
             .retainedCatalogVerifiedBeforeColdFetch == true
           and .storage.restart.sourceBinding
             .retainedCatalogVerifiedAfterColdFetch == true
-          and .storage.restart.sourceBinding.sourceNativeAvailable == 11
-          and .storage.restart.sourceBinding.sourceNativeTotal == 11
+          and .storage.restart.sourceBinding.sourceNativeAvailable
+            == $object_count
+          and .storage.restart.sourceBinding.sourceNativeTotal
+            == $object_count
           and .storage.restart.sourceBinding.coldClientNativeAvailable == 0
-          and .storage.restart.sourceBinding.coldClientNativeTotal == 11
+          and .storage.restart.sourceBinding.coldClientNativeTotal
+            == $object_count
           and .storage.restart.sourceBinding.creatorOffline == true
           and .storage.restart.sourceBinding.coldClientDataRootRemoved
             == true
@@ -2083,7 +2567,10 @@ gate_report_passes() {
           and .storage.restart.sourceBinding.onlineRetainedHolderLabels
             == ["c"]
           and .delivery.initialLifecycle.status == "passed"
-          and .delivery.initialLifecycle.approvedPropVisible == true
+          and .delivery.initialLifecycle.propStory
+            == $gate4.plan.propStory
+          and .delivery.initialLifecycle.approvedPropVisible
+            == $prop_requested
           and (.delivery.initialMesh.elapsedMs
             | valid_nonnegative_integer)
           and .delivery.restartMesh.entryLabel == "b"
@@ -2093,8 +2580,15 @@ gate_report_passes() {
           and .delivery.restartBehavior.creatorPidOffline == true
           and .delivery.restartBehavior.carolBanned.receipt
             == "rejected=delivery-publish;preflight=sender-banned"
-          and .delivery.restartBehavior.hatBanned.receipt
-            == "rejected=delivery-publish;preflight=invalid-or-banned-payload"
+          and .delivery.restartBehavior.propStory
+            == $gate4.plan.propStory
+          and (
+            if $prop_requested
+            then .delivery.restartBehavior.propBanned.receipt
+              == "rejected=delivery-publish;preflight=invalid-or-banned-payload"
+            else (.delivery.restartBehavior | has("propBanned") | not)
+            end
+          )
           and .moderation.unauthorized.status == "passed"
           and .moderation.unauthorized.caller == "c"
           and .moderation.unauthorized.callerAccountId
@@ -2106,17 +2600,32 @@ gate_report_passes() {
           and .moderation.userBan.finalizedCheckpoint == 8
           and .moderation.userBan.projectionMutation == false
           and .moderation.userBan.rejectionClass == "other"
-          and .moderation.assetBan.status == "passed"
-          and .moderation.assetBan.staleCheckpoint == 8
-          and .moderation.assetBan.finalizedCheckpoint == 9
-          and .moderation.assetBan.projectionMutation == false
-          and .moderation.assetBan.rejectionClass == "payload"
+          and (
+            if $prop_requested
+            then (
+              .moderation.assetBan.status == "passed"
+              and .moderation.assetBan.staleCheckpoint == 8
+              and .moderation.assetBan.finalizedCheckpoint == 9
+              and .moderation.assetBan.projectionMutation == false
+              and .moderation.assetBan.rejectionClass == "payload"
+              and .moderation.humanUi.propBanMethod == "gate4BanProp"
+            )
+            else (
+              .moderation.assetBan == {
+                status: "not-requested",
+                propStory: "not-requested"
+              }
+              and .moderation.humanUi.propStory == "not-requested"
+              and .moderation.humanUi.propBanMethod == null
+            )
+            end
+          )
           and .gate5.preview.status == "passed"
           and .gate5.preview.exactSameReceipt == true
           and .gate5.preview.exactSameStateRoot == true
           and .gate5.preview.navigationBeforeFinality == 0
-          and .gate5.preview.a.fields.action == "10"
-          and .gate5.preview.b.fields.action == "10"
+          and .gate5.preview.a.fields.action == $door_action_id
+          and .gate5.preview.b.fields.action == $door_action_id
           and .gate5.preview.a.fields.navigation == "0"
           and .gate5.preview.b.fields.navigation == "0"
           and .gate5.preview.a.fields.receipt_sha256
@@ -2132,7 +2641,8 @@ gate_report_passes() {
               and contains("navigation=1")
           )
           and .gate5.convergence.status == "passed"
-          and .gate5.convergence.checkpoint == 10
+          and .gate5.convergence.checkpoint
+            == ($door_action_id | tonumber)
           and (.gate5.convergence.sharedStateRoot | valid_sha256)
           and (.gate5.convergence.authorityProjectionDigest
             | valid_sha256)
@@ -2180,7 +2690,8 @@ gate_report_passes() {
               )
           )
           and .failureEvidence.delayedLezUpdate.status == "passed"
-          and .failureEvidence.delayedLezUpdate.actionId == "10"
+          and .failureEvidence.delayedLezUpdate.actionId
+            == $door_action_id
           and .failureEvidence.delayedLezUpdate.observationPaused == true
           and (
             .failureEvidence.delayedLezUpdate.pauseMs
@@ -2211,7 +2722,7 @@ gate_report_passes() {
           and (.uiEvidence.offline | type) == "array"
           and (.uiEvidence.offline | length) >= 1
           and (.actions | type) == "array"
-          and (.actions | length) == 11
+          and (.actions | length) == (.plan.actions | length)
           and all(
             .actions[];
             . as $action
@@ -3030,7 +3541,7 @@ gate_report_passes() {
           and ($gate4 | valid_screenshot_evidence)
           and ($gate4 | valid_gate4_behaviors);
 
-      def expected_actions:
+      def expected_actions($prop_requested):
         [
           {actionId: "0", caller: "a", kind: "initialize"},
           {actionId: "1", caller: "b", kind: "register_user"},
@@ -3040,34 +3551,47 @@ gate_report_passes() {
           {actionId: "5", caller: "b", kind: "set_room_locked"},
           {actionId: "6", caller: "b", kind: "set_room_locked"},
           {actionId: "7", caller: "b", kind: "update_shared_state"},
-          {actionId: "8", caller: "b", kind: "create_user_ban"},
-          {actionId: "9", caller: "b", kind: "create_asset_ban"},
-          {actionId: "10", caller: "b", kind: "update_shared_state"}
-        ];
+          {actionId: "8", caller: "b", kind: "create_user_ban"}
+        ] + (
+          if $prop_requested
+          then [
+            {actionId: "9", caller: "b", kind: "create_asset_ban"},
+            {actionId: "10", caller: "b", kind: "update_shared_state"}
+          ]
+          else [
+            {actionId: "9", caller: "b", kind: "update_shared_state"}
+          ]
+          end
+        );
 
       def valid_finalized_actions:
         . as $report
         | .plan.actions as $plan
         | .actions as $actions
+        | ($report.plan.propStory == "requested") as $prop_requested
+        | expected_actions($prop_requested) as $expected_actions
         | ($plan | type) == "array"
           and ($actions | type) == "array"
-          and ($plan | length) == 11
-          and ($actions | length) == 11
+          and ($plan | length) == ($expected_actions | length)
+          and ($actions | length) == ($expected_actions | length)
+          and $report.plan.doorActionId
+            == (if $prop_requested then "10" else "9" end)
           and (
             $plan | map({actionId, caller, kind})
-          ) == expected_actions
+          ) == $expected_actions
           and (
             $actions | map(.actionId)
-          ) == (expected_actions | map(.actionId))
+          ) == ($expected_actions | map(.actionId))
           and all($plan[]; .transitionSha256 | valid_sha256)
-          and ($actions | map(.transactionHash) | unique | length) == 11
+          and ($actions | map(.transactionHash) | unique | length)
+            == ($expected_actions | length)
           and all(
             $actions[];
             (.transactionHash | valid_sha256)
               and .transactionHash != ("0" * 64)
           )
           and (
-            [range(0; 11)]
+            [range(0; ($expected_actions | length))]
             | all(
                 .[];
                 . as $index
@@ -3109,17 +3633,11 @@ gate_report_passes() {
           );
 
       def valid_gate1_core:
-        .rooms.atriumBackground.handle
-          == "3bd13dc41f3e27a7eabf45c73188498b95e3e5e475e6fcb967308477afd522be"
-          and .rooms.loungeBackground.handle
-            == "d2068f9cc4848b29882e532580c2b455ef5d243e7b38f16d590937fbef720486"
+        .rooms.atriumBackground
+          == {state: "placeholder", source: ""}
+          and .rooms.loungeBackground
+            == {state: "placeholder", source: ""}
           and .rooms.restoredBackground == .rooms.loungeBackground
-          and .rooms.atriumBackground.source
-            == ("image://basecamp-verified/"
-              + .rooms.atriumBackground.handle)
-          and .rooms.loungeBackground.source
-            == ("image://basecamp-verified/"
-              + .rooms.loungeBackground.handle)
           and (.persistedProjection.checksum | valid_sha256)
           and (
             .persistedProjection.state
@@ -3759,7 +4277,7 @@ prior_run_complete() {
           )
           and all($packages[]; .sha256 | valid_sha256);
 
-      def expected_actions:
+      def expected_actions($prop_requested):
         [
           {actionId: "0", caller: "a", kind: "initialize"},
           {actionId: "1", caller: "b", kind: "register_user"},
@@ -3769,36 +4287,49 @@ prior_run_complete() {
           {actionId: "5", caller: "b", kind: "set_room_locked"},
           {actionId: "6", caller: "b", kind: "set_room_locked"},
           {actionId: "7", caller: "b", kind: "update_shared_state"},
-          {actionId: "8", caller: "b", kind: "create_user_ban"},
-          {actionId: "9", caller: "b", kind: "create_asset_ban"},
-          {actionId: "10", caller: "b", kind: "update_shared_state"}
-        ];
+          {actionId: "8", caller: "b", kind: "create_user_ban"}
+        ] + (
+          if $prop_requested
+          then [
+            {actionId: "9", caller: "b", kind: "create_asset_ban"},
+            {actionId: "10", caller: "b", kind: "update_shared_state"}
+          ]
+          else [
+            {actionId: "9", caller: "b", kind: "update_shared_state"}
+          ]
+          end
+        );
 
       def valid_finalized_actions:
         . as $report
         | .plan.actions as $plan
         | .actions as $actions
+        | ($report.plan.propStory == "requested") as $prop_requested
+        | expected_actions($prop_requested) as $expected_actions
         | ($plan | type) == "array"
           and ($actions | type) == "array"
-          and ($plan | length) == 11
-          and ($actions | length) == 11
+          and ($plan | length) == ($expected_actions | length)
+          and ($actions | length) == ($expected_actions | length)
+          and $report.plan.doorActionId
+            == (if $prop_requested then "10" else "9" end)
           and (
             ($plan | map({actionId, caller, kind}))
-            == expected_actions
+            == $expected_actions
           )
           and (
             ($actions | map(.actionId))
-            == (expected_actions | map(.actionId))
+            == ($expected_actions | map(.actionId))
           )
           and all($plan[]; .transitionSha256 | valid_sha256)
-          and ($actions | map(.transactionHash) | unique | length) == 11
+          and ($actions | map(.transactionHash) | unique | length)
+            == ($expected_actions | length)
           and all(
             $actions[];
             (.transactionHash | valid_sha256)
               and .transactionHash != ("0" * 64)
           )
           and (
-            [range(0; 11)]
+            [range(0; ($expected_actions | length))]
             | all(
                 .[];
                 . as $index
@@ -4437,6 +4968,8 @@ run_or_skip_gate "gate3" "${gate3_report}" \
   "PALACE_GATE3_PRODUCT_SNAPSHOT=${product_snapshot}" \
   "PALACE_GATE3_STATE_DIR=${shared_state}" \
   "PALACE_GATE3_PRODUCTION_IDENTITIES=1" \
+  "PALACE_E2E_ASSET_INPUT_ROOT=${canonical_asset_root}" \
+  "PALACE_E2E_ASSET_MANIFEST=${canonical_asset_manifest}" \
   "${acceptance_tools}/bin/bash" \
   -p \
   "${product_snapshot}/scripts/run-basecamp-gate3.sh" \
@@ -4519,7 +5052,7 @@ if ! validation="$(
               and (.sha256 | valid_sha256)
           );
 
-      def expected_actions:
+      def expected_actions($prop_requested):
         [
           {actionId: "0", caller: "a", kind: "initialize"},
           {actionId: "1", caller: "b", kind: "register_user"},
@@ -4529,36 +5062,49 @@ if ! validation="$(
           {actionId: "5", caller: "b", kind: "set_room_locked"},
           {actionId: "6", caller: "b", kind: "set_room_locked"},
           {actionId: "7", caller: "b", kind: "update_shared_state"},
-          {actionId: "8", caller: "b", kind: "create_user_ban"},
-          {actionId: "9", caller: "b", kind: "create_asset_ban"},
-          {actionId: "10", caller: "b", kind: "update_shared_state"}
-        ];
+          {actionId: "8", caller: "b", kind: "create_user_ban"}
+        ] + (
+          if $prop_requested
+          then [
+            {actionId: "9", caller: "b", kind: "create_asset_ban"},
+            {actionId: "10", caller: "b", kind: "update_shared_state"}
+          ]
+          else [
+            {actionId: "9", caller: "b", kind: "update_shared_state"}
+          ]
+          end
+        );
 
       def valid_finalized_actions:
         . as $report
         | .plan.actions as $plan
         | .actions as $actions
+        | ($report.plan.propStory == "requested") as $prop_requested
+        | expected_actions($prop_requested) as $expected_actions
         | ($plan | type) == "array"
           and ($actions | type) == "array"
-          and ($plan | length) == 11
-          and ($actions | length) == 11
+          and ($plan | length) == ($expected_actions | length)
+          and ($actions | length) == ($expected_actions | length)
+          and $report.plan.doorActionId
+            == (if $prop_requested then "10" else "9" end)
           and (
             ($plan | map({actionId, caller, kind}))
-            == expected_actions
+            == $expected_actions
           )
           and (
             ($actions | map(.actionId))
-            == (expected_actions | map(.actionId))
+            == ($expected_actions | map(.actionId))
           )
           and all($plan[]; .transitionSha256 | valid_sha256)
-          and ($actions | map(.transactionHash) | unique | length) == 11
+          and ($actions | map(.transactionHash) | unique | length)
+            == ($expected_actions | length)
           and all(
             $actions[];
             (.transactionHash | valid_sha256)
               and .transactionHash != ("0" * 64)
           )
           and (
-            [range(0; 11)]
+            [range(0; ($expected_actions | length))]
             | all(
                 .[];
                 . as $index

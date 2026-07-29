@@ -12,6 +12,10 @@ import {
   signalDirectChild,
   waitForDirectChildExit,
 } from "./basecamp_direct_child.mjs";
+import {
+  capturePalaceFrameTiming,
+  palaceFrameTimingContract,
+} from "./basecamp_frame_timing.mjs";
 
 const [
   basecampArgument,
@@ -37,19 +41,12 @@ if (!qtMcpRoot) {
 if (!process.env.QML_INSPECTOR_PORT) {
   throw new Error("QML_INSPECTOR_PORT must be set before importing framework");
 }
-
-const renderTimingContract = {
-  basecampRevision: "205405858676849f69a02e55385ae18ce6d7df5a",
-  qtVersion: "6.9.2",
-  renderLoop: "software",
-  clock: "Qt Quick QSG_RENDER_TIMING integer milliseconds",
-  messagePattern: "%{category}: %{message}",
-  lineFormat:
-    "qt.scenegraph.time.renderloop: Frame rendered with 'software' renderloop in <total>ms, polish=<polish>, sync=<sync>, render=<render>, swap=<swap>, frameDelta=<frameDelta>",
-};
-if (process.env.PALACE_BASECAMP_REV !== renderTimingContract.basecampRevision) {
+if (
+  process.env.PALACE_BASECAMP_REV
+  !== palaceFrameTimingContract.basecampRevision
+) {
   throw new Error(
-    "QSG render timing parser requires review for the pinned Basecamp revision",
+    "frame timing contract requires review for the pinned Basecamp revision",
   );
 }
 
@@ -77,71 +74,6 @@ function childStdioWithoutReleaseLock(baseStdio) {
   return baseStdio;
 }
 
-function nearestRank(values, percentile) {
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.ceil(percentile * sorted.length) - 1];
-}
-
-function qsgRenderTimingEvidence(stderrChunks) {
-  const encoded = Buffer.concat(stderrChunks).toString("utf8");
-  const lines = encoded.split(/\r?\n/);
-  const candidateLines = lines.filter((line) =>
-    line.includes("Frame rendered with"));
-  const pattern =
-    /^qt\.scenegraph\.time\.renderloop: Frame rendered with 'software' renderloop in ([0-9]+)ms, polish=([0-9]+), sync=([0-9]+), render=([0-9]+), swap=([0-9]+), frameDelta=(-?[0-9]+)$/;
-  const samples = candidateLines.map((line) => {
-    const match = line.match(pattern);
-    if (!match) {
-      throw new Error(`unrecognized pinned QSG render timing line: ${line}`);
-    }
-    const values = match.slice(1).map(Number);
-    if (
-      values.some((value) => !Number.isSafeInteger(value))
-      || values.slice(0, 5).some((value) => value < 0)
-    ) {
-      throw new Error(`invalid pinned QSG render timing line: ${line}`);
-    }
-    return {
-      totalMs: values[0],
-      polishMs: values[1],
-      syncMs: values[2],
-      renderMs: values[3],
-      swapMs: values[4],
-      frameDeltaMs: values[5],
-    };
-  });
-  if (samples.length === 0) {
-    throw new Error("pinned QSG render timing emitted no complete samples");
-  }
-  const fields = [
-    "totalMs",
-    "polishMs",
-    "syncMs",
-    "renderMs",
-    "swapMs",
-    "frameDeltaMs",
-  ];
-  return {
-    parser: renderTimingContract,
-    sampleCount: samples.length,
-    percentileMethod:
-      "nearest-rank: sorted[Math.ceil(percentile * sampleCount) - 1]",
-    summaries: Object.fromEntries(
-      fields.map((field) => {
-        const values = samples.map((sample) => sample[field]);
-        return [
-          field,
-          {
-            p50: nearestRank(values, 0.50),
-            p95: nearestRank(values, 0.95),
-            max: Math.max(...values),
-          },
-        ];
-      }),
-    ),
-  };
-}
-
 function propertyMap(response) {
   if (response.error) {
     throw new Error(`getProperties failed: ${response.error}`);
@@ -167,10 +99,7 @@ function launchBasecamp() {
     {
       env: {
         ...process.env,
-        QT_FORCE_STDERR_LOGGING: "1",
-        QT_MESSAGE_PATTERN: renderTimingContract.messagePattern,
         QT_QPA_PLATFORM: "offscreen",
-        QSG_RENDER_TIMING: "1",
       },
       detached: true,
       stdio: childStdioWithoutReleaseLock(["ignore", "pipe", "pipe"]),
@@ -379,6 +308,124 @@ async function saveScreenshot(name) {
   };
 }
 
+function parseAssetAuthoringEvidence(encoded) {
+  let evidence;
+  try {
+    evidence = JSON.parse(String(encoded));
+  } catch {
+    throw new Error("asset authoring evidence is not JSON");
+  }
+  const keys = [
+    "schema",
+    "version",
+    "open",
+    "cardCount",
+    "readyImageCount",
+    "publishedCount",
+    "atriumAssigned",
+    "loungeAssigned",
+    "propAssigned",
+    "fenceRequest",
+    "fenceState",
+    "fenceFrame",
+    "epoch",
+  ];
+  if (
+    !evidence
+    || typeof evidence !== "object"
+    || Array.isArray(evidence)
+    || Object.keys(evidence).sort().join(",") !== keys.sort().join(",")
+    || evidence.schema !== "logos.palace.asset-authoring-render"
+    || evidence.version !== 1
+    || typeof evidence.open !== "boolean"
+    || !Number.isSafeInteger(evidence.cardCount)
+    || !Number.isSafeInteger(evidence.readyImageCount)
+    || !Number.isSafeInteger(evidence.publishedCount)
+    || typeof evidence.atriumAssigned !== "boolean"
+    || typeof evidence.loungeAssigned !== "boolean"
+    || typeof evidence.propAssigned !== "boolean"
+    || !Number.isSafeInteger(evidence.fenceRequest)
+    || !["idle", "waiting", "complete"].includes(evidence.fenceState)
+    || !Number.isSafeInteger(evidence.fenceFrame)
+    || !Number.isSafeInteger(evidence.epoch)
+  ) {
+    throw new Error("asset authoring evidence is invalid");
+  }
+  return evidence;
+}
+
+async function setAssetAuthoring(
+  open,
+  expectedCount = 1,
+  expectedProp = false,
+) {
+  if (
+    !Number.isSafeInteger(expectedCount)
+    || expectedCount < 1
+    || expectedCount > 1024
+  ) {
+    throw new Error("asset authoring expected count is invalid");
+  }
+  await evaluate(`backgroundModerationOpen = ${open ? "true" : "false"}`);
+  if (!open) {
+    return parseAssetAuthoringEvidence(
+      (await rootProperties()).gate3AssetAuthoringEvidence,
+    );
+  }
+
+  const readyDeadline = Date.now() + 30_000;
+  let evidence;
+  while (Date.now() < readyDeadline) {
+    evidence = parseAssetAuthoringEvidence(
+      (await rootProperties()).gate3AssetAuthoringEvidence,
+    );
+    if (
+      evidence.open
+      && evidence.cardCount >= expectedCount
+      && evidence.readyImageCount === evidence.cardCount
+      && evidence.publishedCount >= expectedCount
+      && evidence.atriumAssigned
+      && evidence.loungeAssigned
+      && evidence.propAssigned === expectedProp
+    ) {
+      break;
+    }
+    await sleep(50);
+  }
+  if (
+    !evidence?.open
+    || evidence.cardCount < expectedCount
+    || evidence.readyImageCount !== evidence.cardCount
+    || evidence.publishedCount < expectedCount
+    || !evidence.atriumAssigned
+    || !evidence.loungeAssigned
+    || evidence.propAssigned !== expectedProp
+  ) {
+    throw new Error("asset authoring previews did not become ready");
+  }
+
+  const started = await evaluate("gate3AssetScreenshotFenceStart()");
+  const request = Number(started.result);
+  if (!Number.isSafeInteger(request) || request <= 0) {
+    throw new Error("asset authoring frame fence did not start");
+  }
+  const fenceDeadline = Date.now() + 5_000;
+  while (Date.now() < fenceDeadline) {
+    evidence = parseAssetAuthoringEvidence(
+      (await rootProperties()).gate3AssetAuthoringEvidence,
+    );
+    if (
+      evidence.fenceRequest === request
+      && evidence.fenceState === "complete"
+      && evidence.fenceFrame >= 0
+    ) {
+      return evidence;
+    }
+    await sleep(20);
+  }
+  throw new Error("asset authoring frame fence timed out");
+}
+
 const allowedFunctions = new Set([
   "gate1EnterRoom",
   "gate2Start",
@@ -392,6 +439,15 @@ const allowedFunctions = new Set([
   "gate3AssetStatus",
   "gate3PublishPng",
   "gate3PublicationStatus",
+  "beginAssetStage",
+  "appendAssetStageChunk",
+  "commitAssetStage",
+  "cancelAssetStage",
+  "reviewAsset",
+  "publishAsset",
+  "assignRoomBackground",
+  "assignPropAsset",
+  "refreshAssetAuthoring",
   "gate3PublishBundle",
   "gate3BundleStatus",
   "gate3FetchBundle",
@@ -505,9 +561,20 @@ async function dispatch(command, params) {
     return invoke(params);
   case "screenshot":
     return saveScreenshot(params?.name);
-  case "renderTimings":
+  case "frameTimings":
     if (!processState) throw new Error("worker is not initialized");
-    return qsgRenderTimingEvidence(processState.stderrChunks);
+    return capturePalaceFrameTiming({
+      evaluate,
+      rootProperties,
+      sleep,
+    });
+  case "assetAuthoring":
+    if (!processState) throw new Error("worker is not initialized");
+    return setAssetAuthoring(
+      params?.open === true,
+      Number(params?.expectedCount ?? 1),
+      params?.expectedProp === true,
+    );
   case "shutdown":
     shuttingDown = true;
     await stopBasecamp();

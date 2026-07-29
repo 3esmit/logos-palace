@@ -63,10 +63,14 @@ logos_module(
         src/palace_storage_catalog_session.cpp
         src/palace_storage_mvp.h
         src/palace_storage_mvp.cpp
+        src/palace_storage_mvp_catalog_store.h
+        src/palace_storage_mvp_catalog_store.cpp
         src/palace_verified_asset_store.h
         src/palace_verified_asset_store.cpp
-        src/palace_room_backgrounds.h
-        src/palace_room_backgrounds.cpp
+        src/palace_asset_authoring.h
+        src/palace_asset_authoring.cpp
+        src/palace_asset_authoring_store.h
+        src/palace_asset_authoring_store.cpp
         src/palace_identity.h
         src/palace_identity.cpp
         src/palace_delivery_identity_store.h

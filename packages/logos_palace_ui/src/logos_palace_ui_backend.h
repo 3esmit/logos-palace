@@ -36,6 +36,27 @@ public:
     QString assetStatus(QString derivativeCid) override;
     QString publishVerifiedPng(QString handle) override;
     QString publicationStatus(QString handle) override;
+    QString beginAssetStage(QString label) override;
+    QString appendAssetStageChunk(
+        QString sessionId,
+        qint64 sequence,
+        QString base64Chunk) override;
+    QString commitAssetStage(QString sessionId) override;
+    QString cancelAssetStage(QString sessionId) override;
+    QString reviewAsset(
+        QString handle,
+        QString decision) override;
+    QString publishAsset(QString handle) override;
+    QString assignRoomBackground(
+        QString roomId,
+        QString handle) override;
+    QString assignPropAsset(
+        QString propId,
+        QString handle,
+        qint64 anchorX,
+        qint64 anchorY,
+        QString layer) override;
+    QString refreshAssetAuthoring() override;
     QString publishMvpStorageBundle() override;
     QString mvpStorageBundleStatus() override;
     QString fetchMvpStorageBundle(QString catalogBase64) override;
