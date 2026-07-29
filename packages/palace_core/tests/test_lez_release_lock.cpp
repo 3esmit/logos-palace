@@ -29,6 +29,9 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
     LOGOS_ASSERT_TRUE(palace::PalaceLezReleaseLock::acceptsLiveModule(
         "lez_core", "0.4.0-alpha.2",
         "https://testnet.lez.logos.co"));
+    LOGOS_ASSERT_TRUE(palace::PalaceLezReleaseLock::acceptsLiveModule(
+        "lez_core", "0.4.0-alpha.2",
+        "https://testnet.lez.logos.co/"));
 }
 
 LOGOS_TEST(lez_release_lock_rejects_any_live_surface_drift)
@@ -42,6 +45,9 @@ LOGOS_TEST(lez_release_lock_rejects_any_live_surface_drift)
     LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
         "lez_core", "0.4.0-alpha.2",
         "https://other.example"));
+    LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
+        "lez_core", "0.4.0-alpha.2",
+        "https://testnet.lez.logos.co/other"));
     LOGOS_ASSERT_TRUE(
         palace::PalaceLezReleaseLock::walletConfigJson().find(
             palace::PalaceLezReleaseLock::expectedSequencerOrigin())

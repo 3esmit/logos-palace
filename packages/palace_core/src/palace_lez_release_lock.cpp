@@ -61,9 +61,15 @@ bool PalaceLezReleaseLock::acceptsLiveModule(
     const std::string& moduleVersion,
     const std::string& sequencerOrigin)
 {
+    const std::string& expectedOrigin = expectedSequencerOrigin();
+    // The LEZ wallet reports an origin and may retain the URI root slash.
+    // Treat only that spelling as equivalent; paths, ports, schemes, and
+    // hosts remain exact release-lock inputs.
+    const bool originMatches = sequencerOrigin == expectedOrigin
+        || sequencerOrigin == expectedOrigin + "/";
     return moduleName == expectedModuleName()
         && moduleVersion == network().moduleApiVersion
-        && sequencerOrigin == expectedSequencerOrigin();
+        && originMatches;
 }
 
 } // namespace palace
