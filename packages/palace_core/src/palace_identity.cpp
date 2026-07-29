@@ -1,10 +1,12 @@
 #include "palace_identity.h"
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 
 #include <array>
 #include <cctype>
 #include <memory>
+#include <utility>
 
 namespace palace {
 namespace {
@@ -19,6 +21,14 @@ struct PkeyContextDeleter {
 
 struct MdContextDeleter {
     void operator()(EVP_MD_CTX* value) const { EVP_MD_CTX_free(value); }
+};
+
+struct PrivateKeyBuffer {
+    std::array<unsigned char, 32> bytes{};
+    ~PrivateKeyBuffer()
+    {
+        OPENSSL_cleanse(bytes.data(), bytes.size());
+    }
 };
 
 std::string encodeHex(const unsigned char* bytes, std::size_t length)
@@ -69,6 +79,38 @@ std::unique_ptr<EVP_PKEY, PkeyDeleter> publicPkey(const std::array<unsigned char
 
 } // namespace
 
+Ed25519KeyPair::~Ed25519KeyPair()
+{
+    OPENSSL_cleanse(m_privateKey.data(), m_privateKey.size());
+    OPENSSL_cleanse(m_publicKey.data(), m_publicKey.size());
+    m_valid = false;
+}
+
+Ed25519KeyPair::Ed25519KeyPair(Ed25519KeyPair&& other) noexcept
+    : m_publicKey(other.m_publicKey)
+    , m_privateKey(other.m_privateKey)
+    , m_valid(other.m_valid)
+{
+    OPENSSL_cleanse(other.m_privateKey.data(), other.m_privateKey.size());
+    OPENSSL_cleanse(other.m_publicKey.data(), other.m_publicKey.size());
+    other.m_valid = false;
+}
+
+Ed25519KeyPair& Ed25519KeyPair::operator=(Ed25519KeyPair&& other) noexcept
+{
+    if (this == &other)
+        return *this;
+    OPENSSL_cleanse(m_privateKey.data(), m_privateKey.size());
+    OPENSSL_cleanse(m_publicKey.data(), m_publicKey.size());
+    m_publicKey = other.m_publicKey;
+    m_privateKey = other.m_privateKey;
+    m_valid = other.m_valid;
+    OPENSSL_cleanse(other.m_privateKey.data(), other.m_privateKey.size());
+    OPENSSL_cleanse(other.m_publicKey.data(), other.m_publicKey.size());
+    other.m_valid = false;
+    return *this;
+}
+
 bool Ed25519KeyPair::generate(Ed25519KeyPair& keyPair)
 {
     std::unique_ptr<EVP_PKEY_CTX, PkeyContextDeleter> context(EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr));
@@ -80,14 +122,47 @@ bool Ed25519KeyPair::generate(Ed25519KeyPair& keyPair)
         return false;
     std::unique_ptr<EVP_PKEY, PkeyDeleter> generated(rawKey);
 
-    std::size_t publicLength = keyPair.m_publicKey.size();
-    std::size_t privateLength = keyPair.m_privateKey.size();
-    if (EVP_PKEY_get_raw_public_key(generated.get(), keyPair.m_publicKey.data(), &publicLength) != 1
-        || EVP_PKEY_get_raw_private_key(generated.get(), keyPair.m_privateKey.data(), &privateLength) != 1
-        || publicLength != keyPair.m_publicKey.size() || privateLength != keyPair.m_privateKey.size()) {
+    Ed25519KeyPair candidate;
+    std::size_t publicLength = candidate.m_publicKey.size();
+    std::size_t privateLength = candidate.m_privateKey.size();
+    if (EVP_PKEY_get_raw_public_key(
+            generated.get(), candidate.m_publicKey.data(), &publicLength) != 1
+        || EVP_PKEY_get_raw_private_key(
+            generated.get(), candidate.m_privateKey.data(), &privateLength) != 1
+        || publicLength != candidate.m_publicKey.size()
+        || privateLength != candidate.m_privateKey.size()) {
         return false;
     }
-    keyPair.m_valid = true;
+    candidate.m_valid = true;
+    keyPair = std::move(candidate);
+    return true;
+}
+
+bool Ed25519KeyPair::fromPrivateKeyHex(const std::string& privateKeyHex,
+                                      Ed25519KeyPair& keyPair)
+{
+    PrivateKeyBuffer privateKey;
+    if (!decodeHex(
+            privateKeyHex, privateKey.bytes.data(), privateKey.bytes.size()))
+        return false;
+
+    const std::unique_ptr<EVP_PKEY, PkeyDeleter> restored(
+        EVP_PKEY_new_raw_private_key(
+            EVP_PKEY_ED25519, nullptr,
+            privateKey.bytes.data(), privateKey.bytes.size()));
+    if (!restored)
+        return false;
+
+    Ed25519KeyPair candidate;
+    std::size_t publicLength = candidate.m_publicKey.size();
+    if (EVP_PKEY_get_raw_public_key(
+            restored.get(), candidate.m_publicKey.data(), &publicLength) != 1
+        || publicLength != candidate.m_publicKey.size()) {
+        return false;
+    }
+    candidate.m_privateKey = privateKey.bytes;
+    candidate.m_valid = true;
+    keyPair = std::move(candidate);
     return true;
 }
 

@@ -93,6 +93,7 @@ StorageAssetQueue::begin(const AssetRefV1 &reference,
   PendingStorageAsset pending;
   pending.operationId = "palace-asset-" + std::to_string(m_nextOperation++);
   pending.reference = reference;
+  pending.networkCid = reference.sourceCid;
   pending.destinationPath =
       destinationDirectory + "/" + pending.operationId + ".png";
   m_pending.emplace(pending.operationId, pending);

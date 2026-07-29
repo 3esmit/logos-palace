@@ -201,4 +201,15 @@ bool ProjectionStore::load(PalaceProjection& projection) const
     return parseRecord(record, state) && projection.restoreCanonicalLocalState(state);
 }
 
+bool ProjectionStore::enterRoomDurably(
+    PalaceProjection& projection,
+    const std::string& roomId) const
+{
+    PalaceProjection candidate = projection;
+    if (!candidate.enterRoom(roomId) || !save(candidate))
+        return false;
+    projection = std::move(candidate);
+    return true;
+}
+
 } // namespace palace

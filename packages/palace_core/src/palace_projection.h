@@ -42,6 +42,8 @@ public:
 
     bool save(const PalaceProjection& projection) const;
     bool load(PalaceProjection& projection) const;
+    bool enterRoomDurably(PalaceProjection& projection,
+                          const std::string& roomId) const;
 
 private:
     std::string m_directory;

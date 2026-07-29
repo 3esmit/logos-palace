@@ -12,6 +12,12 @@ import {
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  claimBoundProcesses,
+  discoverOwnedBasecampProcesses,
+  ownedProcessGroupMembers,
+  requireOwnedProcessGroup,
+} from "./basecamp_owned_processes.mjs";
 
 const [basecampArgument, userDirArgument, artifactsArgument, lgxDirArgument] =
   process.argv.slice(2);
@@ -44,6 +50,19 @@ const { App, Inspector } = await import(frameworkUrl);
 
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+
+function childStdioWithInheritedMvpLock(baseStdio) {
+  const encoded = process.env.PALACE_MVP_LOCK_FD;
+  if (encoded === undefined) return baseStdio;
+  if (!/^(?:[3-9]|[1-9][0-9]{1,2})$/.test(encoded)) {
+    throw new Error("PALACE_MVP_LOCK_FD is invalid");
+  }
+  const lockFd = Number(encoded);
+  const stdio = [...baseStdio];
+  while (stdio.length <= lockFd) stdio.push("ignore");
+  stdio[lockFd] = lockFd;
+  return stdio;
+}
 
 const expectedBackgroundHandles = {
   Atrium: "3bd13dc41f3e27a7eabf45c73188498b95e3e5e475e6fcb967308477afd522be",
@@ -84,20 +103,18 @@ function launchBasecamp(label) {
         QT_QPA_PLATFORM: "offscreen",
       },
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: childStdioWithInheritedMvpLock(["ignore", "pipe", "pipe"]),
     },
   );
   const stdoutChunks = [];
   const stderrChunks = [];
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
-  const exited = new Promise((resolveExit) => {
-    child.once("exit", (code, signal) => resolveExit({ code, signal }));
-  });
-
-  return {
+  const state = {
     child,
-    exited,
+    exited: undefined,
+    spawnFailure: undefined,
+    stopPromise: undefined,
     async saveLogs() {
       await writeFile(
         join(artifactsDir, `${label}.stdout.log`),
@@ -109,6 +126,16 @@ function launchBasecamp(label) {
       );
     },
   };
+  const exited = new Promise((resolveExit) => {
+    child.once("error", (error) => {
+      state.spawnFailure =
+        error instanceof Error ? error : new Error(String(error));
+      resolveExit({ code: null, signal: null, error: state.spawnFailure });
+    });
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  state.exited = exited;
+  return state;
 }
 
 function signalProcessGroup(child, signal) {
@@ -119,24 +146,171 @@ function signalProcessGroup(child, signal) {
   }
 }
 
-async function stopBasecamp(processState) {
-  if (processState.child.exitCode === null) {
-    signalProcessGroup(processState.child, "SIGTERM");
-    const cleanExit = await Promise.race([
-      processState.exited.then(() => true),
-      sleep(10_000).then(() => false),
-    ]);
-    if (!cleanExit) {
-      signalProcessGroup(processState.child, "SIGKILL");
-      await processState.exited;
+function processExists(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function processGroupExists(processGroupId) {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
+    return false;
+  }
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function terminateKnownBasecamp(pid) {
+  if (!processExists(pid)) return;
+  let argv;
+  try {
+    argv = (await readFile(`/proc/${pid}/cmdline`))
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  const userDirIndex = argv.indexOf("--user-dir");
+  if (
+    resolve(argv[0] ?? "") !== basecamp
+    || userDirIndex < 0
+    || !argv[userDirIndex + 1]
+    || resolve(argv[userDirIndex + 1]) !== userDir
+  ) {
+    throw new Error(`refusing to signal unexpected reused PID ${pid}`);
+  }
+  signalProcessGroup({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGTERM");
+  for (let attempt = 0; attempt < 50 && processExists(pid); attempt += 1) {
+    await sleep(100);
+  }
+  if (processExists(pid)) {
+    signalProcessGroup({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGKILL");
+    for (
+      let attempt = 0;
+      attempt < 50 && processExists(pid);
+      attempt += 1
+    ) {
+      await sleep(100);
     }
   }
-  await processState.saveLogs();
+  if (processExists(pid)) {
+    throw new Error(`Basecamp process ${pid} survived cleanup`);
+  }
+}
+
+async function terminateOwnedProcessGroup(processGroupId) {
+  if (!processGroupExists(processGroupId)) return;
+  const members = await ownedProcessGroupMembers({
+    processGroupId,
+    claimPath: process.env.PALACE_MVP_CLAIM_PATH,
+  });
+  if (members.length === 0 && !processGroupExists(processGroupId)) return;
+  requireOwnedProcessGroup(members, processGroupId);
+  try {
+    process.kill(-processGroupId, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+  for (
+    let attempt = 0;
+    attempt < 50 && processGroupExists(processGroupId);
+    attempt += 1
+  ) {
+    await sleep(100);
+  }
+  if (processGroupExists(processGroupId)) {
+    throw new Error(`process group ${processGroupId} survived SIGKILL`);
+  }
+}
+
+function claimWorkload(candidates) {
+  const byPid = new Map(candidates.map((entry) => [entry.pid, entry]));
+  const excluded = new Set([process.pid]);
+  let ancestor = process.ppid;
+  while (Number.isSafeInteger(ancestor) && ancestor > 0) {
+    excluded.add(ancestor);
+    ancestor = byPid.get(ancestor)?.parentPid ?? 0;
+  }
+  return candidates.filter(({ pid }) => !excluded.has(pid));
+}
+
+async function cleanupClaimBoundProcesses() {
+  const claimPath = process.env.PALACE_MVP_CLAIM_PATH;
+  const candidates = await claimBoundProcesses({ claimPath });
+  const current = candidates.find(({ pid }) => pid === process.pid);
+  const workload = claimWorkload(candidates);
+  if (
+    current
+    && workload.some(
+      ({ processGroupId }) =>
+        processGroupId === current.processGroupId,
+    )
+  ) {
+    throw new Error("run-owned child remained in Gate 1 process group");
+  }
+  for (const processGroupId of new Set(
+    workload.map(({ processGroupId }) => processGroupId),
+  )) {
+    await terminateOwnedProcessGroup(processGroupId);
+  }
+  if (
+    claimWorkload(await claimBoundProcesses({ claimPath })).length > 0
+  ) {
+    throw new Error("run-owned processes survived Gate 1 cleanup");
+  }
+}
+
+async function stopBasecamp(processState) {
+  processState.stopPromise ??= (async () => {
+    if (processState.child.exitCode === null && !processState.spawnFailure) {
+      signalProcessGroup(processState.child, "SIGTERM");
+      const cleanExit = await Promise.race([
+        processState.exited.then(() => true),
+        sleep(10_000).then(() => false),
+      ]);
+      if (!cleanExit) {
+        signalProcessGroup(processState.child, "SIGKILL");
+        await processState.exited;
+      }
+    }
+    await processState.saveLogs();
+    await terminateKnownBasecamp(processState.child.pid);
+    await terminateOwnedProcessGroup(processState.child.pid);
+    const sessionProcesses = claimWorkload(
+      await claimBoundProcesses({
+        claimPath: process.env.PALACE_MVP_CLAIM_PATH,
+      }),
+    ).filter(({ sessionId }) => sessionId === processState.child.pid);
+    for (const processGroupId of new Set(
+      sessionProcesses.map(({ processGroupId }) => processGroupId),
+    )) {
+      await terminateOwnedProcessGroup(processGroupId);
+    }
+    const discovered = await discoverOwnedBasecampProcesses({
+      basecamp,
+      userDirs: new Set([userDir]),
+    });
+    if (discovered.length > 0) {
+      throw new Error("Gate 1 retained owned Basecamp after cleanup");
+    }
+  })();
+  return processState.stopPromise;
 }
 
 async function connectInspector(processState) {
   let lastError = new Error("inspector did not start");
   for (let attempt = 0; attempt < 240; attempt += 1) {
+    if (processState.spawnFailure) throw processState.spawnFailure;
     if (processState.child.exitCode !== null) {
       throw new Error(
         `Basecamp exited before inspector connection: ${processState.child.exitCode}`,
@@ -198,6 +372,29 @@ async function objectProperties(app, objectName) {
     );
   }
   return propertyMap(await app.getProperties(result.matches[0].id));
+}
+
+async function palaceRootObjectId(app) {
+  const result = await app.findByProperty(
+    "objectName",
+    "palaceGate2Root",
+  );
+  if (result.error || !result.matches || result.matches.length !== 1) {
+    throw new Error(
+      `expected one Palace root, got ${result.matches?.length ?? 0}`,
+    );
+  }
+  return result.matches[0].id;
+}
+
+async function enterRoom(inspector, rootObjectId, roomId) {
+  const response = await inspector.send("evaluate", {
+    expression: `gate1EnterRoom(${JSON.stringify(roomId)})`,
+    objectId: rootObjectId,
+  });
+  if (response.error) {
+    throw new Error(`Gate 1 room transition failed: ${response.error}`);
+  }
 }
 
 async function verifiedBackground(app, roomTitle) {
@@ -303,6 +500,56 @@ let atriumBackground;
 let loungeBackground;
 let restoredBackground;
 let persistedProjection;
+let reportData;
+let failure;
+let cleanup = { status: "pending", failures: [] };
+let terminationPromise;
+
+function requestTermination(signal) {
+  if (terminationPromise) return;
+  failure ??= new Error(`Gate 1 termination requested by ${signal}`);
+  terminationPromise = (async () => {
+    const failures = [];
+    for (const processState of [firstProcess, secondProcess].filter(Boolean)) {
+      try {
+        await stopBasecamp(processState);
+      } catch (error) {
+        failures.push(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    try {
+      await cleanupClaimBoundProcesses();
+    } catch (error) {
+      failures.push(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (failures.length > 0) {
+      process.stderr.write(
+        `Gate 1 signal cleanup failed: ${
+          [...new Set(failures)].join("; ")
+        }\n`,
+      );
+    }
+    process.removeAllListeners("SIGHUP");
+    process.removeAllListeners("SIGINT");
+    process.removeAllListeners("SIGTERM");
+    process.kill(process.pid, signal);
+  })().catch((error) => {
+    process.stderr.write(
+      `Gate 1 signal cleanup crashed: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    );
+    process.exitCode = 1;
+  });
+}
+
+process.on("SIGHUP", () => requestTermination("SIGHUP"));
+process.on("SIGINT", () => requestTermination("SIGINT"));
+process.on("SIGTERM", () => requestTermination("SIGTERM"));
 
 try {
   const initialStart = performance.now();
@@ -314,8 +561,12 @@ try {
   timings.initialRenderMs = Math.round(performance.now() - initialStart);
   screenshots.push(await saveScreenshot(firstApp, "atrium.png"));
 
-  const doorStart = performance.now();
-  await firstApp.click("Door to Lounge");
+  const transitionStart = performance.now();
+  await enterRoom(
+    firstInspector,
+    await palaceRootObjectId(firstApp),
+    "lounge",
+  );
   await firstApp.waitFor(
     async () => {
       await firstApp.expectTexts(["Lounge", "Door to Atrium"]);
@@ -323,14 +574,16 @@ try {
     {
       timeout: 30_000,
       interval: 300,
-      description: "door navigation to Lounge",
+      description: "local projection transition to Lounge",
     },
   );
   loungeBackground = await verifiedBackground(firstApp, "Lounge");
   if (loungeBackground.handle === atriumBackground.handle) {
     throw new Error("two rooms resolved to the same background handle");
   }
-  timings.doorMs = Math.round(performance.now() - doorStart);
+  timings.roomTransitionMs = Math.round(
+    performance.now() - transitionStart,
+  );
   screenshots.push(await saveScreenshot(firstApp, "lounge.png"));
 
   firstInspector.disconnect();
@@ -355,9 +608,19 @@ try {
 
   const installManifestPath = join(artifactsDir, "installed-packages.json");
   const installManifest = JSON.parse(await readFile(installManifestPath, "utf8"));
-  const report = {
+  reportData = {
     schema: "logos-palace-basecamp-gate1-report-v1",
-    result: "PASS",
+    productSnapshot: process.env.PALACE_PRODUCT_SNAPSHOT ?? "unknown",
+    sourceCommit: process.env.PALACE_SOURCE_COMMIT ?? "unknown",
+    productSnapshotNarHash:
+      process.env.PALACE_PRODUCT_SNAPSHOT_NAR_HASH ?? "unknown",
+    productSnapshotNarSize: Number(
+      process.env.PALACE_PRODUCT_SNAPSHOT_NAR_SIZE ?? Number.NaN,
+    ),
+    snapshotRunnerSha256:
+      process.env.PALACE_MVP_RUNNER_SHA256 ?? "unknown",
+    runtimeOutputManifestSha256:
+      process.env.PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256 ?? "unknown",
     basecamp: {
       binary: await realpath(basecamp),
       revision: process.env.PALACE_BASECAMP_REV ?? "unknown",
@@ -374,14 +637,62 @@ try {
     timings,
     screenshots,
   };
-  await writeFile(
-    join(artifactsDir, "gate1-report.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  process.stdout.write("BASECAMP_GATE1_RESULT=PASS\n");
+} catch (error) {
+  failure = error instanceof Error ? error : new Error(String(error));
 } finally {
+  if (terminationPromise) await terminationPromise;
   firstInspector?.disconnect();
   secondInspector?.disconnect();
-  if (firstProcess) await stopBasecamp(firstProcess);
-  if (secondProcess) await stopBasecamp(secondProcess);
+  const cleanupFailures = [];
+  for (const processState of [firstProcess, secondProcess].filter(Boolean)) {
+    try {
+      await stopBasecamp(processState);
+    } catch (error) {
+      cleanupFailures.push(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+  try {
+    await cleanupClaimBoundProcesses();
+  } catch (error) {
+    cleanupFailures.push(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  cleanup = {
+    status: cleanupFailures.length === 0 ? "passed" : "failed",
+    failures: [...new Set(cleanupFailures)],
+  };
+  if (cleanup.failures.length > 0 && !failure) {
+    failure = new Error(
+      `Gate 1 terminal cleanup failed: ${cleanup.failures.join("; ")}`,
+    );
+  }
 }
+
+const report = {
+  ...(reportData ?? {
+    productSnapshot: process.env.PALACE_PRODUCT_SNAPSHOT ?? "unknown",
+    sourceCommit: process.env.PALACE_SOURCE_COMMIT ?? "unknown",
+    productSnapshotNarHash:
+      process.env.PALACE_PRODUCT_SNAPSHOT_NAR_HASH ?? "unknown",
+    productSnapshotNarSize: Number(
+      process.env.PALACE_PRODUCT_SNAPSHOT_NAR_SIZE ?? Number.NaN,
+    ),
+    snapshotRunnerSha256:
+      process.env.PALACE_MVP_RUNNER_SHA256 ?? "unknown",
+    runtimeOutputManifestSha256:
+      process.env.PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256 ?? "unknown",
+  }),
+  schema: "logos-palace-basecamp-gate1-report-v1",
+  result: failure ? "FAIL" : "PASS",
+  cleanup,
+  ...(failure ? { failure: failure.message } : {}),
+};
+await writeFile(
+  join(artifactsDir, "gate1-report.json"),
+  `${JSON.stringify(report, null, 2)}\n`,
+);
+if (failure) throw failure;
+process.stdout.write("BASECAMP_GATE1_RESULT=PASS\n");

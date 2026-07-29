@@ -23,8 +23,8 @@ palace::AuthoritySnapshotV1 authoritySnapshot()
         {"carol", "carol-key", 3},
     };
     snapshot.rooms = {
-        {"atrium", false, "state-root-atrium", 9},
-        {"lounge", false, "state-root-lounge", 4},
+        {"atrium", false, "", 9},
+        {"lounge", false, "", 4},
     };
     return snapshot;
 }
@@ -94,6 +94,24 @@ palace::PalaceDeliveryEnvelopeV1 envelope(
     return message;
 }
 
+palace::PalaceDeliveryEnvelopeV1 roomEnvelope(
+    const std::string& roomId,
+    std::int64_t roomEpoch,
+    const std::string& userId,
+    const std::string& key,
+    std::int64_t keyEpoch,
+    std::uint64_t sequence,
+    palace::DeliveryKind kind,
+    const std::string& payload)
+{
+    palace::PalaceDeliveryEnvelopeV1 message = envelope(
+        userId, key, keyEpoch, sequence, kind, payload);
+    message.roomId = roomId;
+    message.roomEpoch = roomEpoch;
+    message.signature = key + ":" + palace::canonicalDeliveryEnvelope(message);
+    return message;
+}
+
 std::vector<std::uint8_t> wire(const palace::PalaceDeliveryEnvelopeV1& message)
 {
     const std::string encoded = palace::encodeDeliveryEnvelope(message);
@@ -105,7 +123,13 @@ std::string roomTopic()
     return palace::deriveRoomTopic("logos.test", "palace-1", "atrium", 9);
 }
 
-void bringOnline(palace::PalaceDeliverySession& session)
+std::string loungeTopic()
+{
+    return palace::deriveRoomTopic("logos.test", "palace-1", "lounge", 4);
+}
+
+void bringOnline(palace::PalaceDeliverySession& session,
+                 const std::string& expectedTopic = roomTopic())
 {
     const palace::DeliverySessionTransition begin = session.start();
     LOGOS_ASSERT_TRUE(begin.accepted);
@@ -127,7 +151,7 @@ void bringOnline(palace::PalaceDeliverySession& session)
     LOGOS_ASSERT_EQ(connected.commands.size(), static_cast<std::size_t>(1));
     LOGOS_ASSERT_EQ(static_cast<int>(connected.commands.front().kind),
                     static_cast<int>(palace::DeliverySessionCommandKind::Subscribe));
-    LOGOS_ASSERT_EQ(connected.commands.front().contentTopic, roomTopic());
+    LOGOS_ASSERT_EQ(connected.commands.front().contentTopic, expectedTopic);
     LOGOS_ASSERT_TRUE(session.subscriptionResult(true).accepted);
     LOGOS_ASSERT_EQ(palace::deliverySessionStateName(session.state()),
                     std::string("online"));
@@ -209,20 +233,12 @@ LOGOS_TEST(delivery_session_maps_signed_sends_to_bounded_correlated_outbox) {
     LOGOS_ASSERT_FALSE(session.messageSent("unknown"));
     LOGOS_ASSERT_FALSE(session.messagePropagated("unknown"));
     LOGOS_ASSERT_FALSE(session.messageError("unknown", 1051));
-    LOGOS_ASSERT_TRUE(session.messageSent("request-1"));
-    LOGOS_ASSERT_EQ(static_cast<int>(session.outboxStatus("request-1").stage),
-                    static_cast<int>(palace::DeliveryOutboxStage::Sent));
-    LOGOS_ASSERT_TRUE(session.messageError("request-1", 1051));
-    LOGOS_ASSERT_EQ(static_cast<int>(session.outboxStatus("request-1").stage),
-                    static_cast<int>(palace::DeliveryOutboxStage::PendingSend));
-    LOGOS_ASSERT_EQ(session.eligibleOutboxCommands(1051).size(),
-                    static_cast<std::size_t>(1));
-
-    LOGOS_ASSERT_FALSE(session.publish(
-        "request-full", palace::DeliveryKind::Speech, "blocked", 1051, 30,
-        signer, verifier).accepted);
     LOGOS_ASSERT_TRUE(session.messagePropagated("request-1"));
     LOGOS_ASSERT_FALSE(session.outboxStatus("request-1").found);
+    LOGOS_ASSERT_FALSE(session.messageError("request-1", 1051));
+    LOGOS_ASSERT_TRUE(session.eligibleOutboxCommands(1051).empty());
+    LOGOS_ASSERT_FALSE(session.messageSent("request-1"));
+    LOGOS_ASSERT_FALSE(session.messagePropagated("request-1"));
 
     const palace::DeliverySessionTransition second = session.publish(
         "request-2", palace::DeliveryKind::Speech, "again", 1052, 30,
@@ -234,6 +250,142 @@ LOGOS_TEST(delivery_session_maps_signed_sends_to_bounded_correlated_outbox) {
             second.commands.front().payload.end()));
     LOGOS_ASSERT_EQ(secondDecoded.envelope.senderSequence,
                     static_cast<std::uint64_t>(2));
+}
+
+LOGOS_TEST(delivery_session_applies_local_publication_once_through_signed_ingress) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+
+    CanonicalVerifier verifier;
+    CanonicalSigner signer("carol-key");
+    const palace::DeliverySessionTransition published = session.publish(
+        "presence-local", palace::DeliveryKind::PresenceHello, "Carol",
+        1050, 30, signer, verifier);
+    LOGOS_ASSERT_TRUE(published.accepted);
+    LOGOS_ASSERT_EQ(published.commands.size(), static_cast<std::size_t>(1));
+    const palace::DeliverySessionReceive local = session.receive(
+        published.commands.front().contentTopic,
+        published.commands.front().payload,
+        1050,
+        verifier);
+    LOGOS_ASSERT_TRUE(local.accepted);
+    LOGOS_ASSERT_TRUE(local.projectionChanged);
+    LOGOS_ASSERT_EQ(session.participantSnapshot().size(),
+                    static_cast<std::size_t>(1));
+
+    const palace::DeliverySessionReceive networkEcho = session.receive(
+        published.commands.front().contentTopic,
+        published.commands.front().payload,
+        1050,
+        verifier);
+    LOGOS_ASSERT_FALSE(networkEcho.accepted);
+    LOGOS_ASSERT_EQ(networkEcho.reason,
+                    std::string("duplicate-or-replayed-sequence"));
+}
+
+LOGOS_TEST(delivery_session_switch_room_requires_empty_outbox) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+
+    CanonicalVerifier verifier;
+    CanonicalSigner signer("carol-key");
+    LOGOS_ASSERT_TRUE(session.publish(
+        "pending", palace::DeliveryKind::Speech, "pending", 1050, 30,
+        signer, verifier).accepted);
+
+    const palace::DeliverySessionTransition rejected =
+        session.switchRoom("lounge", 4);
+    LOGOS_ASSERT_FALSE(rejected.accepted);
+    LOGOS_ASSERT_EQ(
+        rejected.reason, std::string("room-switch-outbox-not-empty"));
+    LOGOS_ASSERT_EQ(session.configuration().roomId, std::string("atrium"));
+    LOGOS_ASSERT_EQ(
+        palace::deliverySessionStateName(session.state()),
+        std::string("online"));
+}
+
+LOGOS_TEST(delivery_session_switches_online_room_and_persists_canonical_room) {
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path()
+        / "logos-palace-delivery-room-switch-contract";
+    std::filesystem::remove_all(directory);
+
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 1,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1050, verifier).accepted);
+    LOGOS_ASSERT_EQ(
+        session.participantSnapshot().size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_FALSE(session.switchRoom("lounge", 5).accepted);
+    LOGOS_ASSERT_FALSE(session.switchRoom("outside", 1).accepted);
+
+    const palace::DeliverySessionTransition switched =
+        session.switchRoom("lounge", 4);
+    LOGOS_ASSERT_TRUE(switched.accepted);
+    LOGOS_ASSERT_EQ(switched.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(switched.commands.front().kind),
+        static_cast<int>(palace::DeliverySessionCommandKind::Subscribe));
+    LOGOS_ASSERT_EQ(switched.commands.front().contentTopic, loungeTopic());
+    LOGOS_ASSERT_EQ(session.configuration().roomId, std::string("lounge"));
+    LOGOS_ASSERT_EQ(
+        session.configuration().roomEpoch, static_cast<std::int64_t>(4));
+    LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
+    LOGOS_ASSERT_TRUE(session.subscriptionResult(true).accepted);
+
+    const palace::DeliverySessionReceive oldRoom = session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 2,
+            palace::DeliveryKind::Speech, "old room")),
+        1050, verifier);
+    LOGOS_ASSERT_FALSE(oldRoom.accepted);
+    LOGOS_ASSERT_EQ(
+        oldRoom.reason, std::string("wrong-palace-room-or-epoch"));
+    LOGOS_ASSERT_TRUE(session.receive(
+        loungeTopic(), wire(roomEnvelope(
+            "lounge", 4, "bob", "bob-key", 2, 1,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1050, verifier).accepted);
+
+    CanonicalSigner signer("carol-key");
+    const palace::DeliverySessionTransition published = session.publish(
+        "lounge-message", palace::DeliveryKind::Speech, "hello", 1050, 30,
+        signer, verifier);
+    LOGOS_ASSERT_TRUE(published.accepted);
+    const palace::DeliveryEnvelopeDecode decoded =
+        palace::decodeDeliveryEnvelope(std::string(
+            published.commands.front().payload.begin(),
+            published.commands.front().payload.end()));
+    LOGOS_ASSERT_TRUE(decoded.accepted);
+    LOGOS_ASSERT_EQ(decoded.envelope.roomId, std::string("lounge"));
+    LOGOS_ASSERT_EQ(decoded.envelope.roomEpoch, static_cast<std::int64_t>(4));
+    LOGOS_ASSERT_EQ(
+        decoded.envelope.senderSequence, static_cast<std::uint64_t>(1));
+    LOGOS_ASSERT_TRUE(session.messagePropagated("lounge-message"));
+
+    palace::DeliverySessionStore store(directory.string());
+    LOGOS_ASSERT_TRUE(store.save(session));
+    palace::PalaceDeliverySession restored(authority);
+    LOGOS_ASSERT_TRUE(store.load(restored));
+    LOGOS_ASSERT_EQ(restored.configuration().roomId, std::string("lounge"));
+    LOGOS_ASSERT_EQ(
+        restored.configuration().roomEpoch, static_cast<std::int64_t>(4));
+    bringOnline(restored, loungeTopic());
+    std::filesystem::remove_all(directory);
 }
 
 LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
@@ -332,6 +484,193 @@ LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
     LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
 }
 
+LOGOS_TEST(delivery_session_drains_cross_kind_reordering_in_sender_sequence) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    session.replaceAllowedProps({{"hat", "cid-hat"}});
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 41,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1050, verifier).accepted);
+    const palace::DeliverySessionReceive bufferedProp = session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 43,
+            palace::DeliveryKind::WearProp, "hat")),
+        1050, verifier);
+    LOGOS_ASSERT_TRUE(bufferedProp.accepted);
+    LOGOS_ASSERT_FALSE(bufferedProp.projectionChanged);
+    LOGOS_ASSERT_TRUE(session.participantSnapshot().front().propIds.empty());
+
+    const palace::DeliverySessionReceive drained = session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 42,
+            palace::DeliveryKind::Motion, "x=25;y=50")),
+        1050, verifier);
+    LOGOS_ASSERT_TRUE(drained.accepted);
+    LOGOS_ASSERT_TRUE(drained.projectionChanged);
+    const auto snapshot = session.participantSnapshot();
+    LOGOS_ASSERT_EQ(snapshot.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(snapshot.front().hasMotion);
+    LOGOS_ASSERT_EQ(snapshot.front().motionX, static_cast<std::int64_t>(25));
+    LOGOS_ASSERT_EQ(snapshot.front().motionY, static_cast<std::int64_t>(50));
+    LOGOS_ASSERT_TRUE(
+        snapshot.front().propIds.find("hat")
+        != snapshot.front().propIds.end());
+}
+
+LOGOS_TEST(delivery_session_buffers_initial_delta_until_presence_checkpoint) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    const palace::DeliverySessionReceive buffered = session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 42,
+            palace::DeliveryKind::Motion, "x=125;y=250")),
+        1050, verifier);
+    LOGOS_ASSERT_TRUE(buffered.accepted);
+    LOGOS_ASSERT_FALSE(buffered.projectionChanged);
+    LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
+    LOGOS_ASSERT_TRUE(
+        session.canonicalState().find("ingress;") == std::string::npos);
+
+    const palace::DeliverySessionReceive checkpoint = session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 41,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1050, verifier);
+    LOGOS_ASSERT_TRUE(checkpoint.accepted);
+    LOGOS_ASSERT_TRUE(checkpoint.projectionChanged);
+    const auto snapshot = session.participantSnapshot();
+    LOGOS_ASSERT_EQ(snapshot.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(snapshot.front().present);
+    LOGOS_ASSERT_TRUE(snapshot.front().hasMotion);
+    LOGOS_ASSERT_EQ(snapshot.front().motionX, static_cast<std::int64_t>(125));
+    LOGOS_ASSERT_EQ(snapshot.front().motionY, static_cast<std::int64_t>(250));
+}
+
+LOGOS_TEST(delivery_session_rejects_duplicate_buffer_and_oversized_gap) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    session.replaceAllowedProps({{"hat", "cid-hat"}});
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "carol", "carol-key", 3, 41,
+            palace::DeliveryKind::PresenceHello, "Carol")),
+        1050, verifier).accepted);
+    const std::vector<std::uint8_t> pending = wire(envelope(
+        "carol", "carol-key", 3, 43,
+        palace::DeliveryKind::WearProp, "hat"));
+    LOGOS_ASSERT_TRUE(
+        session.receive(roomTopic(), pending, 1050, verifier).accepted);
+    LOGOS_ASSERT_EQ(
+        session.receive(roomTopic(), pending, 1050, verifier).reason,
+        std::string("duplicate-or-replayed-sequence"));
+    LOGOS_ASSERT_EQ(
+        session.receive(
+            roomTopic(), wire(envelope(
+                "carol", "carol-key", 3, 74,
+                palace::DeliveryKind::Speech, "too far")),
+            1050, verifier).reason,
+        std::string("reorder-gap-exceeded"));
+}
+
+LOGOS_TEST(delivery_session_bounds_pending_reorder_count_and_bytes) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    CanonicalVerifier verifier;
+
+    palace::PalaceDeliverySession countBounded(authority);
+    LOGOS_ASSERT_TRUE(countBounded.configure(sessionConfig()));
+    bringOnline(countBounded);
+    for (std::uint64_t sequence = 1; sequence <= 256; ++sequence) {
+        LOGOS_ASSERT_TRUE(countBounded.receive(
+            roomTopic(), wire(envelope(
+                "bob", "bob-key", 2, sequence,
+                palace::DeliveryKind::Speech, "x")),
+            1050, verifier).accepted);
+    }
+    LOGOS_ASSERT_EQ(
+        countBounded.receive(
+            roomTopic(), wire(envelope(
+                "bob", "bob-key", 2, 257,
+                palace::DeliveryKind::Speech, "x")),
+            1050, verifier).reason,
+        std::string("reorder-buffer-count-exceeded"));
+
+    palace::PalaceDeliverySession byteBounded(authority);
+    LOGOS_ASSERT_TRUE(byteBounded.configure(sessionConfig()));
+    bringOnline(byteBounded);
+    const std::string largeSpeech(280, 'x');
+    std::string rejection;
+    std::uint64_t accepted = 0;
+    for (std::uint64_t sequence = 1; sequence <= 256; ++sequence) {
+        const palace::DeliverySessionReceive received = byteBounded.receive(
+            roomTopic(), wire(envelope(
+                "bob", "bob-key", 2, sequence,
+                palace::DeliveryKind::Speech, largeSpeech)),
+            1050, verifier);
+        if (!received.accepted) {
+            rejection = received.reason;
+            break;
+        }
+        ++accepted;
+    }
+    LOGOS_ASSERT_TRUE(accepted > 0U);
+    LOGOS_ASSERT_TRUE(accepted < 256U);
+    LOGOS_ASSERT_EQ(
+        rejection, std::string("reorder-buffer-bytes-exceeded"));
+}
+
+LOGOS_TEST(delivery_session_prunes_expired_pending_reorder_entries) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+    CanonicalVerifier verifier;
+
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 41,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1050, verifier).accepted);
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 43,
+            palace::DeliveryKind::Speech, "expires", 1040, 1051)),
+        1050, verifier).accepted);
+    session.expireTransient(1052);
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 42,
+            palace::DeliveryKind::Motion, "x=25;y=50", 1051, 1100)),
+        1052, verifier).accepted);
+    LOGOS_ASSERT_TRUE(session.participantSnapshot().front().speech.empty());
+    LOGOS_ASSERT_TRUE(session.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 43,
+            palace::DeliveryKind::Speech, "replacement", 1052, 1100)),
+        1052, verifier).accepted);
+    LOGOS_ASSERT_EQ(
+        session.participantSnapshot().front().speech,
+        std::string("replacement"));
+}
+
 LOGOS_TEST(delivery_session_bounds_replay_senders_without_advancing_on_rejection) {
     palace::AuthorityProjection authority;
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
@@ -378,7 +717,7 @@ LOGOS_TEST(delivery_session_restart_restores_sequences_outbox_not_live_presence)
     LOGOS_ASSERT_TRUE(original.publish(
         "request-1", palace::DeliveryKind::Speech, "one", 1050, 100,
         signer, verifier).accepted);
-    LOGOS_ASSERT_TRUE(original.messageSent("request-1"));
+    LOGOS_ASSERT_TRUE(original.messagePropagated("request-1"));
     LOGOS_ASSERT_TRUE(original.publish(
         "request-2", palace::DeliveryKind::Speech, "two", 1051, 100,
         signer, verifier).accepted);
@@ -395,13 +734,12 @@ LOGOS_TEST(delivery_session_restart_restores_sequences_outbox_not_live_presence)
     LOGOS_ASSERT_EQ(restored.configuration().roomEpoch,
                     static_cast<std::int64_t>(9));
     LOGOS_ASSERT_TRUE(restored.participantSnapshot().empty());
-    LOGOS_ASSERT_EQ(restored.outboxSize(), static_cast<std::size_t>(2));
-    LOGOS_ASSERT_EQ(static_cast<int>(restored.outboxStatus("request-1").stage),
-                    static_cast<int>(palace::DeliveryOutboxStage::Sent));
+    LOGOS_ASSERT_EQ(restored.outboxSize(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_FALSE(restored.outboxStatus("request-1").found);
 
     bringOnline(restored);
     LOGOS_ASSERT_EQ(restored.eligibleOutboxCommands(1060).size(),
-                    static_cast<std::size_t>(2));
+                    static_cast<std::size_t>(1));
     LOGOS_ASSERT_EQ(restored.receive(
         roomTopic(), wire(envelope(
             "bob", "bob-key", 2, 1,
@@ -418,6 +756,69 @@ LOGOS_TEST(delivery_session_restart_restores_sequences_outbox_not_live_presence)
             third.commands.front().payload.end()));
     LOGOS_ASSERT_EQ(decoded.envelope.senderSequence,
                     static_cast<std::uint64_t>(3));
+    std::filesystem::remove_all(directory);
+}
+
+LOGOS_TEST(delivery_session_restart_rebuilds_placeholder_and_presence_checkpoint) {
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path()
+        / "logos-palace-delivery-reorder-restart-contract";
+    std::filesystem::remove_all(directory);
+
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    CanonicalVerifier verifier;
+
+    palace::PalaceDeliverySession original(authority);
+    LOGOS_ASSERT_TRUE(original.configure(sessionConfig()));
+    bringOnline(original);
+    LOGOS_ASSERT_TRUE(original.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 38,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1050, verifier).accepted);
+    palace::DeliverySessionStore store(directory.string());
+    LOGOS_ASSERT_TRUE(store.save(original));
+
+    palace::PalaceDeliverySession placeholderRestore(authority);
+    LOGOS_ASSERT_TRUE(store.load(placeholderRestore));
+    bringOnline(placeholderRestore);
+    LOGOS_ASSERT_TRUE(placeholderRestore.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 39,
+            palace::DeliveryKind::Motion, "x=125;y=250")),
+        1060, verifier).accepted);
+    auto placeholder = placeholderRestore.participantSnapshot();
+    LOGOS_ASSERT_EQ(placeholder.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_FALSE(placeholder.front().present);
+    LOGOS_ASSERT_TRUE(placeholder.front().hasMotion);
+    LOGOS_ASSERT_TRUE(placeholderRestore.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 40,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1060, verifier).accepted);
+    placeholder = placeholderRestore.participantSnapshot();
+    LOGOS_ASSERT_TRUE(placeholder.front().present);
+    LOGOS_ASSERT_TRUE(placeholder.front().hasMotion);
+    LOGOS_ASSERT_EQ(
+        placeholder.front().motionX, static_cast<std::int64_t>(125));
+
+    palace::PalaceDeliverySession checkpointRestore(authority);
+    LOGOS_ASSERT_TRUE(store.load(checkpointRestore));
+    bringOnline(checkpointRestore);
+    LOGOS_ASSERT_TRUE(checkpointRestore.receive(
+        roomTopic(), wire(envelope(
+            "bob", "bob-key", 2, 40,
+            palace::DeliveryKind::PresenceHello, "Bob")),
+        1060, verifier).accepted);
+    LOGOS_ASSERT_EQ(
+        checkpointRestore.receive(
+            roomTopic(), wire(envelope(
+                "bob", "bob-key", 2, 39,
+                palace::DeliveryKind::Motion, "x=125;y=250")),
+            1060, verifier).reason,
+        std::string("duplicate-or-replayed-sequence"));
+
     std::filesystem::remove_all(directory);
 }
 

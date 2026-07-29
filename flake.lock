@@ -3,17 +3,17 @@
     "basecamp": {
       "flake": false,
       "locked": {
-        "lastModified": 1785276167,
-        "narHash": "sha256-PWBkSZvQOUoDW5AaB/Ay4+pmlUsB7TyMM9AvxA2ZJeI=",
+        "lastModified": 1785303533,
+        "narHash": "sha256-XZDGCnRu1ql4O7iQ48TR5G6HF6OAWdcaIDMC2xdI974=",
         "owner": "3esmit",
         "repo": "logos-basecamp",
-        "rev": "92cef7a979d17bfdd686c41573e6c2b21e234576",
+        "rev": "fd13085f7fda6a8b1ada53a959d3064c5747c9d1",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
-        "ref": "92cef7a",
         "repo": "logos-basecamp",
+        "rev": "fd13085f7fda6a8b1ada53a959d3064c5747c9d1",
         "type": "github"
       }
     },
@@ -524,8 +524,8 @@
       },
       "original": {
         "owner": "3esmit",
-        "ref": "891c43b",
         "repo": "logos-delivery-module",
+        "rev": "891c43bd6176e17b0aa536ef1aa369bb47e918f4",
         "type": "github"
       }
     },
@@ -536,16 +536,17 @@
         "nix-bundle-lgx": "nix-bundle-lgx_32"
       },
       "locked": {
-        "lastModified": 1785158652,
-        "narHash": "sha256-wV+UlY9QEHs6mtZWlWtvQsQ2pXvFS84R6LAEzncgsmQ=",
+        "lastModified": 1785286955,
+        "narHash": "sha256-Q8a5/yOByHFMoHmyU2DwIYPBpsrFhSMTtsT8LwRvDDs=",
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
-        "rev": "9e140c6d9529ee313d7bf4627677b4e7f552ab34",
+        "rev": "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
+        "rev": "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
         "type": "github"
       }
     },
@@ -9016,17 +9017,17 @@
         "rust-rapidsnark": "rust-rapidsnark"
       },
       "locked": {
-        "lastModified": 1785144109,
-        "narHash": "sha256-Ek0qRAGk3kUeaRm4XbK7Gvl/Tukyul8F70BwdfbM5Gg=",
+        "lastModified": 1785268089,
+        "narHash": "sha256-gNTvGsRrwZ6IHOsnu4SQx/V9pe/J20CQ/FS4yGAOQ2c=",
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "6e0013f5b771fc1b96a65361b531f289111b8aaa",
+        "rev": "e923315c020d4966807849f9db10536b628d5739",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "6e0013f5b771fc1b96a65361b531f289111b8aaa",
+        "rev": "e923315c020d4966807849f9db10536b628d5739",
         "type": "github"
       }
     },
@@ -100683,6 +100684,7 @@
       "original": {
         "owner": "3esmit",
         "repo": "logos-storage-module",
+        "rev": "1c75ad9d1f02f562e845a2c445421bee6ea425ad",
         "type": "github"
       }
     },

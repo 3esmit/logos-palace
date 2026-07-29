@@ -37,7 +37,6 @@ enum class DeliverySessionCommandKind {
 
 enum class DeliveryOutboxStage {
     PendingSend,
-    Sent,
 };
 
 struct DeliverySessionConfigV1 {
@@ -104,6 +103,8 @@ public:
     bool configure(const DeliverySessionConfigV1& config);
     bool hasConfiguration() const;
     const DeliverySessionConfigV1& configuration() const;
+    DeliverySessionTransition switchRoom(const std::string& roomId,
+                                         std::int64_t roomEpoch);
 
     DeliverySessionTransition start();
     DeliverySessionTransition callbacksRegistered(bool succeeded);
@@ -152,12 +153,26 @@ private:
         std::int64_t expiresAt = 0;
     };
 
+    struct PendingIngressEntry {
+        PalaceDeliveryEnvelopeV1 envelope;
+        std::size_t encodedBytes = 0;
+    };
+
     DeliveryPolicy policy(std::int64_t now) const;
     DeliverySessionTransition subscribeIfReady();
     DeliverySessionCommand subscribeCommand() const;
     DeliverySessionCommand sendCommand(const std::string& requestId,
                                        const OutboxEntry& entry) const;
     bool wouldExceedParticipantLimit(const PalaceDeliveryEnvelopeV1& envelope) const;
+    DeliveryValidation bufferPendingIngress(
+        const std::string& senderKey,
+        const PalaceDeliveryEnvelopeV1& envelope,
+        std::size_t encodedBytes);
+    void discardPendingIngressThrough(const std::string& senderKey,
+                                      std::uint64_t sequence);
+    bool drainPendingIngress(const std::string& senderKey,
+                             const DeliveryPolicy& currentPolicy);
+    void clearPendingIngress();
     bool apply(const PalaceDeliveryEnvelopeV1& envelope);
 
     const AuthorityProjection& m_authority;
@@ -173,6 +188,10 @@ private:
     std::map<std::string, std::string> m_allowedProps;
     std::map<std::string, OutboxEntry> m_outbox;
     std::map<std::string, DeliveryParticipantProjectionV1> m_participants;
+    std::map<std::string, std::map<std::uint64_t, PendingIngressEntry>>
+        m_pendingIngress;
+    std::size_t m_pendingIngressCount = 0;
+    std::size_t m_pendingIngressBytes = 0;
 };
 
 // Crash-safe file boundary for Delivery session restart state.

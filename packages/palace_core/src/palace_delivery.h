@@ -101,11 +101,20 @@ std::string deriveRoomTopic(const std::string& networkId,
 // schema, authority, signature, bounds, and topic check succeeds.
 class DeliveryIngress {
 public:
+    DeliveryValidation validate(const std::string& contentTopic,
+                                const PalaceDeliveryEnvelopeV1& envelope,
+                                const DeliveryPolicy& policy,
+                                const DeliverySignatureVerifier& verifier) const;
+    DeliveryValidation commitValidated(
+        const PalaceDeliveryEnvelopeV1& envelope,
+        const DeliveryPolicy& policy);
     DeliveryValidation receive(const std::string& contentTopic,
                                const PalaceDeliveryEnvelopeV1& envelope,
                                const DeliveryPolicy& policy,
                                const DeliverySignatureVerifier& verifier);
 
+    std::uint64_t lastSequenceFor(const std::string& senderUserId,
+                                  std::int64_t senderKeyEpoch) const;
     DeliverySequenceStateV1 sequenceState() const;
     bool restoreSequenceState(const DeliverySequenceStateV1& state,
                               std::size_t maxTrackedSenders);

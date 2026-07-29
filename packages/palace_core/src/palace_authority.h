@@ -46,6 +46,9 @@ struct BanV1 {
     std::string assetCid;
     std::string issuedBy;
     bool active = true;
+    // Pins delegated authority proven at issuance; current grant state still
+    // controls future actions, not an already-finalized ban.
+    std::string authorizationGrantId;
 };
 
 struct AuthoritySnapshotV1 {
@@ -73,6 +76,8 @@ public:
     bool isRoomLocked(const std::string& roomId) const;
     std::string deliveryKeyFor(const std::string& userId, std::int64_t keyEpoch) const;
     const std::string& palaceId() const;
+    const std::string& entryRoomId() const;
+    std::int64_t roomEpoch(const std::string& roomId) const;
     std::int64_t finalizedAt() const;
 
 private:

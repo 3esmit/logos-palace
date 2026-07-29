@@ -17,8 +17,8 @@ palace::AuthoritySnapshotV1 baseSnapshot()
         {"carol", "carol-key", 3},
     };
     snapshot.rooms = {
-        {"atrium", false, "state-root-atrium", 9},
-        {"lounge", false, "state-root-lounge", 4},
+        {"atrium", false, "", 9},
+        {"lounge", false, "", 4},
     };
     snapshot.grants = {
         {"grant-user", "palace-1", "", "bob", palace::CapabilityKind::ModerateUser,
@@ -90,6 +90,10 @@ void sign(palace::PalaceDeliveryEnvelopeV1& envelope, const std::string& key)
 LOGOS_TEST(finalized_authority_rejects_unauthorized_bans_and_applies_delegated_bans) {
     palace::AuthorityProjection authority;
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(baseSnapshot(), 900));
+    LOGOS_ASSERT_EQ(authority.entryRoomId(), std::string("atrium"));
+    LOGOS_ASSERT_EQ(authority.roomEpoch("atrium"), 9);
+    LOGOS_ASSERT_EQ(authority.roomEpoch("lounge"), 4);
+    LOGOS_ASSERT_EQ(authority.roomEpoch("missing"), -1);
 
     palace::AuthoritySnapshotV1 unauthorized = baseSnapshot();
     unauthorized.bans.push_back({"ban-unauthorized", "palace-1", "", "carol", "", "carol", true});

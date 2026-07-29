@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <set>
 #include <sstream>
 
 namespace palace {
@@ -68,6 +69,7 @@ std::string canonicalWithoutHashes(const VmReceipt& receipt)
     return std::string("accepted=") + (receipt.accepted ? "1" : "0")
         + ";local=" + serializeList(receipt.localEffects)
         + ";shared=" + serializeList(receipt.sharedIntents)
+        + ";deferred=" + serializeList(receipt.deferredEffects)
         + ";rejected=" + serializeList(receipt.rejectedEffects)
         + ";state=" + canonicalState(receipt.resultingState);
 }
@@ -80,6 +82,8 @@ void seal(VmReceipt& receipt, const VmContext& context)
         + ";bundle=" + lengthEncoded(context.scriptBundleCid)
         + ";epoch=" + lengthEncoded(context.roomEpoch)
         + ";trigger=" + lengthEncoded(context.trigger)
+        + ";phase="
+        + (context.orderedFinalized ? "finalized" : "provisional")
         + ";state_root=" + receipt.stateRoot
         + ";effects=" + canonicalWithoutHashes(receipt));
 }
@@ -103,6 +107,30 @@ bool matches(const Event& event, const std::string& trigger)
     return false;
 }
 
+bool isCanonicalUnsignedDecimal(const std::string& value)
+{
+    if (value.empty() || value.size() > 20U
+        || (value.size() > 1U && value.front() == '0')) {
+        return false;
+    }
+    std::uint64_t parsed = 0U;
+    const auto conversion = std::from_chars(
+        value.data(), value.data() + value.size(), parsed);
+    return conversion.ec == std::errc()
+        && conversion.ptr == value.data() + value.size();
+}
+
+bool isCanonicalTrigger(const std::string& trigger)
+{
+    static constexpr const char* kSelectPrefix = "SELECT:";
+    if (trigger == "ENTER" || trigger == "LEAVE")
+        return true;
+    if (trigger.rfind(kSelectPrefix, 0U) != 0U)
+        return false;
+    return isIdentifier(
+        trigger.substr(std::char_traits<char>::length(kSelectPrefix)));
+}
+
 } // namespace
 
 std::string VmReceipt::canonical() const
@@ -114,14 +142,34 @@ std::string VmReceipt::canonical() const
 
 VmReceipt PalaceVmEngine::execute(const std::string& script, const VmContext& context) const
 {
+    if (!context.inputError.empty())
+        return reject(context.inputError, context);
     if (context.profileId != "classic-mvp-v1")
         return reject("unsupported-profile", context);
+    if (!isIdentifier(context.scriptBundleCid)
+        || !isCanonicalUnsignedDecimal(context.roomEpoch)
+        || !isCanonicalTrigger(context.trigger)) {
+        return reject("invalid-turn-context", context);
+    }
     if (context.instructionBudget == 0)
         return reject("instruction-budget-exhausted", context);
     if (script.size() > context.maxScriptBytes)
         return reject("script-size-exceeded", context);
     if (context.priorState.size() > context.maxStateEntries)
         return reject("state-entry-budget-exceeded", context);
+    if (context.allowedRooms.size() > 64U)
+        return reject("room-entry-budget-exceeded", context);
+    if (!std::all_of(
+            context.priorState.begin(),
+            context.priorState.end(),
+            [](const auto& entry) { return isIdentifier(entry.first); })) {
+        return reject("invalid-state-key", context);
+    }
+    std::set<std::string> uniqueRooms;
+    for (const std::string& room : context.allowedRooms) {
+        if (!isIdentifier(room) || !uniqueRooms.insert(room).second)
+            return reject("invalid-room-set", context);
+    }
 
     std::istringstream input(script);
     std::vector<Command> commands;
@@ -206,16 +254,19 @@ VmReceipt PalaceVmEngine::execute(const std::string& script, const VmContext& co
         return receipt;
     }
 
+    const bool hasSharedStateCommand = std::any_of(
+        commands.begin(), commands.end(), [](const Command& command) {
+            return command.kind == Command::Kind::Set;
+        });
+    if (hasSharedStateCommand && !context.canMutateSharedState)
+        return reject("capability-denied:shared-state", context);
+
     for (const Command& command : commands) {
         switch (command.kind) {
         case Command::Kind::Say:
             receipt.localEffects.push_back("say:" + command.first);
             break;
         case Command::Kind::Set: {
-            if (!context.canMutateSharedState) {
-                receipt.rejectedEffects.push_back("capability-denied:set:" + command.first);
-                break;
-            }
             std::int64_t value = 0;
             std::from_chars(command.second.data(),
                             command.second.data() + command.second.size(), value);
@@ -232,6 +283,9 @@ VmReceipt PalaceVmEngine::execute(const std::string& script, const VmContext& co
                 receipt.rejectedEffects.push_back("room-locked:navigate:" + command.first);
             } else if (!hasRoom(context.allowedRooms, command.first)) {
                 receipt.rejectedEffects.push_back("unknown-room:navigate:" + command.first);
+            } else if (!context.orderedFinalized) {
+                receipt.deferredEffects.push_back(
+                    "await-finality:navigate:" + command.first);
             } else {
                 receipt.localEffects.push_back("navigate:" + command.first);
             }
@@ -239,7 +293,8 @@ VmReceipt PalaceVmEngine::execute(const std::string& script, const VmContext& co
         }
     }
     const std::size_t effectCount = receipt.localEffects.size()
-        + receipt.sharedIntents.size() + receipt.rejectedEffects.size();
+        + receipt.sharedIntents.size() + receipt.deferredEffects.size()
+        + receipt.rejectedEffects.size();
     if (effectCount > context.maxEffects)
         return reject("effect-budget-exhausted", context);
     if (canonicalWithoutHashes(receipt).size() > context.maxOutputBytes)
@@ -248,42 +303,98 @@ VmReceipt PalaceVmEngine::execute(const std::string& script, const VmContext& co
     return receipt;
 }
 
-std::map<std::string, std::int64_t> parseCanonicalState(const std::string& value)
+CanonicalStateParseResult parseCanonicalState(
+    const std::string& value,
+    std::size_t maxBytes,
+    std::size_t maxEntries)
 {
+    CanonicalStateParseResult result;
+    if (value.size() > maxBytes) {
+        result.reason = "state-size-exceeded";
+        return result;
+    }
     std::map<std::string, std::int64_t> state;
     std::istringstream input(value);
     std::string entry;
     while (std::getline(input, entry, ';')) {
-        if (entry.empty())
-            continue;
+        if (entry.empty()) {
+            result.reason = "invalid-state-encoding";
+            return result;
+        }
+        if (state.size() >= maxEntries) {
+            result.reason = "state-entry-budget-exceeded";
+            return result;
+        }
         const std::size_t separator = entry.find('=');
-        if (separator == std::string::npos)
-            return {};
+        if (separator == std::string::npos
+            || entry.find('=', separator + 1U) != std::string::npos) {
+            result.reason = "invalid-state-encoding";
+            return result;
+        }
         const std::string key = entry.substr(0, separator);
         const std::string rawValue = entry.substr(separator + 1);
-        if (!isIdentifier(key) || rawValue.empty())
-            return {};
+        if (!isIdentifier(key) || rawValue.empty()) {
+            result.reason = "invalid-state-encoding";
+            return result;
+        }
         std::int64_t parsedValue = 0;
         const auto conversion = std::from_chars(
             rawValue.data(), rawValue.data() + rawValue.size(), parsedValue);
-        if (conversion.ec != std::errc() || conversion.ptr != rawValue.data() + rawValue.size())
-            return {};
-        state.emplace(key, parsedValue);
+        if (conversion.ec != std::errc()
+            || conversion.ptr != rawValue.data() + rawValue.size()) {
+            result.reason = "invalid-state-encoding";
+            return result;
+        }
+        if (!state.emplace(key, parsedValue).second) {
+            result.reason = "duplicate-state-key";
+            return result;
+        }
     }
-    return state;
+    if (canonicalState(state) != value) {
+        result.reason = "noncanonical-state-encoding";
+        return result;
+    }
+    result.accepted = true;
+    result.value = std::move(state);
+    return result;
 }
 
-std::vector<std::string> parseCanonicalRooms(const std::string& value)
+CanonicalRoomsParseResult parseCanonicalRooms(
+    const std::string& value,
+    std::size_t maxBytes,
+    std::size_t maxRooms)
 {
+    CanonicalRoomsParseResult result;
+    if (value.size() > maxBytes) {
+        result.reason = "room-set-size-exceeded";
+        return result;
+    }
     std::vector<std::string> rooms;
+    std::set<std::string> uniqueRooms;
     std::istringstream input(value);
     std::string room;
     while (std::getline(input, room, ',')) {
-        if (!isIdentifier(room))
-            return {};
+        if (rooms.size() >= maxRooms) {
+            result.reason = "room-entry-budget-exceeded";
+            return result;
+        }
+        if (!isIdentifier(room)) {
+            result.reason = "invalid-room-set";
+            return result;
+        }
+        if (!uniqueRooms.insert(room).second) {
+            result.reason = "duplicate-room";
+            return result;
+        }
         rooms.push_back(room);
     }
-    return rooms;
+    if (canonicalRooms(rooms) != value) {
+        result.reason = "noncanonical-room-set";
+        return result;
+    }
+    result.accepted = true;
+    result.value = std::move(rooms);
+    return result;
 }
 
 std::string canonicalState(const std::map<std::string, std::int64_t>& state)
@@ -293,6 +404,17 @@ std::string canonicalState(const std::map<std::string, std::int64_t>& state)
         if (!result.empty())
             result += ';';
         result += key + "=" + std::to_string(value);
+    }
+    return result;
+}
+
+std::string canonicalRooms(const std::vector<std::string>& rooms)
+{
+    std::string result;
+    for (const std::string& room : rooms) {
+        if (!result.empty())
+            result += ',';
+        result += room;
     }
     return result;
 }

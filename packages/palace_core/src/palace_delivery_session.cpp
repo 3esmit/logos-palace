@@ -30,6 +30,9 @@ constexpr std::size_t kMaximumOutboxEntries = 256U;
 constexpr std::size_t kMaximumParticipants = 512U;
 constexpr std::size_t kMaximumEncodedEnvelopeBytes = 4096U;
 constexpr std::size_t kMaximumStateBytes = 3U * 1024U * 1024U;
+constexpr std::uint64_t kMaximumPendingIngressGap = 32U;
+constexpr std::size_t kMaximumPendingIngressCount = 256U;
+constexpr std::size_t kMaximumPendingIngressBytes = 128U * 1024U;
 
 DeliverySessionTransition transition(bool accepted, std::string reason)
 {
@@ -52,6 +55,21 @@ bool isIdentifier(const std::string& value)
     return std::all_of(value.begin(), value.end(), [](unsigned char character) {
         return std::isalnum(character) != 0 || character == '_' || character == '-';
     });
+}
+
+std::string ingressSenderKey(const PalaceDeliveryEnvelopeV1& envelope)
+{
+    return envelope.senderUserId + "@"
+        + std::to_string(envelope.senderKeyEpoch);
+}
+
+bool requiresParticipantProjection(DeliveryKind kind)
+{
+    return kind == DeliveryKind::PresenceHello
+        || kind == DeliveryKind::Motion
+        || kind == DeliveryKind::Speech
+        || kind == DeliveryKind::WearProp
+        || kind == DeliveryKind::RemoveProp;
 }
 
 bool isNetworkId(const std::string& value)
@@ -268,6 +286,7 @@ bool PalaceDeliverySession::configure(const DeliverySessionConfigV1& config)
     m_allowedProps.clear();
     m_outbox.clear();
     m_participants.clear();
+    clearPendingIngress();
     return true;
 }
 
@@ -279,6 +298,45 @@ bool PalaceDeliverySession::hasConfiguration() const
 const DeliverySessionConfigV1& PalaceDeliverySession::configuration() const
 {
     return m_config;
+}
+
+DeliverySessionTransition PalaceDeliverySession::switchRoom(
+    const std::string& roomId,
+    std::int64_t roomEpoch)
+{
+    if (!m_configured)
+        return transition(false, "session-not-configured");
+    if (!isIdentifier(roomId) || roomEpoch < 0)
+        return transition(false, "invalid-room");
+    if (m_authority.palaceId() != m_config.palaceId
+        || m_authority.roomEpoch(m_config.roomId) != m_config.roomEpoch
+        || m_authority.roomEpoch(roomId) != roomEpoch) {
+        return transition(false, "room-not-in-finalized-authority");
+    }
+    if (m_authority.isRoomLocked(roomId))
+        return transition(false, "finalized-room-locked");
+    if (roomId == m_config.roomId && roomEpoch == m_config.roomEpoch)
+        return transition(true, "room-unchanged");
+    if (!m_outbox.empty())
+        return transition(false, "room-switch-outbox-not-empty");
+    if (m_subscriptionPending)
+        return transition(false, "room-switch-subscription-pending");
+
+    DeliverySessionConfigV1 nextConfig = m_config;
+    nextConfig.roomId = roomId;
+    nextConfig.roomEpoch = roomEpoch;
+    if (!validConfig(nextConfig, m_authority))
+        return transition(false, "invalid-room-configuration");
+
+    DeliveryIngress emptyIngress;
+    DeliveryEgress emptyEgress;
+    m_config = std::move(nextConfig);
+    m_subscribed = false;
+    m_ingress = std::move(emptyIngress);
+    m_egress = std::move(emptyEgress);
+    m_participants.clear();
+    clearPendingIngress();
+    return subscribeIfReady();
 }
 
 DeliverySessionTransition PalaceDeliverySession::start()
@@ -293,6 +351,7 @@ DeliverySessionTransition PalaceDeliverySession::start()
     m_subscribed = false;
     m_connectionState = DeliveryConnectionState::Disconnected;
     m_participants.clear();
+    clearPendingIngress();
     m_state = DeliverySessionState::AwaitingCallbacks;
     return commandTransition(true, "register-callbacks",
                              {DeliverySessionCommandKind::RegisterCallbacks, {}, {}, {}});
@@ -303,6 +362,7 @@ DeliverySessionTransition PalaceDeliverySession::callbacksRegistered(bool succee
     if (m_state != DeliverySessionState::AwaitingCallbacks)
         return transition(false, "unexpected-callback-registration-result");
     if (!succeeded) {
+        clearPendingIngress();
         m_state = DeliverySessionState::Offline;
         return transition(false, "callback-registration-failed");
     }
@@ -317,6 +377,7 @@ DeliverySessionTransition PalaceDeliverySession::nodeStarted(bool succeeded)
         return transition(false, "unexpected-node-start-result");
     if (!succeeded) {
         m_nodeStarted = false;
+        clearPendingIngress();
         m_state = DeliverySessionState::Offline;
         return transition(false, "node-start-failed");
     }
@@ -335,6 +396,7 @@ DeliverySessionTransition PalaceDeliverySession::connectionStateChanged(
     if (state == DeliveryConnectionState::Connected)
         return subscribeIfReady();
 
+    clearPendingIngress();
     if (m_subscribed || m_subscriptionPending
         || m_state == DeliverySessionState::Online
         || m_state == DeliverySessionState::Subscribing) {
@@ -357,6 +419,7 @@ DeliverySessionTransition PalaceDeliverySession::subscriptionResult(bool succeed
     m_subscriptionPending = false;
     if (!succeeded) {
         m_subscribed = false;
+        clearPendingIngress();
         m_state = DeliverySessionState::Recovering;
         return transition(false, "subscription-failed");
     }
@@ -374,6 +437,7 @@ void PalaceDeliverySession::interrupt(bool recoverable)
     m_subscriptionPending = false;
     m_subscribed = false;
     m_participants.clear();
+    clearPendingIngress();
     m_state = recoverable ? DeliverySessionState::Recovering
                           : DeliverySessionState::Offline;
 }
@@ -444,15 +508,14 @@ DeliverySessionTransition PalaceDeliverySession::publish(
 
 bool PalaceDeliverySession::messageSent(const std::string& requestId)
 {
-    const auto found = m_outbox.find(requestId);
-    if (found == m_outbox.end())
-        return false;
-    found->second.stage = DeliveryOutboxStage::Sent;
-    return true;
+    return m_outbox.erase(requestId) == 1U;
 }
 
 bool PalaceDeliverySession::messagePropagated(const std::string& requestId)
 {
+    // Palace live-room messages require peer propagation, not archive/store
+    // validation. Delivery may never emit message_sent when store is disabled,
+    // so propagation is the terminal success boundary for this outbox.
     return m_outbox.erase(requestId) == 1U;
 }
 
@@ -518,20 +581,119 @@ DeliverySessionReceive PalaceDeliverySession::receive(
     const DeliveryEnvelopeDecode decoded = decodeDeliveryEnvelope(encoded);
     if (!decoded.accepted)
         return {false, false, decoded.reason};
-    if (wouldExceedParticipantLimit(decoded.envelope))
-        return {false, false, "participant-capacity-exceeded"};
 
-    const DeliveryValidation accepted = m_ingress.receive(
-        contentTopic, decoded.envelope, policy(now), verifier);
-    if (!accepted.accepted)
-        return {false, false, accepted.reason};
-    return {true, apply(decoded.envelope), "accepted"};
+    const DeliveryPolicy currentPolicy = policy(now);
+    const DeliveryValidation validated = m_ingress.validate(
+        contentTopic, decoded.envelope, currentPolicy, verifier);
+    if (!validated.accepted)
+        return {false, false, validated.reason};
+
+    const PalaceDeliveryEnvelopeV1& envelope = decoded.envelope;
+    const std::string senderKey = ingressSenderKey(envelope);
+    const std::uint64_t committed = m_ingress.lastSequenceFor(
+        envelope.senderUserId, envelope.senderKeyEpoch);
+    const auto pendingSender = m_pendingIngress.find(senderKey);
+    if (pendingSender != m_pendingIngress.end()
+        && pendingSender->second.find(envelope.senderSequence)
+            != pendingSender->second.end()) {
+        return {false, false, "duplicate-or-replayed-sequence"};
+    }
+
+    if (committed == 0U && pendingSender == m_pendingIngress.end()) {
+        const DeliverySequenceStateV1 committedState =
+            m_ingress.sequenceState();
+        std::size_t trackedSenders = committedState.lastSequence.size();
+        for (const auto& pending : m_pendingIngress) {
+            if (committedState.lastSequence.find(pending.first)
+                == committedState.lastSequence.end()) {
+                ++trackedSenders;
+            }
+        }
+        if (trackedSenders >= m_config.maxTrackedSenders)
+            return {false, false, "replay-state-capacity-exceeded"};
+    }
+
+    if (envelope.kind == DeliveryKind::PresenceHello) {
+        if (wouldExceedParticipantLimit(envelope))
+            return {false, false, "participant-capacity-exceeded"};
+        const DeliveryValidation committedPresence =
+            m_ingress.commitValidated(envelope, currentPolicy);
+        if (!committedPresence.accepted)
+            return {false, false, committedPresence.reason};
+        discardPendingIngressThrough(senderKey, envelope.senderSequence);
+        const auto future = m_pendingIngress.find(senderKey);
+        if (future != m_pendingIngress.end()) {
+            for (auto pending = future->second.begin();
+                 pending != future->second.end();) {
+                if (pending->first - envelope.senderSequence
+                    > kMaximumPendingIngressGap) {
+                    --m_pendingIngressCount;
+                    m_pendingIngressBytes -= pending->second.encodedBytes;
+                    pending = future->second.erase(pending);
+                } else {
+                    ++pending;
+                }
+            }
+            if (future->second.empty())
+                m_pendingIngress.erase(future);
+        }
+        bool projectionChanged = apply(envelope);
+        projectionChanged =
+            drainPendingIngress(senderKey, currentPolicy)
+            || projectionChanged;
+        return {true, projectionChanged, "accepted"};
+    }
+
+    if (committed == 0U) {
+        const DeliveryValidation buffered = bufferPendingIngress(
+            senderKey, envelope, encoded.size());
+        return {buffered.accepted, false, buffered.reason};
+    }
+
+    if (envelope.senderSequence > committed + 1U) {
+        if (envelope.senderSequence - committed
+            > kMaximumPendingIngressGap) {
+            return {false, false, "reorder-gap-exceeded"};
+        }
+        const DeliveryValidation buffered = bufferPendingIngress(
+            senderKey, envelope, encoded.size());
+        return {buffered.accepted, false, buffered.reason};
+    }
+
+    if (wouldExceedParticipantLimit(envelope))
+        return {false, false, "participant-capacity-exceeded"};
+    const DeliveryValidation committedEnvelope =
+        m_ingress.commitValidated(envelope, currentPolicy);
+    if (!committedEnvelope.accepted)
+        return {false, false, committedEnvelope.reason};
+    bool projectionChanged = apply(envelope);
+    projectionChanged =
+        drainPendingIngress(senderKey, currentPolicy)
+        || projectionChanged;
+    return {true, projectionChanged, "accepted"};
 }
 
 void PalaceDeliverySession::expireTransient(std::int64_t now)
 {
     if (now <= 0)
         return;
+    for (auto sender = m_pendingIngress.begin();
+         sender != m_pendingIngress.end();) {
+        for (auto pending = sender->second.begin();
+             pending != sender->second.end();) {
+            if (pending->second.envelope.expiresAt < now) {
+                --m_pendingIngressCount;
+                m_pendingIngressBytes -= pending->second.encodedBytes;
+                pending = sender->second.erase(pending);
+            } else {
+                ++pending;
+            }
+        }
+        if (sender->second.empty())
+            sender = m_pendingIngress.erase(sender);
+        else
+            ++sender;
+    }
     for (auto participant = m_participants.begin();
          participant != m_participants.end();) {
         DeliveryParticipantProjectionV1& projection = participant->second;
@@ -681,7 +843,8 @@ bool PalaceDeliverySession::restoreCanonicalState(const std::string& serialized)
         if (!hexDecode(fields[1], requestId)
             || !isIdentifier(requestId)
             || !parseInteger(fields[2], stage)
-            || stage > static_cast<unsigned int>(DeliveryOutboxStage::Sent)
+            || stage > static_cast<unsigned int>(
+                DeliveryOutboxStage::PendingSend)
             || !parseInteger(fields[3], entry.senderSequence)
             || entry.senderSequence == 0U
             || !parseInteger(fields[4], entry.expiresAt)
@@ -756,6 +919,7 @@ bool PalaceDeliverySession::restoreCanonicalState(const std::string& serialized)
     m_allowedProps.clear();
     m_outbox = std::move(restoredOutbox);
     m_participants.clear();
+    clearPendingIngress();
     return true;
 }
 
@@ -814,9 +978,111 @@ DeliverySessionCommand PalaceDeliverySession::sendCommand(
 bool PalaceDeliverySession::wouldExceedParticipantLimit(
     const PalaceDeliveryEnvelopeV1& envelope) const
 {
-    return envelope.kind == DeliveryKind::PresenceHello
+    return requiresParticipantProjection(envelope.kind)
         && m_participants.find(envelope.senderUserId) == m_participants.end()
         && m_participants.size() >= m_config.maxParticipants;
+}
+
+DeliveryValidation PalaceDeliverySession::bufferPendingIngress(
+    const std::string& senderKey,
+    const PalaceDeliveryEnvelopeV1& envelope,
+    std::size_t encodedBytes)
+{
+    if (m_pendingIngressCount >= kMaximumPendingIngressCount)
+        return {false, "reorder-buffer-count-exceeded"};
+    if (encodedBytes > kMaximumPendingIngressBytes
+        || m_pendingIngressBytes
+            > kMaximumPendingIngressBytes - encodedBytes) {
+        return {false, "reorder-buffer-bytes-exceeded"};
+    }
+
+    auto& pending = m_pendingIngress[senderKey];
+    const auto inserted = pending.emplace(
+        envelope.senderSequence,
+        PendingIngressEntry{envelope, encodedBytes});
+    if (!inserted.second)
+        return {false, "duplicate-or-replayed-sequence"};
+    ++m_pendingIngressCount;
+    m_pendingIngressBytes += encodedBytes;
+    return {true, "buffered-out-of-order"};
+}
+
+void PalaceDeliverySession::discardPendingIngressThrough(
+    const std::string& senderKey,
+    std::uint64_t sequence)
+{
+    const auto sender = m_pendingIngress.find(senderKey);
+    if (sender == m_pendingIngress.end())
+        return;
+
+    auto pending = sender->second.begin();
+    while (pending != sender->second.end()
+           && pending->first <= sequence) {
+        --m_pendingIngressCount;
+        m_pendingIngressBytes -= pending->second.encodedBytes;
+        pending = sender->second.erase(pending);
+    }
+    if (sender->second.empty())
+        m_pendingIngress.erase(sender);
+}
+
+bool PalaceDeliverySession::drainPendingIngress(
+    const std::string& senderKey,
+    const DeliveryPolicy& currentPolicy)
+{
+    bool projectionChanged = false;
+    while (true) {
+        const auto sender = m_pendingIngress.find(senderKey);
+        if (sender == m_pendingIngress.end())
+            return projectionChanged;
+
+        const PalaceDeliveryEnvelopeV1& firstEnvelope =
+            sender->second.begin()->second.envelope;
+        const std::uint64_t committed = m_ingress.lastSequenceFor(
+            firstEnvelope.senderUserId, firstEnvelope.senderKeyEpoch);
+        if (committed == std::numeric_limits<std::uint64_t>::max())
+            return projectionChanged;
+
+        const auto pending = sender->second.find(committed + 1U);
+        if (pending == sender->second.end())
+            return projectionChanged;
+        if (pending->second.envelope.expiresAt < currentPolicy.now) {
+            --m_pendingIngressCount;
+            m_pendingIngressBytes -= pending->second.encodedBytes;
+            sender->second.erase(pending);
+            if (sender->second.empty())
+                m_pendingIngress.erase(sender);
+            return projectionChanged;
+        }
+        if (wouldExceedParticipantLimit(pending->second.envelope))
+            return projectionChanged;
+
+        const DeliveryValidation committedEnvelope =
+            m_ingress.commitValidated(
+                pending->second.envelope, currentPolicy);
+        if (!committedEnvelope.accepted) {
+            --m_pendingIngressCount;
+            m_pendingIngressBytes -= pending->second.encodedBytes;
+            sender->second.erase(pending);
+            if (sender->second.empty())
+                m_pendingIngress.erase(sender);
+            return projectionChanged;
+        }
+        projectionChanged =
+            apply(pending->second.envelope) || projectionChanged;
+        --m_pendingIngressCount;
+        m_pendingIngressBytes -= pending->second.encodedBytes;
+        sender->second.erase(pending);
+        if (sender->second.empty())
+            m_pendingIngress.erase(sender);
+    }
+}
+
+void PalaceDeliverySession::clearPendingIngress()
+{
+    m_pendingIngress.clear();
+    m_pendingIngressCount = 0U;
+    m_pendingIngressBytes = 0U;
 }
 
 bool PalaceDeliverySession::apply(const PalaceDeliveryEnvelopeV1& envelope)
@@ -843,8 +1109,14 @@ bool PalaceDeliverySession::apply(const PalaceDeliveryEnvelopeV1& envelope)
         return changed;
     }
 
-    if (participant == m_participants.end())
-        return false;
+    if (participant == m_participants.end()) {
+        if (!requiresParticipantProjection(envelope.kind))
+            return false;
+        DeliveryParticipantProjectionV1 projection;
+        projection.userId = envelope.senderUserId;
+        participant = m_participants.emplace(
+            envelope.senderUserId, std::move(projection)).first;
+    }
     DeliveryParticipantProjectionV1& projection = participant->second;
     switch (envelope.kind) {
     case DeliveryKind::Motion: {

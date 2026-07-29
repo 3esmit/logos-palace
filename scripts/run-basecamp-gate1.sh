@@ -3,12 +3,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-product_ref="path:${repo_root}"
 artifacts_dir="${1:-${repo_root}/.artifacts/basecamp-gate1}"
 mkdir -p "${artifacts_dir}"
 artifacts_dir="$(cd "${artifacts_dir}" && pwd)"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/logos-palace-gate1.XXXXXX")"
+work_dir="$(cd "${work_dir}" && pwd -P)"
+chmod 700 "${work_dir}"
 cleanup() {
   if [ "${PALACE_KEEP_GATE1_WORK:-0}" = "1" ]; then
     printf 'Gate 1 work directory: %s\n' "${work_dir}"
@@ -18,10 +19,54 @@ cleanup() {
 }
 trap cleanup EXIT
 
-lock_file="${repo_root}/flake.lock"
-acceptance_tools="$(
-  nix build --no-link --print-out-paths "${product_ref}#acceptance-tools"
-)"
+product_snapshot="${PALACE_GATE1_PRODUCT_SNAPSHOT:-}"
+if [ -n "${product_snapshot}" ]; then
+  canonical_snapshot="$(realpath -e -- "${product_snapshot}" 2>/dev/null || true)"
+  if [ "${product_snapshot}" != "${canonical_snapshot}" ] \
+    || [[ ! "${canonical_snapshot}" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[^/]+$ ]] \
+    || [ ! -d "${canonical_snapshot}" ] \
+    || ! nix path-info "${canonical_snapshot}" >/dev/null 2>&1; then
+    printf 'PALACE_GATE1_PRODUCT_SNAPSHOT is not a Nix store directory\n' >&2
+    exit 1
+  fi
+  product_snapshot="${canonical_snapshot}"
+  product_ref="path:${product_snapshot}"
+  acceptance_tools="$(
+    nix build --no-link --print-out-paths \
+      "${product_ref}#acceptance-tools"
+  )"
+else
+  if [ -n "$(git -C "${repo_root}" status --porcelain=v1 \
+    --untracked-files=all)" ]; then
+    printf 'Gate 1 source must be a clean Git HEAD\n' >&2
+    exit 1
+  fi
+  source_commit="$(git -C "${repo_root}" rev-parse --verify HEAD)"
+  if [[ ! "${source_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'Gate 1 source HEAD is invalid\n' >&2
+    exit 1
+  fi
+  live_product_ref="git+file://${repo_root}?rev=${source_commit}"
+  acceptance_tools="$(
+    nix build --no-link --print-out-paths \
+      "${live_product_ref}#acceptance-tools"
+  )"
+  product_snapshot="$(
+    nix flake archive --json "${live_product_ref}" |
+      "${acceptance_tools}/bin/jq" -r '.path'
+  )"
+  canonical_snapshot="$(realpath -e -- "${product_snapshot}" 2>/dev/null || true)"
+  if [ "${product_snapshot}" != "${canonical_snapshot}" ] \
+    || [[ ! "${canonical_snapshot}" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[^/]+$ ]] \
+    || ! nix path-info "${canonical_snapshot}" >/dev/null 2>&1; then
+    printf 'Could not archive immutable product source\n' >&2
+    exit 1
+  fi
+  product_snapshot="${canonical_snapshot}"
+  product_ref="path:${product_snapshot}"
+fi
+printf 'Gate 1 product snapshot secured: %s\n' "${product_snapshot}"
+lock_file="${product_snapshot}/flake.lock"
 basecamp_owner="$(
   "${acceptance_tools}/bin/jq" -r '.nodes.basecamp.locked.owner' "${lock_file}"
 )"
@@ -95,21 +140,57 @@ done
   --ui-plugins-dir "${user_dir}/plugins" \
   --json list >"${artifacts_dir}/installed-packages.json"
 
-installed_count="$(
-  "${acceptance_tools}/bin/jq" \
-    '[.[] | select(.name == "palace_vm" or .name == "palace_core" or .name == "logos_palace_ui" or .name == "delivery_module" or .name == "storage_module" or .name == "lez_core")] | length' \
+installed_exact="$(
+  "${acceptance_tools}/bin/jq" -r \
+    'length == 6
+      and (
+        map(.name) | sort
+      ) == [
+        "delivery_module",
+        "lez_core",
+        "logos_palace_ui",
+        "palace_core",
+        "palace_vm",
+        "storage_module"
+      ]' \
     "${artifacts_dir}/installed-packages.json"
 )"
-if [ "${installed_count}" -ne 6 ]; then
-  printf 'Expected six Palace/runtime packages, found %s\n' "${installed_count}" >&2
+if [ "${installed_exact}" != "true" ]; then
+  printf 'Expected each of the exact six Palace/runtime packages once\n' >&2
   exit 1
 fi
 
 export LOGOS_QT_MCP="${qt_mcp}"
 export PALACE_BASECAMP_REV="${basecamp_rev}"
+export PALACE_PRODUCT_SNAPSHOT="${product_snapshot}"
 export QML_INSPECTOR_PORT="${PALACE_GATE1_INSPECTOR_PORT:-4768}"
+if [ "${PALACE_MVP_CLAIM_PATH+x}" != "${PALACE_MVP_LOCK_FD+x}" ]; then
+  printf 'PALACE_MVP_CLAIM_PATH and PALACE_MVP_LOCK_FD must be provided together\n' >&2
+  exit 1
+fi
+if [ "${PALACE_MVP_CLAIM_PATH+x}" = "x" ]; then
+  canonical_claim="$(
+    realpath -e -- "${PALACE_MVP_CLAIM_PATH}" 2>/dev/null || true
+  )"
+  if [ "${PALACE_MVP_CLAIM_PATH}" != "${canonical_claim}" ] \
+    || [ -L "${PALACE_MVP_CLAIM_PATH}" ] \
+    || [ ! -f "${PALACE_MVP_CLAIM_PATH}" ] \
+    || [ "$(stat -c '%u:%a' -- "${PALACE_MVP_CLAIM_PATH}")" \
+      != "$(id -u):600" ]; then
+    printf 'PALACE_MVP_CLAIM_PATH is not an owner-only regular file\n' >&2
+    exit 1
+  fi
+else
+  PALACE_MVP_CLAIM_PATH="${work_dir}/standalone-cleanup-claim"
+  (
+    umask 077
+    : >"${PALACE_MVP_CLAIM_PATH}"
+  )
+  chmod 600 "${PALACE_MVP_CLAIM_PATH}"
+  export PALACE_MVP_CLAIM_PATH
+fi
 "${acceptance_tools}/bin/node" \
-  "${repo_root}/tests/basecamp_gate1.mjs" \
+  "${product_snapshot}/tests/basecamp_gate1.mjs" \
   "${basecamp_bundle}/bin/LogosBasecamp" \
   "${user_dir}" \
   "${artifacts_dir}" \

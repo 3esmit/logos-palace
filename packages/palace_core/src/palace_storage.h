@@ -24,6 +24,7 @@ StorageUploadTerminal parseStorageUploadDone(const std::string& payload);
 struct PendingStorageAsset {
   std::string operationId;
   AssetRefV1 reference;
+  std::string networkCid;
   std::string destinationPath;
 };
 

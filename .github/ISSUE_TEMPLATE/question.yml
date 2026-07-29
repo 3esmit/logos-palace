@@ -1,0 +1,47 @@
+name: Question
+description: Ask about usage, builds, acceptance, or integration
+title: "question: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here. Follow SECURITY.md.
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Commit or immutable source revision in use.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Build and packaging
+        - Basecamp acceptance
+        - Palace UI
+        - Palace Core
+        - Palace VM
+        - Palace LEZ program
+        - Delivery
+        - Storage
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Include relevant commands and sanitized evidence.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, keys, recovery phrases, private data, and unrelated local paths.
+          required: true

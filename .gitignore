@@ -6,3 +6,5 @@ generated_code
 .artifacts
 program/target
 program/**/target
+tools/**/target
+/program/release/palace.bin

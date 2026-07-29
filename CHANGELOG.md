@@ -3,44 +3,72 @@
 All notable changes to Logos Palace are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+The project will use [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 after its first published release.
 
 ## [Unreleased]
 
 ### Added
 
-- Basecamp module foundation for Palace UI, Core, and deterministic VM.
-- Portable LGX package outputs and contract checks.
-- Verified Basecamp dynamic-asset provider boundary.
-- Core-owned PNG covenant, verified-asset store, Storage V2 download flow, and
-  verified-handle publication flow.
-- Versioned Delivery envelope codec, topic derivation, egress preflight,
-  signature/key binding, replay, expiry, motion, prop, and moderation policy.
-- Product-owned Palace LEZ state, transition rules, instruction envelope,
-  RISC Zero/SPEL guest, host tests, and release image build.
-- Generated-API LEZ public transaction submission with canonical result
-  validation.
-- Checksummed atomic projection and durable action-journal persistence,
-  including submitted transaction hashes and legacy orphan migration.
-- Two deterministic room backgrounds rendered only through Basecamp's
-  verified-asset provider, with a visible degraded fallback.
-- Reproducible compiled Gate 1 acceptance covering clean six-package
-  installation, room navigation, verified handles, and restart restoration.
-- Schema-v2 ordered LEZ action IDs with replay, gap, and competing-submission
-  rejection across the Rust guest and C++ wire boundary.
+- Three Basecamp product modules: Palace UI, Palace Core, and deterministic
+  Palace VM.
+- Reproducible portable outputs for the exact six-package MVP set:
+  `palace_vm`, `palace_core`, `logos_palace_ui`, `delivery_module`,
+  `storage_module`, and `lez_core`.
+- Basecamp verified-asset provider integration with opaque image handles and a
+  visible degraded fallback.
+- Signed Delivery envelopes, authority-backed identity/key binding, replay and
+  expiry enforcement, bounded reordering, restart state, and adversarial
+  acceptance coverage.
+- Typed Storage catalog and exact MVP object graph, verified PNG
+  publication/fetch paths, retention evidence, restart reconciliation, and
+  creator-removal acceptance harness.
+- Repository-owned schema-v3 Palace LEZ program with 14 instruction variants,
+  public PDA records, capability grants, bans, shared state, SPEL guest, and
+  RISC Zero image build.
+- Fixed LEZ testnet release fingerprint covering module/runtime revisions,
+  program ID, bytecode digest, Sequencer, and explorer schema.
+- Exact-account explorer finality certificates, finalized history scanning,
+  coordinator recovery, transactional authority projection, and secure
+  finalized-account bundle persistence.
+- VM provisional/finalized execution journal and one-shot promotion rules.
+- Checksummed atomic room projection, durable action journal, and write-ahead
+  Delivery/projection room-transition recovery.
+- Basecamp Gate 1–3 harnesses for compiled-package runs with per-run JSON
+  evidence.
+- Resumable Gate 0–6 runner with immutable source/runtime bindings,
+  claim-bound terminal process cleanup, completed-run attestation, and
+  allowlist-only public evidence.
+
+### Changed
+
+- Palace program source is maintained under `program/` in this repository. It
+  is no longer modeled as an external repository or build input.
+- Palace state moved from the incompatible schema-v2 monolithic account to
+  the schema-v3 typed public account graph.
+- Durable actions require stable state observation plus exact explorer
+  finality; Delivery publication cannot promote them.
 
 ### Security
 
-- QML remains outside network, arbitrary path, signing-key, and VM authority
-  boundaries.
-- Malformed assets, Delivery envelopes, LEZ responses, and persisted records
-  fail closed at their owning boundaries.
+- QML remains outside network, arbitrary-path, signing-key, wallet, and VM
+  authority boundaries.
+- Malformed assets, Delivery envelopes, LEZ responses, explorer evidence, and
+  persisted records fail closed at their owning boundaries.
+- Finalized authority replacement, incremental merge, and history rebuild are
+  transactional and bind exact account IDs, PDAs, owners, digests, order, and
+  checkpoints.
 
 ### Known limitations
 
-- No release-bound testnet program deployment or indexed LEZ finality recovery.
-- No automated three-instance Delivery/Storage/Basecamp acceptance yet.
-- No published release manifest or frozen performance baseline yet.
+- No final compiled Basecamp run yet proves the entire MVP in one source
+  snapshot.
+- The LEZ-backed door path and automatic cold-start history rebuild remain
+  integration gates.
+- Creator removal, complete restart recovery, and performance/resource
+  evidence remain release gates.
+- The testnet deployment and dependency forks have not received a production
+  security audit.
+- Private rooms and private LEZ state are not implemented.
 
-[Unreleased]: https://github.com/3esmit/logos-palace/commits/main
+[Unreleased]: https://github.com/3esmit/logos-palace/commits

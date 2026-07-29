@@ -55,6 +55,7 @@ LOGOS_TEST(
   const auto first = queue.begin(reference, "/core/asset_downloads");
   LOGOS_ASSERT_TRUE(first.has_value());
   LOGOS_ASSERT_EQ(first->operationId, std::string("palace-asset-1"));
+  LOGOS_ASSERT_EQ(first->networkCid, reference.sourceCid);
   LOGOS_ASSERT_EQ(first->destinationPath,
                   std::string("/core/asset_downloads/palace-asset-1.png"));
 

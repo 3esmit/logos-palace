@@ -258,10 +258,11 @@ std::string deriveRoomTopic(const std::string& networkId,
     return "/logos-palace/1/room-" + crypto::sha256Hex(preimage).substr(0, 32U) + "/proto";
 }
 
-DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
-                                             const PalaceDeliveryEnvelopeV1& envelope,
-                                             const DeliveryPolicy& policy,
-                                             const DeliverySignatureVerifier& verifier)
+DeliveryValidation DeliveryIngress::validate(
+    const std::string& contentTopic,
+    const PalaceDeliveryEnvelopeV1& envelope,
+    const DeliveryPolicy& policy,
+    const DeliverySignatureVerifier& verifier) const
 {
     if (policy.authority == nullptr || policy.now <= 0 || policy.networkId.empty()
         || policy.palaceId.empty() || policy.roomId.empty()
@@ -315,10 +316,62 @@ DeliveryValidation DeliveryIngress::receive(const std::string& contentTopic,
         }
     }
 
+    return {true, "accepted"};
+}
+
+DeliveryValidation DeliveryIngress::commitValidated(
+    const PalaceDeliveryEnvelopeV1& envelope,
+    const DeliveryPolicy& policy)
+{
+    if (policy.maxTrackedSenders == 0U)
+        return reject("invalid-policy");
+
+    const std::string key = senderKey(envelope);
+    const auto previous = m_lastSequence.find(key);
+    if (previous != m_lastSequence.end()
+        && envelope.senderSequence <= previous->second) {
+        return reject("duplicate-or-replayed-sequence");
+    }
+    if (previous == m_lastSequence.end()
+        && m_lastSequence.size() >= policy.maxTrackedSenders) {
+        return reject("replay-state-capacity-exceeded");
+    }
+    if (envelope.kind == DeliveryKind::Motion
+        && policy.minMotionIntervalSeconds > 0) {
+        const auto lastMotion = m_lastMotionAt.find(key);
+        if (lastMotion != m_lastMotionAt.end()
+            && envelope.createdAt - lastMotion->second
+                < policy.minMotionIntervalSeconds) {
+            return reject("motion-rate-exceeded");
+        }
+    }
+
     m_lastSequence[key] = envelope.senderSequence;
     if (envelope.kind == DeliveryKind::Motion)
         m_lastMotionAt[key] = envelope.createdAt;
     return {true, "accepted"};
+}
+
+DeliveryValidation DeliveryIngress::receive(
+    const std::string& contentTopic,
+    const PalaceDeliveryEnvelopeV1& envelope,
+    const DeliveryPolicy& policy,
+    const DeliverySignatureVerifier& verifier)
+{
+    const DeliveryValidation checked = validate(
+        contentTopic, envelope, policy, verifier);
+    if (!checked.accepted)
+        return checked;
+    return commitValidated(envelope, policy);
+}
+
+std::uint64_t DeliveryIngress::lastSequenceFor(
+    const std::string& senderUserId,
+    std::int64_t senderKeyEpoch) const
+{
+    const auto found = m_lastSequence.find(
+        senderUserId + "@" + std::to_string(senderKeyEpoch));
+    return found == m_lastSequence.end() ? 0U : found->second;
 }
 
 DeliverySequenceStateV1 DeliveryIngress::sequenceState() const

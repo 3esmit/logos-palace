@@ -1,62 +1,121 @@
 # Contributing
 
 Contributions are welcome while Logos Palace is developed as an experimental
-Basecamp MVP.
+Basecamp testnet MVP.
 
-## Before changing code
+## Preserve the architecture
 
-Preserve these boundaries:
+- Palace state, instruction, guest, and image-build source stays under
+  `program/` in this repository.
+- The MVP Basecamp package set remains the exact six-package set
+  documented in [README.md](README.md).
+- QML does not call Delivery, Storage, LEZ, wallet APIs, or arbitrary
+  filesystem paths.
+- `palace_core` owns network, persistence, authority, finality, and recovery
+  composition.
+- `palace_vm` remains deterministic and authority-free.
+- Delivery publication is never treated as LEZ finality.
+- Cached, malformed, or ambiguously bound external data fails closed.
 
-- Palace program and guest source stays in this repository;
-- QML does not call Delivery, Storage, LEZ, or arbitrary filesystem paths;
-- `palace_core` owns network, persistence, authority, and recovery composition;
-- `palace_vm` remains deterministic and authority-free;
-- Delivery publication is never treated as LEZ finality;
-- cached or malformed external data fails closed.
-
-Prefer a deep implementation behind a small interface. Put behavioral tests at
-module, generated-API, process, and persistence seams when possible.
+Prefer a deep implementation behind a small interface. Add behavior tests at
+module, generated-API, process, finality, and persistence seams.
 
 ## Development workflow
 
 1. Fork the repository and create a focused branch.
-2. Add or update a regression/contract test for observable behavior.
+2. Add or update a regression or contract test for observable behavior.
 3. Implement the smallest coherent change.
-4. Run affected checks.
-5. Open a pull request describing behavior, evidence, compatibility, and
+4. Run the affected checks.
+5. Inspect the diff for unrelated changes and sensitive material.
+6. Open a pull request describing behavior, evidence, compatibility, and
    remaining limitations.
 
-Do not commit credentials, testnet private keys, node data, generated build
-directories, or local `.3esmit` material.
+When a pinned platform dependency needs a fix, check its upstream repository
+first. If the fix is absent, keep the fork patch focused and link its issue and
+pull request when updating the pin.
 
-## Checks
+Do not commit credentials, recovery phrases, private keys, node data, generated
+build directories, acceptance artifacts, or local-only project material.
 
-C++ modules:
+## Build and checks
+
+Build the exact six portable packages:
+
+```sh
+nix build \
+  .#palace-vm-lgx-portable \
+  .#palace-core-lgx-portable \
+  .#logos-palace-ui-lgx-portable \
+  .#delivery-module-lgx-portable \
+  .#storage-module-lgx-portable \
+  .#lez-core-lgx-portable
+```
+
+Run C++ contract checks:
 
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
-  .#checks.x86_64-linux.palace-core-contracts \
-  .#palace-vm-lgx-portable \
-  .#palace-core-lgx-portable \
-  .#logos-palace-ui-lgx-portable
+  .#checks.x86_64-linux.palace-core-contracts
 ```
 
-Palace LEZ program:
+Run Palace program checks:
 
 ```sh
 cargo test --manifest-path program/Cargo.toml --workspace
 cargo clippy --manifest-path program/Cargo.toml --workspace --all-targets -- -D warnings
 cargo test --manifest-path program/palace_program/methods/guest/Cargo.toml
 cargo clippy --manifest-path program/palace_program/methods/guest/Cargo.toml --all-targets -- -D warnings
+```
+
+Build the RISC Zero guest when the toolchain is installed:
+
+```sh
 cargo build --manifest-path program/palace_program/methods/Cargo.toml --release
 ```
 
-Inspect `git diff --check` and the final diff before committing.
+## Compiled acceptance
+
+Run the narrowest relevant Basecamp harness:
+
+```sh
+./scripts/run-basecamp-gate1.sh
+./scripts/run-basecamp-gate2.sh
+./scripts/run-basecamp-gate3.sh
+```
+
+The scripts fetch pinned dependencies, use temporary user directories, install
+unsigned development LGXs there, and write ignored evidence under
+`.artifacts/`. Never describe a package build or one gate as full MVP
+acceptance. Pull requests must identify the source snapshot, executed checks,
+and remaining runtime gates.
+
+The full runner has materially different effects:
+
+```sh
+./scripts/run-basecamp-mvp.sh
+```
+
+It registers public testnet identities and submits irreversible public-testnet
+LEZ actions to one fixed, initially uninitialized Palace root. It holds a
+global program/root lock and records one immutable source snapshot. After
+production Gate 3 evidence exists, continue only with the exact resume command
+and run directory printed by the runner. Review and sanitize reports, logs,
+public account and peer IDs, timings, and screenshots before publication.
+
+## Documentation
+
+Keep README status, architecture, security limits, commands, and package names
+consistent with the source. Check Markdown links and public-text hygiene, then
+run:
+
+```sh
+git diff --check
+```
 
 ## Commits and pull requests
 
-Use focused Conventional Commits where practical, for example:
+Use focused Conventional Commits where practical:
 
 ```text
 feat(core): publish verified Storage assets
@@ -65,8 +124,8 @@ test(delivery): cover replay after restart
 docs: document Basecamp acceptance limits
 ```
 
-Pull requests must state which clean runtime acceptance remains unverified.
-Passing unit or package checks must not be described as full MVP acceptance.
+Do not include credentials, local paths, private project notes, generated
+attribution, or unrelated environment details in commits or pull requests.
 
 ## Reporting bugs
 

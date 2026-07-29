@@ -16,6 +16,8 @@ logos_module(
         src/palace_sha256.cpp
         src/palace_vm_engine.h
         src/palace_vm_engine.cpp
+        src/palace_vm_finality.h
+        src/palace_vm_finality.cpp
         src/palace_vm_impl.h
         src/palace_vm_impl.cpp
     INCLUDE_DIRS src

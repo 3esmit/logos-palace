@@ -1,0 +1,11 @@
+[package]
+name = "palace-image-id"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ricardo Guilherme Schmidt"]
+license = "MIT"
+repository = "https://github.com/3esmit/logos-palace"
+publish = false
+
+[dependencies]
+risc0-binfmt = "=3.0.5"

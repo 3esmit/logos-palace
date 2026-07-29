@@ -39,6 +39,28 @@ bool hasCapability(const AuthoritySnapshotV1& snapshot,
     });
 }
 
+bool banWasAuthorizedAtIssuance(const AuthoritySnapshotV1& snapshot,
+                                const BanV1& ban,
+                                CapabilityKind capability,
+                                std::int64_t finalizedAt)
+{
+    if (ban.issuedBy == snapshot.ownerUserId)
+        return ban.authorizationGrantId.empty();
+    if (ban.authorizationGrantId.empty())
+        return hasCapability(
+            snapshot, ban.issuedBy, capability, ban.roomId, finalizedAt);
+    const auto grant = std::find_if(
+        snapshot.grants.begin(),
+        snapshot.grants.end(),
+        [&](const CapabilityGrantV1& value) {
+            return value.grantId == ban.authorizationGrantId
+                && value.subjectUserId == ban.issuedBy
+                && value.capability == capability
+                && scopeMatches(value.roomId, ban.roomId);
+        });
+    return grant != snapshot.grants.end();
+}
+
 bool uniqueAndNonEmpty(const std::vector<std::string>& values)
 {
     std::set<std::string> seen;
@@ -49,6 +71,18 @@ bool uniqueAndNonEmpty(const std::vector<std::string>& values)
     return true;
 }
 
+bool isLowerHex64(const std::string& value)
+{
+    return value.size() == 64U
+        && std::all_of(
+            value.begin(),
+            value.end(),
+            [](const unsigned char character) {
+                return (character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f');
+            });
+}
+
 bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalizedAt)
 {
     if (snapshot.palaceId.empty() || snapshot.ownerUserId.empty() || finalizedAt <= 0)
@@ -56,8 +90,11 @@ bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalize
 
     std::vector<std::string> roomIds;
     for (const RoomV1& room : snapshot.rooms) {
-        if (room.roomId.empty() || room.roomEpoch < 0 || room.sharedStateRoot.empty())
+        if (room.roomId.empty() || room.roomEpoch < 0
+            || (!room.sharedStateRoot.empty()
+                && !isLowerHex64(room.sharedStateRoot))) {
             return false;
+        }
         roomIds.push_back(room.roomId);
     }
     if (!uniqueAndNonEmpty(roomIds) || !hasRoom(snapshot, snapshot.entryRoomId))
@@ -94,12 +131,12 @@ bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalize
             || namesUser == namesAsset || (!ban.roomId.empty() && !hasRoom(snapshot, ban.roomId))) {
             return false;
         }
-        if (namesUser && !hasCapability(snapshot, ban.issuedBy, CapabilityKind::ModerateUser,
-                                        ban.roomId, finalizedAt)) {
+        if (namesUser && !banWasAuthorizedAtIssuance(
+                snapshot, ban, CapabilityKind::ModerateUser, finalizedAt)) {
             return false;
         }
-        if (namesAsset && !hasCapability(snapshot, ban.issuedBy, CapabilityKind::ModerateAsset,
-                                         ban.roomId, finalizedAt)) {
+        if (namesAsset && !banWasAuthorizedAtIssuance(
+                snapshot, ban, CapabilityKind::ModerateAsset, finalizedAt)) {
             return false;
         }
         banIds.push_back(ban.banId);
@@ -169,6 +206,24 @@ const std::string& AuthorityProjection::palaceId() const
 {
     static const std::string kEmpty;
     return m_hasSnapshot ? m_snapshot.palaceId : kEmpty;
+}
+
+const std::string& AuthorityProjection::entryRoomId() const
+{
+    static const std::string kEmpty;
+    return m_hasSnapshot ? m_snapshot.entryRoomId : kEmpty;
+}
+
+std::int64_t AuthorityProjection::roomEpoch(
+    const std::string& roomId) const
+{
+    if (!m_hasSnapshot)
+        return -1;
+    const auto found = std::find_if(
+        m_snapshot.rooms.begin(),
+        m_snapshot.rooms.end(),
+        [&](const RoomV1& room) { return room.roomId == roomId; });
+    return found == m_snapshot.rooms.end() ? -1 : found->roomEpoch;
 }
 
 std::int64_t AuthorityProjection::finalizedAt() const
