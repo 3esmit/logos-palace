@@ -1692,7 +1692,7 @@ try {
     workers.a,
     "gate2Remove",
     ["bad prop!"],
-    { exact: "rejected=delivery-publish;preflight=invalid-or-banned-payload" },
+    { exact: "rejected=prop-id-invalid" },
   );
 
   const speechBaseline = await captureSpeechSettlementBoundary();
