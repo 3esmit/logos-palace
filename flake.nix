@@ -344,6 +344,7 @@
               ${acceptanceSource}/tests/basecamp_active_scope_preflight.test.mjs \
               ${acceptanceSource}/tests/basecamp_claim_lifecycle.test.mjs \
               ${acceptanceSource}/tests/basecamp_direct_child.test.mjs \
+              ${acceptanceSource}/tests/basecamp_gate2_settlement.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_cold_state.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_creator_identity.test.mjs \
               ${acceptanceSource}/tests/basecamp_lez_timing.test.mjs \

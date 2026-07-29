@@ -74,6 +74,9 @@ after its first published release.
 - Basecamp dependency pin advanced to the verified-asset bridge candidate at
   its pinned revision, with installed-variant producer-capability recovery for
   portable packages.
+- Gate 2 acceptance accounting binds every accepted Delivery envelope to
+  exact persisted sender egress and receiver ingress sequences, including
+  periodic presence envelopes interleaved with ordered speech.
 
 ### Security
 

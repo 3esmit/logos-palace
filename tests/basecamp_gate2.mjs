@@ -30,6 +30,10 @@ import {
   signalDirectChild,
   waitForDirectChildExit,
 } from "./basecamp_direct_child.mjs";
+import {
+  validateGate2SettlementBoundary,
+  validateGate2SpeechSettlement,
+} from "./basecamp_gate2_settlement.mjs";
 
 const [
   basecampArgument,
@@ -993,6 +997,69 @@ async function waitQuiescent(worker) {
   );
 }
 
+async function captureSpeechSettlementBoundary() {
+  return waitFor(
+    async () => {
+      const firstSnapshots = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await snapshot(workers[label]),
+          ]),
+        ),
+      );
+      const firstSessions = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await sessionEvidence(label),
+          ]),
+        ),
+      );
+      const quietWindowStarted = performance.now();
+      await sleep(2000);
+      const secondSnapshots = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await snapshot(workers[label]),
+          ]),
+        ),
+      );
+      const secondSessions = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await sessionEvidence(label),
+          ]),
+        ),
+      );
+      const observedQuietWindowMs = Math.round(
+        performance.now() - quietWindowStarted,
+      );
+      validateGate2SettlementBoundary({
+        firstSnapshots,
+        firstSessions,
+        secondSnapshots,
+        secondSessions,
+      });
+      return {
+        firstSnapshots,
+        firstSessions,
+        secondSnapshots,
+        secondSessions,
+        minimumQuietWindowMs: 2000,
+        observedQuietWindowMs,
+      };
+    },
+    {
+      timeout: 120_000,
+      interval: 250,
+      description: "stable caught-up pre-speech Delivery boundary",
+    },
+  );
+}
+
 async function waitRawState(
   worker,
   baseline,
@@ -1600,15 +1667,6 @@ try {
   );
   timings.rawAcceptanceMs = Math.round(performance.now() - rawStarted);
 
-  const statusBeforeSpeech = Object.fromEntries(
-    labels.map((label) => [label, settledAfterRaw[label].status]),
-  );
-  const sessionBeforeSpeech = Object.fromEntries(
-    await Promise.all(
-      labels.map(async (label) => [label, await sessionEvidence(label)]),
-    ),
-  );
-
   negativeSeams.emptySpeech = await invoke(
     workers.b,
     "gate2Say",
@@ -1636,6 +1694,15 @@ try {
     ["bad prop!"],
     { exact: "rejected=delivery-publish;preflight=invalid-or-banned-payload" },
   );
+
+  const speechBaseline = await captureSpeechSettlementBoundary();
+  const statusBeforeSpeech = Object.fromEntries(
+    labels.map((label) => [
+      label,
+      speechBaseline.secondSnapshots[label].status,
+    ]),
+  );
+  const sessionBeforeSpeech = speechBaseline.secondSessions;
 
   const speechStarted = performance.now();
   const speechReceipts = [];
@@ -1722,75 +1789,54 @@ try {
     ]),
   );
   const speechConvergenceStarted = performance.now();
-  const speechSnapshots = Object.fromEntries(
-    await Promise.all(
-      labels.map(async (label) => [
-        label,
-        await waitProjection(
-          workers[label],
-          speechExpected,
-          "speech convergence",
-        ),
-      ]),
+  await Promise.all(
+    labels.map((label) =>
+      waitProjection(
+        workers[label],
+        speechExpected,
+        "speech convergence",
+      ),
     ),
   );
-  await waitFor(
+  const speechSettlement = await waitFor(
     async () => {
-      const observed = await Promise.all(
-        labels.map((label) => snapshot(workers[label])),
+      const snapshots = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await snapshot(workers[label]),
+          ]),
+        ),
       );
-      for (let index = 0; index < labels.length; index += 1) {
-        const label = labels[index];
-        const status = observed[index].status;
-        const baseline = statusBeforeSpeech[label];
-        const acceptedDelta =
-          status.received_accepted - baseline.received_accepted;
-        if (
-          acceptedDelta !== speechCount ||
-          status.received_rejected !== baseline.received_rejected ||
-          rejectionCounterNames.some(
-            (name) => status[name] !== baseline[name],
-          ) ||
-          status.outbox !== 0 ||
-          status.correlated !== 0
-        ) {
-          throw new Error(
-            `${label} counters not settled: ${JSON.stringify(status)}`,
-          );
-        }
-      }
-      return observed;
+      const sessionAfter = Object.fromEntries(
+        await Promise.all(
+          labels.map(async (label) => [
+            label,
+            await sessionEvidence(label),
+          ]),
+        ),
+      );
+      const validated = validateGate2SpeechSettlement({
+        perSenderCount,
+        statusBefore: statusBeforeSpeech,
+        snapshots,
+        sessionBefore: sessionBeforeSpeech,
+        sessionAfter,
+      });
+      return { snapshots, sessionAfter, ...validated };
     },
     {
       timeout: 120_000,
-      description: "speech payload counters and outboxes",
+      description: "speech, presence, counters, and persisted sequences",
     },
   );
   timings.orderedSpeechConvergenceMs = Math.round(
     performance.now() - speechConvergenceStarted,
   );
 
-  const sessionAfterSpeech = Object.fromEntries(
-    await Promise.all(
-      labels.map(async (label) => [label, await sessionEvidence(label)]),
-    ),
-  );
-  const speechSequenceEvidence = {};
-  for (const label of labels) {
-    const delta =
-      sessionAfterSpeech[label].egressSequence -
-      sessionBeforeSpeech[label].egressSequence;
-    if (delta < perSenderCount[label]) {
-      throw new Error(
-        `${label} ordered speech sequence delta=${delta}, minimum=${perSenderCount[label]}`,
-      );
-    }
-    speechSequenceEvidence[label] = {
-      delta,
-      speechCount: perSenderCount[label],
-      interleavedPresenceCount: delta - perSenderCount[label],
-    };
-  }
+  const speechSnapshots = speechSettlement.snapshots;
+  const sessionAfterSpeech = speechSettlement.sessionAfter;
+  const speechSequenceEvidence = speechSettlement.sequenceEvidence;
   const speechAllNodesLatencies = speechDeliveryObservations.map(
     (observation) => observation.allNodesLatencyMs,
   );
@@ -2172,6 +2218,17 @@ try {
       snapshots: speechSnapshots,
       sessionBefore: sessionBeforeSpeech,
       sessionAfter: sessionAfterSpeech,
+      baselineStability: {
+        minimumQuietWindowMs: speechBaseline.minimumQuietWindowMs,
+        observedQuietWindowMs: speechBaseline.observedQuietWindowMs,
+        statusProbe: Object.fromEntries(
+          labels.map((label) => [
+            label,
+            speechBaseline.firstSnapshots[label].status,
+          ]),
+        ),
+        sessionProbe: speechBaseline.firstSessions,
+      },
       sequenceEvidence: speechSequenceEvidence,
       sendToReceiveLatency: speechDeliveryLatency,
     },

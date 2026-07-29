@@ -370,6 +370,90 @@ test("Gate 2 signal handlers precede first worker spawn", async () => {
   assert.ok(signalHandler < workerLoop);
 });
 
+test("Gate 2 publication binds accepted traffic to persisted sequences", async () => {
+  const source = await readFile(runnerPath, "utf8");
+  const validatorStart = source.indexOf("def valid_gate2_core:");
+  const validatorEnd = source.indexOf(
+    "\n\n      .[0] as $candidate",
+    validatorStart,
+  );
+  assert.notEqual(validatorStart, -1);
+  assert.notEqual(validatorEnd, -1);
+  const validator = source.slice(validatorStart, validatorEnd);
+  for (const marker of [
+    ".orderedSpeech.baselineStability",
+    '"minimumQuietWindowMs",',
+    '"observedQuietWindowMs",',
+    ".baselineStability.statusProbe",
+    ".baselineStability.sessionProbe",
+    "$report.orderedSpeech.sequenceEvidence",
+    "$report.orderedSpeech.sessionBefore",
+    "$report.orderedSpeech.sessionAfter",
+    "$accepted_delta",
+    ".ingressSequences[",
+    ".correlated == 0",
+  ]) {
+    assert.match(validator, new RegExp(
+      marker.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    ));
+  }
+  ordered(validator, [
+    "$probe.received_accepted,",
+    "$probe.received_rejected,",
+    "$probe.rejected_scope,",
+    "$probe.rejected_expired,",
+    "$probe.rejected_signature,",
+    "$probe.rejected_replay,",
+    "$probe.rejected_payload,",
+    "$probe.rejected_other,",
+    "$probe.outbox,",
+    "$probe.correlated,",
+    "$before.received_accepted,",
+    "$before.received_rejected,",
+    "$before.rejected_scope,",
+    "$before.rejected_expired,",
+    "$before.rejected_signature,",
+    "$before.rejected_replay,",
+    "$before.rejected_payload,",
+    "$before.rejected_other,",
+    "$before.outbox,",
+    "$before.correlated,",
+    "$after.received_accepted,",
+    "$after.received_rejected,",
+    "$after.rejected_scope,",
+    "$after.rejected_expired,",
+    "$after.rejected_signature,",
+    "$after.rejected_replay,",
+    "$after.rejected_payload,",
+    "$after.rejected_other,",
+    "$after.outbox,",
+    "$after.correlated",
+    "valid_nonnegative_integer",
+    "$before.outbox == 0",
+    "$before.correlated == 0",
+  ]);
+  assert.match(
+    validator,
+    /\$probe\.senderKey == \$before\.senderKey[\s\S]*?\$probe\.egressSequence == \$before\.egressSequence[\s\S]*?\$probe\.ingressSequences == \$before\.ingressSequences/,
+  );
+  assert.equal(
+    validator.split(
+      "$report.orderedSpeech.sessionBefore[$receiver]",
+    ).length - 1,
+    1,
+  );
+  assert.equal(
+    validator.split(
+      "$report.orderedSpeech.sessionAfter[$receiver]",
+    ).length - 1,
+    1,
+  );
+  assert.doesNotMatch(
+    validator,
+    /received_accepted\s*\+\s*300/,
+  );
+});
+
 test("Gate 4 provides the exact pidfd helper before worker startup", async () => {
   const source = await readFile(gate4RunnerPath, "utf8");
   ordered(source, [

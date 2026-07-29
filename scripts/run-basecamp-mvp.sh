@@ -3200,21 +3200,219 @@ gate_report_passes() {
           and (
             .orderedSpeech.sendToReceiveLatency.observations | length
           ) == 300
-          and all(
-            ["a", "b", "c"][];
-            . as $label
-            | $report.orderedSpeech.snapshots[$label].status
-                .received_accepted
-              == (
-                $report.orderedSpeech.statusBefore[$label]
-                  .received_accepted + 300
+          and (
+            .orderedSpeech.baselineStability
+            | exact_object_keys([
+                "minimumQuietWindowMs",
+                "observedQuietWindowMs",
+                "statusProbe",
+                "sessionProbe"
+              ])
+          )
+          and .orderedSpeech.baselineStability.minimumQuietWindowMs
+            == 2000
+          and (
+            .orderedSpeech.baselineStability.observedQuietWindowMs
+            | valid_nonnegative_integer
+          )
+          and .orderedSpeech.baselineStability.observedQuietWindowMs
+            >= .orderedSpeech.baselineStability.minimumQuietWindowMs
+          and (
+            .orderedSpeech.baselineStability.statusProbe
+            | exact_object_keys(["a", "b", "c"])
+          )
+          and (
+            .orderedSpeech.baselineStability.sessionProbe
+            | exact_object_keys(["a", "b", "c"])
+          )
+          and (
+            ["a", "b", "c"] as $labels
+            | (
+                [
+                  $labels[] as $sender
+                  | $report.orderedSpeech.sequenceEvidence[$sender]
+                      .delta
+                ]
+                | add
+              ) as $accepted_delta
+            | ($accepted_delta | valid_nonnegative_integer)
+              and (
+                $report.orderedSpeech.sequenceEvidence
+                | exact_object_keys($labels)
               )
-              and $report.orderedSpeech.snapshots[$label].status
-                  .received_rejected
-                == $report.orderedSpeech.statusBefore[$label]
-                  .received_rejected
-              and $report.orderedSpeech.snapshots[$label].status.outbox
-                == 0
+              and (
+                [
+                  $labels[] as $sender
+                  | $report.orderedSpeech.sessionAfter[$sender]
+                      .senderKey
+                ]
+                | unique
+                | length
+              ) == 3
+              and all(
+                $labels[];
+                . as $sender
+                | (
+                    $report.orderedSpeech.sessionBefore[$sender]
+                  ) as $before
+                | (
+                    $report.orderedSpeech.sessionAfter[$sender]
+                  ) as $after
+                | (
+                    $report.orderedSpeech.baselineStability
+                      .sessionProbe[$sender]
+                  ) as $probe
+                | (
+                    $after.egressSequence - $before.egressSequence
+                  ) as $delta
+                | ($before.senderKey | type) == "string"
+                  and ($before.senderKey | length) > 0
+                  and $after.senderKey == $before.senderKey
+                  and $probe.senderKey == $before.senderKey
+                  and $probe.egressSequence == $before.egressSequence
+                  and $probe.ingressSequences == $before.ingressSequences
+                  and (
+                    $before.egressSequence
+                    | valid_nonnegative_integer
+                  )
+                  and (
+                    $after.egressSequence
+                    | valid_nonnegative_integer
+                  )
+                  and ($delta | valid_nonnegative_integer)
+                  and $delta
+                    >= $report.orderedSpeech.perSenderCount[$sender]
+                  and (
+                    $report.orderedSpeech.sequenceEvidence[$sender]
+                    == {
+                      delta: $delta,
+                      speechCount:
+                        $report.orderedSpeech.perSenderCount[$sender],
+                      interleavedPresenceCount:
+                        (
+                          $delta
+                          - $report.orderedSpeech
+                              .perSenderCount[$sender]
+                        )
+                    }
+                  )
+              )
+              and all(
+                $labels[];
+                . as $receiver
+                | (
+                    $report.orderedSpeech.statusBefore[$receiver]
+                  ) as $before
+                | (
+                    $report.orderedSpeech.snapshots[$receiver].status
+                  ) as $after
+                | (
+                    $report.orderedSpeech.baselineStability
+                      .statusProbe[$receiver]
+                  ) as $probe
+                | all(
+                    [
+                      $probe.received_accepted,
+                      $probe.received_rejected,
+                      $probe.rejected_scope,
+                      $probe.rejected_expired,
+                      $probe.rejected_signature,
+                      $probe.rejected_replay,
+                      $probe.rejected_payload,
+                      $probe.rejected_other,
+                      $probe.outbox,
+                      $probe.correlated,
+                      $before.received_accepted,
+                      $before.received_rejected,
+                      $before.rejected_scope,
+                      $before.rejected_expired,
+                      $before.rejected_signature,
+                      $before.rejected_replay,
+                      $before.rejected_payload,
+                      $before.rejected_other,
+                      $before.outbox,
+                      $before.correlated,
+                      $after.received_accepted,
+                      $after.received_rejected,
+                      $after.rejected_scope,
+                      $after.rejected_expired,
+                      $after.rejected_signature,
+                      $after.rejected_replay,
+                      $after.rejected_payload,
+                      $after.rejected_other,
+                      $after.outbox,
+                      $after.correlated
+                    ][];
+                    valid_nonnegative_integer
+                  )
+                  and (
+                    ($probe | {
+                      received_accepted,
+                      received_rejected,
+                      rejected_scope,
+                      rejected_expired,
+                      rejected_signature,
+                      rejected_replay,
+                      rejected_payload,
+                      rejected_other,
+                      outbox,
+                      correlated
+                    })
+                    == ($before | {
+                      received_accepted,
+                      received_rejected,
+                      rejected_scope,
+                      rejected_expired,
+                      rejected_signature,
+                      rejected_replay,
+                      rejected_payload,
+                      rejected_other,
+                      outbox,
+                      correlated
+                    })
+                  )
+                  and $before.outbox == 0
+                  and $before.correlated == 0
+                  and (
+                    $after.received_accepted
+                    == $before.received_accepted + $accepted_delta
+                  )
+                  and $after.received_rejected
+                    == $before.received_rejected
+                  and $after.rejected_scope == $before.rejected_scope
+                  and $after.rejected_expired == $before.rejected_expired
+                  and $after.rejected_signature
+                    == $before.rejected_signature
+                  and $after.rejected_replay == $before.rejected_replay
+                  and $after.rejected_payload == $before.rejected_payload
+                  and $after.rejected_other == $before.rejected_other
+                  and $after.outbox == 0
+                  and $after.correlated == 0
+                  and all(
+                    $labels[];
+                    . as $sender
+                    | (
+                        (
+                          $report.orderedSpeech.sessionBefore[$receiver]
+                            .ingressSequences[
+                              $report.orderedSpeech
+                                .sessionBefore[$sender].senderKey
+                            ]
+                          == $report.orderedSpeech.sessionBefore[$sender]
+                            .egressSequence
+                        )
+                        and (
+                          $report.orderedSpeech.sessionAfter[$receiver]
+                            .ingressSequences[
+                              $report.orderedSpeech
+                                .sessionAfter[$sender].senderKey
+                            ]
+                          == $report.orderedSpeech.sessionAfter[$sender]
+                            .egressSequence
+                        )
+                      )
+                  )
+              )
           )
           and all(
             [.orderedSpeech.sendToReceiveLatency.allNodes.p50Ms,
