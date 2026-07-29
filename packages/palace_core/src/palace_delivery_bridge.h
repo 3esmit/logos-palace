@@ -47,6 +47,12 @@ enum class DeliveryNativeNodeState {
     Stopping,
 };
 
+// Maps the fixed native lifecycle vocabulary into the recovery state model.
+// A fresh Basecamp process reports `uninitialized`: no native node exists, so
+// recovery must be allowed to create one just as it would after `stopped`.
+std::optional<DeliveryNativeNodeState> parseDeliveryNativeNodeStateName(
+    const std::string& value);
+
 enum class DeliveryRecoveryState {
     Idle,
     StopDispatchPending,

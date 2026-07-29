@@ -41,6 +41,24 @@ LOGOS_TEST(delivery_bridge_normalizes_only_known_connection_states) {
         palace::parseDeliveryConnectionState("probably-connected").has_value());
 }
 
+LOGOS_TEST(delivery_bridge_maps_fresh_native_node_to_restartable_state) {
+    const auto uninitialized =
+        palace::parseDeliveryNativeNodeStateName("uninitialized");
+    LOGOS_ASSERT_TRUE(uninitialized.has_value());
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(*uninitialized),
+        static_cast<int>(palace::DeliveryNativeNodeState::Stopped));
+
+    const auto initializing =
+        palace::parseDeliveryNativeNodeStateName("initializing");
+    LOGOS_ASSERT_TRUE(initializing.has_value());
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(*initializing),
+        static_cast<int>(palace::DeliveryNativeNodeState::Unknown));
+    LOGOS_ASSERT_FALSE(
+        palace::parseDeliveryNativeNodeStateName("unexpected").has_value());
+}
+
 LOGOS_TEST(delivery_bridge_classifies_only_fixed_rejection_reasons) {
     LOGOS_ASSERT_EQ(
         static_cast<int>(palace::classifyDeliveryRejection(

@@ -38,6 +38,22 @@ std::string normalizedState(const std::string& value)
 
 } // namespace
 
+std::optional<DeliveryNativeNodeState> parseDeliveryNativeNodeStateName(
+    const std::string& value)
+{
+    if (value == "uninitialized" || value == "stopped")
+        return DeliveryNativeNodeState::Stopped;
+    if (value == "starting")
+        return DeliveryNativeNodeState::Starting;
+    if (value == "running")
+        return DeliveryNativeNodeState::Running;
+    if (value == "stopping")
+        return DeliveryNativeNodeState::Stopping;
+    if (value == "initializing" || value == "destroying")
+        return DeliveryNativeNodeState::Unknown;
+    return std::nullopt;
+}
+
 DeliveryRequestCorrelation::DeliveryRequestCorrelation(
     std::size_t maximumEntries)
     : m_maximumEntries(maximumEntries)

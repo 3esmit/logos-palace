@@ -665,21 +665,8 @@ parseDeliveryNativeNodeState(const std::string& payload)
         document.object().value(QStringLiteral("state"));
     if (!stateValue.isString())
         return std::nullopt;
-    const QString state = stateValue.toString();
-    if (state == QStringLiteral("stopped"))
-        return palace::DeliveryNativeNodeState::Stopped;
-    if (state == QStringLiteral("starting"))
-        return palace::DeliveryNativeNodeState::Starting;
-    if (state == QStringLiteral("running"))
-        return palace::DeliveryNativeNodeState::Running;
-    if (state == QStringLiteral("stopping"))
-        return palace::DeliveryNativeNodeState::Stopping;
-    if (state == QStringLiteral("uninitialized")
-        || state == QStringLiteral("initializing")
-        || state == QStringLiteral("destroying")) {
-        return palace::DeliveryNativeNodeState::Unknown;
-    }
-    return std::nullopt;
+    return palace::parseDeliveryNativeNodeStateName(
+        stateValue.toString().toStdString());
 }
 
 } // namespace
