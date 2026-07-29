@@ -59,6 +59,45 @@ LOGOS_TEST(delivery_bridge_maps_fresh_native_node_to_restartable_state) {
         palace::parseDeliveryNativeNodeStateName("unexpected").has_value());
 }
 
+LOGOS_TEST(delivery_recovery_restarts_from_fresh_native_process) {
+    palace::DeliveryRecoveryCoordinator recovery;
+    const palace::DeliveryRecoveryTransition resume = recovery.resume(false);
+    LOGOS_ASSERT_TRUE(resume.accepted);
+    LOGOS_ASSERT_TRUE(resume.interruptPendingWork);
+    LOGOS_ASSERT_EQ(resume.actions.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(resume.actions.at(0).kind),
+        static_cast<int>(
+            palace::DeliveryRecoveryActionKind::QueryNodeStatus));
+
+    const auto nativeState =
+        palace::parseDeliveryNativeNodeStateName("uninitialized");
+    LOGOS_ASSERT_TRUE(nativeState.has_value());
+    const palace::DeliveryRecoveryTransition restart =
+        recovery.nodeStatusResult(
+            resume.actions.at(0).commandId, true, *nativeState);
+    LOGOS_ASSERT_TRUE(restart.accepted);
+    LOGOS_ASSERT_TRUE(restart.nativeRunning.has_value());
+    LOGOS_ASSERT_FALSE(*restart.nativeRunning);
+    LOGOS_ASSERT_EQ(restart.actions.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(restart.actions.at(0).kind),
+        static_cast<int>(
+            palace::DeliveryRecoveryActionKind::RestartSession));
+
+    const palace::DeliveryRecoveryTransition dispatched =
+        recovery.restartSessionResult(
+            restart.actions.at(0).commandId, true);
+    LOGOS_ASSERT_TRUE(dispatched.accepted);
+    const palace::DeliveryRecoveryTransition online =
+        recovery.nodeStarted(true);
+    LOGOS_ASSERT_TRUE(online.accepted);
+    LOGOS_ASSERT_TRUE(online.forwardNodeStarted);
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(recovery.state()),
+        static_cast<int>(palace::DeliveryRecoveryState::Idle));
+}
+
 LOGOS_TEST(delivery_bridge_classifies_only_fixed_rejection_reasons) {
     LOGOS_ASSERT_EQ(
         static_cast<int>(palace::classifyDeliveryRejection(
