@@ -272,7 +272,10 @@ composition.
 The active claim binds source commit, snapshot NAR, runner digest, runtime
 manifest, run directory, GC root, and process-scope identity. Safe pre-Gate-3
 roll-forward retires the predecessor slice and brackets replacement with two
-claim-bound process scans. Gate-3-entered claims cannot roll forward.
+claim-bound process scans. Gate-3-entered claims cannot roll forward, except
+for one audited pre-public-write fingerprint rejection whose immutable source,
+reports, and retirement certificate all match exact digests. That recovery
+retains predecessor-local state and still rejects every other entered claim.
 Completed claims bind the compiled report digest and must reopen all evidence
 before public projection.
 

@@ -278,7 +278,9 @@ owns that program/root pair. The runner:
 - publishes sanitized evidence only after the compiled report and durable run
   completion are reopened and verified;
 - stores persistent user state and reports in one owner-only run directory;
-- refuses a new production run after Gate 3 evidence exists;
+- refuses a new production run after Gate 3 evidence exists, except for one
+  audited pre-public-write fingerprint rejection with exact source and report
+  digests;
 - resumes only when given that exact run directory and source snapshot.
 
 An interruption first requests exact unit/slice cleanup. If that cleanup

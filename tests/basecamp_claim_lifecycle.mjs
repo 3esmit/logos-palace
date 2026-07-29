@@ -61,6 +61,44 @@ export const auditedLegacyPreGate3 = Object.freeze({
     "d22d60a15a1b7310d40048735abd3f6850ecf3fd9cddddfec588b8348a9027b3",
 });
 
+// This is a one-shot recovery audit for the immutable run that entered Gate 3
+// before rejecting the LEZ module's equivalent root-origin spelling. The
+// audited report proves that the run stopped before its first public write.
+export const auditedPrePublicWriteGate3Failure = Object.freeze({
+  gitCommit: "6866fe090a9e3b77625869606704bb6398d589a2",
+  snapshotNarHash:
+    "sha256-yVIq0V3ALbozFlZR4uNnYGuWnhXeeZnetsapy0jp9b8=",
+  snapshotNarSize: 7_078_968,
+  snapshotRunnerSha256:
+    "7241b93c58f896958be425736b8918b676b9b6e0f0e68c5c34dbe017a0cd3fa9",
+  runtimeManifestSha256:
+    "debdf168bdb8e0e5de7b1750207eebd990db262d4ac5ad33836745ac235fad1c",
+  compiledReportSha256:
+    "c063493c5e101835a437eae85daa5afb29050fdf2d23a70cbe74d08323b398cb",
+  gate3ReportSha256:
+    "4fac76d54d2a69758b30473fd0fde42287961f4b8103ad964e6d8cef777a14e6",
+});
+
+function validPrePublicWriteAudit(audit) {
+  return exactKeys(audit, [
+    "compiledReportSha256",
+    "gate3ReportSha256",
+    "gitCommit",
+    "runtimeManifestSha256",
+    "snapshotNarHash",
+    "snapshotNarSize",
+    "snapshotRunnerSha256",
+  ])
+    && sourceCommitPattern.test(audit.gitCommit)
+    && narHashPattern.test(audit.snapshotNarHash)
+    && Number.isSafeInteger(audit.snapshotNarSize)
+    && audit.snapshotNarSize > 0
+    && sha256Pattern.test(audit.snapshotRunnerSha256)
+    && sha256Pattern.test(audit.runtimeManifestSha256)
+    && sha256Pattern.test(audit.compiledReportSha256)
+    && sha256Pattern.test(audit.gate3ReportSha256);
+}
+
 function exactKeys(value, expected) {
   return value !== null
     && typeof value === "object"
@@ -473,7 +511,12 @@ async function readClaim(claimPath, uid) {
   }
 }
 
-function validateFailedReport(report, predecessor) {
+function validateFailedReport(
+  report,
+  predecessor,
+  allowedFailurePhases,
+  description,
+) {
   const expectedGateReports = {
     gate0: null,
     gate1: "gate1/gate1-report.json",
@@ -503,13 +546,13 @@ function validateFailedReport(report, predecessor) {
     || !exactJson(report.scope.implementedGates, implementedGates)
     || !exactJson(report.scope.pendingGates, [])
     || !exactKeys(report.failure, ["phase", "message"])
-    || !preGate3Phases.has(report.failure.phase)
+    || !allowedFailurePhases.has(report.failure.phase)
     || typeof report.failure.message !== "string"
     || report.failure.message.length <= 0
     || report.failure.message.length > 1024
     || !exactKeys(report.gates, implementedGates)
   ) {
-    throw new Error("pre-Gate 3 failed compiled report is invalid");
+    throw new Error(`${description} failed compiled report is invalid`);
   }
   for (const gate of implementedGates) {
     if (
@@ -517,10 +560,28 @@ function validateFailedReport(report, predecessor) {
       || report.gates[gate].status !== "unknown"
       || report.gates[gate].report !== expectedGateReports[gate]
     ) {
-      throw new Error("pre-Gate 3 failed compiled gate state is invalid");
+      throw new Error(`${description} failed compiled gate state is invalid`);
     }
   }
   return report.failure.phase;
+}
+
+function validatePreGate3FailedReport(report, predecessor) {
+  return validateFailedReport(
+    report,
+    predecessor,
+    preGate3Phases,
+    "pre-Gate 3",
+  );
+}
+
+function validateAuditedGate3FailedReport(report, predecessor) {
+  return validateFailedReport(
+    report,
+    predecessor,
+    new Set(["gate3"]),
+    "audited Gate 3",
+  );
 }
 
 async function validatePredecessorIdentity({
@@ -636,7 +697,10 @@ async function validatePreGate3Artifacts({
     4 * 1024 * 1024,
     "predecessor compiled report",
   );
-  const failurePhase = validateFailedReport(compiled.value, predecessor);
+  const failurePhase = validatePreGate3FailedReport(
+    compiled.value,
+    predecessor,
+  );
 
   if (claimVersion === 1) {
     if (
@@ -677,6 +741,188 @@ async function validatePreGate3Artifacts({
   return {
     compiledReportSha256: compiled.sha256,
     failurePhase,
+  };
+}
+
+function matchesAuditedPrePublicWriteFailure(predecessor, audit) {
+  return predecessor.version === 2
+    && predecessor.gitCommit === audit.gitCommit
+    && predecessor.snapshotNarHash === audit.snapshotNarHash
+    && predecessor.snapshotNarSize === audit.snapshotNarSize
+    && predecessor.snapshotRunnerSha256 === audit.snapshotRunnerSha256
+    && predecessor.runtimeManifestSha256 === audit.runtimeManifestSha256;
+}
+
+function validatesAuditedPrePublicWriteGate3Report(report, predecessor) {
+  if (
+    !exactKeys(report, [
+      "basecampBinarySha256",
+      "basecampRevision",
+      "blockers",
+      "cleanup",
+      "creatorOffline",
+      "failure",
+      "fullGate3",
+      "identities",
+      "installedPackages",
+      "packageHashes",
+      "pngRecovery",
+      "productSnapshot",
+      "productSnapshotNarHash",
+      "productSnapshotNarSize",
+      "productionIdentityMode",
+      "providerBRetentionProofs",
+      "releasePreflight",
+      "runtimeOutputManifestSha256",
+      "schema",
+      "snapshotRunnerSha256",
+      "sourceCommit",
+      "startup",
+      "status",
+      "storageConfigs",
+      "storageStartup",
+      "version",
+    ])
+    || report.schema !== "logos.palace.basecamp-gate3-report"
+    || report.version !== 1
+    || report.status !== "failed"
+    || report.fullGate3 !== "failed"
+    || report.productSnapshot !== predecessor.productSnapshot
+    || report.sourceCommit !== predecessor.gitCommit
+    || report.productSnapshotNarHash !== predecessor.snapshotNarHash
+    || report.productSnapshotNarSize !== predecessor.snapshotNarSize
+    || report.snapshotRunnerSha256 !== predecessor.snapshotRunnerSha256
+    || report.runtimeOutputManifestSha256
+      !== predecessor.runtimeManifestSha256
+    || report.productionIdentityMode !== true
+    || report.failure !== "production LEZ a: rejected=lez-network-fingerprint"
+    || !exactKeys(report.cleanup, ["failures", "status"])
+    || report.cleanup.status !== "passed"
+    || !exactJson(report.cleanup.failures, [])
+    || !exactJson(report.blockers, [])
+    || !exactKeys(report.identities, [])
+    || !exactKeys(report.storageStartup, [])
+    || !exactKeys(report.startup, ["a"])
+    || !exactKeys(report.startup.a, ["basecampPid", "startupMs"])
+    || !Number.isSafeInteger(report.startup.a.basecampPid)
+    || report.startup.a.basecampPid <= 1
+    || !Number.isSafeInteger(report.startup.a.startupMs)
+    || report.startup.a.startupMs < 0
+    || !Array.isArray(report.providerBRetentionProofs)
+    || report.providerBRetentionProofs.length !== 0
+    || report.creatorOffline !== false
+    || report.pngRecovery !== "failed"
+    || report.releasePreflight?.status !== "passed"
+    || report.releasePreflight?.rootAccountBeforeWrites?.status !== "passed"
+    || report.releasePreflight.rootAccountBeforeWrites.state
+      !== "uninitialized"
+  ) {
+    throw new Error("audited Gate 3 pre-public-write report is invalid");
+  }
+}
+
+function prePublicWriteRetirementRecord({
+  predecessor,
+  compiledReportSha256,
+  gate3ReportSha256,
+}) {
+  return {
+    schema: "logos.palace.basecamp-pre-public-write-retirement",
+    version: 1,
+    status: "audited-fingerprint-rejection",
+    predecessor: {
+      gitCommit: predecessor.gitCommit,
+      snapshotNarHash: predecessor.snapshotNarHash,
+      snapshotNarSize: predecessor.snapshotNarSize,
+      snapshotRunnerSha256: predecessor.snapshotRunnerSha256,
+      runtimeManifestSha256: predecessor.runtimeManifestSha256,
+      compiledReportSha256,
+      gate3ReportSha256,
+    },
+  };
+}
+
+function validatePrePublicWriteRetirementRecord({
+  record,
+  predecessor,
+  audit,
+}) {
+  if (
+    !exactKeys(record, ["predecessor", "schema", "status", "version"])
+    || record.schema !== "logos.palace.basecamp-pre-public-write-retirement"
+    || record.version !== 1
+    || record.status !== "audited-fingerprint-rejection"
+    || !exactKeys(record.predecessor, [
+      "compiledReportSha256",
+      "gate3ReportSha256",
+      "gitCommit",
+      "runtimeManifestSha256",
+      "snapshotNarHash",
+      "snapshotNarSize",
+      "snapshotRunnerSha256",
+    ])
+    || record.predecessor.gitCommit !== predecessor.gitCommit
+    || record.predecessor.snapshotNarHash !== predecessor.snapshotNarHash
+    || record.predecessor.snapshotNarSize !== predecessor.snapshotNarSize
+    || record.predecessor.snapshotRunnerSha256
+      !== predecessor.snapshotRunnerSha256
+    || record.predecessor.runtimeManifestSha256
+      !== predecessor.runtimeManifestSha256
+    || record.predecessor.compiledReportSha256
+      !== audit.compiledReportSha256
+    || record.predecessor.gate3ReportSha256 !== audit.gate3ReportSha256
+  ) {
+    throw new Error("pre-public-write retirement certificate is invalid");
+  }
+  return record;
+}
+
+async function validateAuditedPrePublicWriteGate3Artifacts({
+  predecessor,
+  uid,
+  audit,
+}) {
+  if (!matchesAuditedPrePublicWriteFailure(predecessor, audit)) {
+    throw new Error("Gate 3 predecessor is not the audited pre-write failure");
+  }
+  const run = predecessor.runDirectory;
+  await canonicalOwnerDirectory(join(run, "gate3"), uid, 0o700);
+  await absent(join(run, "gate4"), "pre-public-write Gate 4 evidence");
+  await absent(
+    join(run, "active-claim-completion.json"),
+    "pre-public-write claim completion",
+  );
+  await absent(
+    join(run, "public-evidence.json"),
+    "pre-public-write public evidence",
+  );
+  await canonicalOwnerDirectory(join(run, "shared-state"), uid, 0o700);
+
+  const [compiled, gate3] = await Promise.all([
+    parseSecureJson(
+      join(run, "compiled-mvp-report.json"),
+      uid,
+      4 * 1024 * 1024,
+      "audited Gate 3 compiled report",
+    ),
+    parseSecureJson(
+      join(run, "gate3", "gate3-report.json"),
+      uid,
+      4 * 1024 * 1024,
+      "audited Gate 3 report",
+    ),
+  ]);
+  if (
+    compiled.sha256 !== audit.compiledReportSha256
+    || gate3.sha256 !== audit.gate3ReportSha256
+  ) {
+    throw new Error("audited Gate 3 report digest differs");
+  }
+  validateAuditedGate3FailedReport(compiled.value, predecessor);
+  validatesAuditedPrePublicWriteGate3Report(gate3.value, predecessor);
+  return {
+    compiledReportSha256: compiled.sha256,
+    gate3ReportSha256: gate3.sha256,
   };
 }
 
@@ -727,7 +973,57 @@ function rollForwardRecord({
   };
 }
 
-function validateRollForwardRecord({
+function prePublicWriteRollForwardRecord({
+  predecessor,
+  predecessorClaimSha256,
+  retiredClaimArchiveSha256,
+  common,
+  compiledReportSha256,
+  gate3ReportSha256,
+  retirementCertificateSha256,
+}) {
+  return {
+    schema: rollForwardSchema,
+    version: 2,
+    status: "retired-pre-public-write",
+    predecessor: {
+      claimVersion: predecessor.version,
+      claimSha256: predecessorClaimSha256,
+      compiledReportSha256,
+      gate3ReportSha256,
+      gitCommit: predecessor.gitCommit,
+      snapshotNarHash: predecessor.snapshotNarHash,
+      snapshotNarSize: predecessor.snapshotNarSize,
+      snapshotRunnerSha256: predecessor.snapshotRunnerSha256,
+      runtimeManifestSha256: predecessor.runtimeManifestSha256,
+    },
+    successor: {
+      gitCommit: common.gitCommit,
+      snapshotNarHash: common.snapshotNarHash,
+      snapshotNarSize: common.snapshotNarSize,
+      snapshotRunnerSha256: common.snapshotRunnerSha256,
+      runtimeManifestSha256: common.runtimeManifestSha256,
+      processScopeSlice: common.processScopeSlice,
+      processScopePrefix: common.processScopePrefix,
+    },
+    proof: {
+      releaseLock: "held-exclusive",
+      claimBoundProcessCount: 0,
+      compiledFailure: "audited-pre-public-write",
+      gate3ClaimState: "entered",
+      gate3Artifacts: "audited-fingerprint-rejection",
+      gate4Artifacts: "absent",
+      sharedState: "local-only-retained",
+      completion: "absent",
+      publicEvidence: "absent",
+      retirementCertificate: "pre-public-write-gate3-retirement.json",
+      retirementCertificateSha256,
+      retiredClaimArchiveSha256,
+    },
+  };
+}
+
+function validatePreGate3RollForwardRecord({
   record,
   claim,
   archivedClaim,
@@ -817,6 +1113,158 @@ function validateRollForwardRecord({
   return record;
 }
 
+async function validatePrePublicWriteRollForwardRecord({
+  record,
+  claim,
+  archivedClaim,
+  archivedClaimSha256,
+  uid,
+  audit,
+}) {
+  const retirementCertificate = record?.proof?.retirementCertificate;
+  if (
+    !exactKeys(record, [
+      "schema",
+      "version",
+      "status",
+      "predecessor",
+      "successor",
+      "proof",
+    ])
+    || record.schema !== rollForwardSchema
+    || record.version !== 2
+    || record.status !== "retired-pre-public-write"
+    || archivedClaim.version !== 2
+    || archivedClaim.status !== "gate3-entered"
+    || !matchesAuditedPrePublicWriteFailure(archivedClaim, audit)
+    || !exactKeys(record.predecessor, [
+      "claimVersion",
+      "claimSha256",
+      "compiledReportSha256",
+      "gate3ReportSha256",
+      "gitCommit",
+      "snapshotNarHash",
+      "snapshotNarSize",
+      "snapshotRunnerSha256",
+      "runtimeManifestSha256",
+    ])
+    || record.predecessor.claimVersion !== archivedClaim.version
+    || record.predecessor.claimSha256 !== archivedClaimSha256
+    || record.predecessor.compiledReportSha256
+      !== claim.rollForward.predecessorCompiledReportSha256
+    || record.predecessor.compiledReportSha256
+      !== audit.compiledReportSha256
+    || record.predecessor.gate3ReportSha256 !== audit.gate3ReportSha256
+    || record.predecessor.gitCommit !== archivedClaim.gitCommit
+    || record.predecessor.snapshotNarHash !== archivedClaim.snapshotNarHash
+    || record.predecessor.snapshotNarSize !== archivedClaim.snapshotNarSize
+    || record.predecessor.snapshotRunnerSha256
+      !== archivedClaim.snapshotRunnerSha256
+    || record.predecessor.runtimeManifestSha256
+      !== archivedClaim.runtimeManifestSha256
+    || !exactKeys(record.successor, [
+      "gitCommit",
+      "snapshotNarHash",
+      "snapshotNarSize",
+      "snapshotRunnerSha256",
+      "runtimeManifestSha256",
+      "processScopeSlice",
+      "processScopePrefix",
+    ])
+    || record.successor.gitCommit !== claim.gitCommit
+    || record.successor.snapshotNarHash !== claim.snapshotNarHash
+    || record.successor.snapshotNarSize !== claim.snapshotNarSize
+    || record.successor.snapshotRunnerSha256 !== claim.snapshotRunnerSha256
+    || record.successor.runtimeManifestSha256
+      !== claim.runtimeManifestSha256
+    || record.successor.processScopeSlice !== claim.processScopeSlice
+    || record.successor.processScopePrefix !== claim.processScopePrefix
+    || !exactKeys(record.proof, [
+      "releaseLock",
+      "claimBoundProcessCount",
+      "compiledFailure",
+      "gate3ClaimState",
+      "gate3Artifacts",
+      "gate4Artifacts",
+      "sharedState",
+      "completion",
+      "publicEvidence",
+      "retirementCertificate",
+      "retirementCertificateSha256",
+      "retiredClaimArchiveSha256",
+    ])
+    || record.proof.releaseLock !== "held-exclusive"
+    || record.proof.claimBoundProcessCount !== 0
+    || record.proof.compiledFailure !== "audited-pre-public-write"
+    || record.proof.gate3ClaimState !== "entered"
+    || record.proof.gate3Artifacts !== "audited-fingerprint-rejection"
+    || record.proof.gate4Artifacts !== "absent"
+    || record.proof.sharedState !== "local-only-retained"
+    || record.proof.completion !== "absent"
+    || record.proof.publicEvidence !== "absent"
+    || retirementCertificate !== "pre-public-write-gate3-retirement.json"
+    || !sha256Pattern.test(record.proof.retirementCertificateSha256)
+    || record.proof.retiredClaimArchiveSha256 !== archivedClaimSha256
+  ) {
+    throw new Error("pre-public-write roll-forward evidence is invalid");
+  }
+
+  const certificatePath = join(
+    archivedClaim.runDirectory,
+    retirementCertificate,
+  );
+  if (dirname(certificatePath) !== archivedClaim.runDirectory) {
+    throw new Error("pre-public-write retirement certificate path is invalid");
+  }
+  const certificate = await parseSecureJson(
+    certificatePath,
+    uid,
+    64 * 1024,
+    "pre-public-write retirement certificate",
+  );
+  if (certificate.sha256 !== record.proof.retirementCertificateSha256) {
+    throw new Error("pre-public-write retirement certificate digest differs");
+  }
+  validatePrePublicWriteRetirementRecord({
+    record: certificate.value,
+    predecessor: archivedClaim,
+    audit,
+  });
+  return record;
+}
+
+async function validateRollForwardRecord({
+  record,
+  claim,
+  archivedClaim,
+  archivedClaimSha256,
+  uid,
+  prePublicWriteAudit,
+}) {
+  if (record?.version === 1) {
+    if (
+      archivedClaim.version !== 1
+      && archivedClaim.status !== "active-pre-gate3"
+    ) {
+      throw new Error("archived predecessor claim state is invalid");
+    }
+    return validatePreGate3RollForwardRecord({
+      record,
+      claim,
+      archivedClaim,
+      archivedClaimSha256,
+    });
+  }
+  return validatePrePublicWriteRollForwardRecord({
+    record,
+    claim,
+    archivedClaim,
+    archivedClaimSha256,
+    uid,
+    audit: prePublicWriteAudit,
+  });
+}
+
 async function assertNoClaimProcesses(scanClaimBoundProcesses, input) {
   const processes = await scanClaimBoundProcesses(input);
   if (!Array.isArray(processes) || processes.length !== 0) {
@@ -846,6 +1294,7 @@ export function createClaimLifecycle({
   completedReportSha256,
   writeCompletionRecord,
   legacyAudit = auditedLegacyPreGate3,
+  prePublicWriteAudit = auditedPrePublicWriteGate3Failure,
 }) {
   validateCommonIdentity(common);
   if (
@@ -877,6 +1326,7 @@ export function createClaimLifecycle({
     || !sha256Pattern.test(legacyAudit.compiledReportSha256)
     || !sha256Pattern.test(legacyAudit.gate0ReportSha256)
     || !sha256Pattern.test(legacyAudit.gate1ReportSha256)
+    || !validPrePublicWriteAudit(prePublicWriteAudit)
   ) {
     throw new Error("claim lifecycle dependencies are invalid");
   }
@@ -935,20 +1385,16 @@ export function createClaimLifecycle({
       );
       archivedClaim = validateV2Claim(archive.value, archivedCommon);
     }
-    if (
-      archivedClaim.uid !== uid
-      || (
-        archivedClaim.version === 2
-        && archivedClaim.status !== "active-pre-gate3"
-      )
-    ) {
+    if (archivedClaim.uid !== uid) {
       throw new Error("archived predecessor claim state is invalid");
     }
-    validateRollForwardRecord({
+    await validateRollForwardRecord({
       record: evidence.value,
       claim,
       archivedClaim,
       archivedClaimSha256: archive.sha256,
+      uid,
+      prePublicWriteAudit,
     });
 
     const nextSeen = new Set(seen);
@@ -988,6 +1434,7 @@ export function createClaimLifecycle({
     }
 
     let predecessor;
+    let auditedPrePublicWriteRecovery = false;
     let processScopeSlice;
     let processScopePrefix;
     if (existing.value?.version === 1) {
@@ -1000,7 +1447,9 @@ export function createClaimLifecycle({
       );
       predecessor = validateV2Claim(existing.value, predecessorCommon);
       await validateRollForwardChain(predecessor);
-      if (predecessor.status !== "active-pre-gate3") {
+      if (predecessor.status === "gate3-entered") {
+        auditedPrePublicWriteRecovery = true;
+      } else if (predecessor.status !== "active-pre-gate3") {
         throw new Error("predecessor claim already crossed Gate 3");
       }
       processScopeSlice = predecessor.processScopeSlice;
@@ -1013,12 +1462,18 @@ export function createClaimLifecycle({
       uid,
       validateImmutableSnapshot,
     });
-    const proof = await validatePreGate3Artifacts({
-      predecessor,
-      claimVersion: predecessor.version,
-      uid,
-      legacyAudit,
-    });
+    const proof = auditedPrePublicWriteRecovery
+      ? await validateAuditedPrePublicWriteGate3Artifacts({
+          predecessor,
+          uid,
+          audit: prePublicWriteAudit,
+        })
+      : await validatePreGate3Artifacts({
+          predecessor,
+          claimVersion: predecessor.version,
+          uid,
+          legacyAudit,
+        });
     const scanInput = {
       claimPath,
       processScopeSlice,
@@ -1031,20 +1486,53 @@ export function createClaimLifecycle({
     }
     await assertNoClaimProcesses(scanClaimBoundProcesses, scanInput);
 
+    let retirementCertificateSha256;
+    if (auditedPrePublicWriteRecovery) {
+      const retirementCertificate = prePublicWriteRetirementRecord({
+        predecessor,
+        compiledReportSha256: proof.compiledReportSha256,
+        gate3ReportSha256: proof.gate3ReportSha256,
+      });
+      const retirementCertificateBytes = Buffer.from(
+        `${JSON.stringify(retirementCertificate, null, 2)}\n`,
+        "utf8",
+      );
+      const retirementCertificatePath = join(
+        predecessor.runDirectory,
+        "pre-public-write-gate3-retirement.json",
+      );
+      await writeExclusiveDurable(
+        retirementCertificatePath,
+        retirementCertificateBytes,
+        uid,
+      );
+      retirementCertificateSha256 = sha256(retirementCertificateBytes);
+    }
+
     const archivePath = join(
       common.runDirectory,
       "retired-active-claim.json",
     );
     await writeExclusiveDurable(archivePath, existing.bytes, uid);
     const archiveSha256 = sha256(existing.bytes);
-    const record = rollForwardRecord({
-      predecessor,
-      predecessorClaimSha256: existing.sha256,
-      predecessorCompiledReportSha256: proof.compiledReportSha256,
-      retiredClaimArchiveSha256: archiveSha256,
-      common,
-      failurePhase: proof.failurePhase,
-    });
+    const record = auditedPrePublicWriteRecovery
+      ? prePublicWriteRollForwardRecord({
+          predecessor,
+          predecessorClaimSha256: existing.sha256,
+          retiredClaimArchiveSha256: archiveSha256,
+          common,
+          compiledReportSha256: proof.compiledReportSha256,
+          gate3ReportSha256: proof.gate3ReportSha256,
+          retirementCertificateSha256,
+        })
+      : rollForwardRecord({
+          predecessor,
+          predecessorClaimSha256: existing.sha256,
+          predecessorCompiledReportSha256: proof.compiledReportSha256,
+          retiredClaimArchiveSha256: archiveSha256,
+          common,
+          failurePhase: proof.failurePhase,
+        });
     const recordBytes = Buffer.from(
       `${JSON.stringify(record, null, 2)}\n`,
       "utf8",

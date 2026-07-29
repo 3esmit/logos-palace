@@ -93,6 +93,40 @@ function failedReport(productSnapshot, phase = "gate1") {
   };
 }
 
+function auditedPrePublicWriteGate3Report(predecessor) {
+  return {
+    schema: "logos.palace.basecamp-gate3-report",
+    version: 1,
+    status: "failed",
+    fullGate3: "failed",
+    cleanup: { status: "passed", failures: [] },
+    blockers: [],
+    productSnapshot: predecessor.productSnapshot,
+    productSnapshotNarHash: predecessor.snapshotNarHash,
+    productSnapshotNarSize: predecessor.snapshotNarSize,
+    snapshotRunnerSha256: predecessor.snapshotRunnerSha256,
+    runtimeOutputManifestSha256: predecessor.runtimeManifestSha256,
+    sourceCommit: predecessor.gitCommit,
+    basecampRevision: "1".repeat(40),
+    packageHashes: [],
+    basecampBinarySha256: "2".repeat(64),
+    installedPackages: { a: [], b: [], c: [] },
+    productionIdentityMode: true,
+    releasePreflight: {
+      status: "passed",
+      rootAccountBeforeWrites: { status: "passed", state: "uninitialized" },
+    },
+    identities: {},
+    storageConfigs: { a: "{}", b: "{}", c: "{}" },
+    startup: { a: { basecampPid: 2, startupMs: 0 } },
+    storageStartup: {},
+    providerBRetentionProofs: [],
+    creatorOffline: false,
+    pngRecovery: "failed",
+    failure: "production LEZ a: rejected=lez-network-fingerprint",
+  };
+}
+
 async function fixture({ legacy = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "palace-claim-lifecycle-"));
   const claimDirectory = join(root, "claims");
@@ -215,6 +249,15 @@ async function fixture({ legacy = false } = {}) {
     gate0ReportSha256: sha256(await readFile(gate0Path)),
     gate1ReportSha256: sha256(await readFile(gate1Path)),
   };
+  const prePublicWriteAudit = {
+    gitCommit: predecessorCommon.gitCommit,
+    snapshotNarHash: predecessorCommon.snapshotNarHash,
+    snapshotNarSize: predecessorCommon.snapshotNarSize,
+    snapshotRunnerSha256: predecessorCommon.snapshotRunnerSha256,
+    runtimeManifestSha256: predecessorCommon.runtimeManifestSha256,
+    compiledReportSha256: sha256(await readFile(compiledPath)),
+    gate3ReportSha256: "e".repeat(64),
+  };
   let timestamp = 1_700_000_001_000;
   let lockChecks = 0;
   let processScans = 0;
@@ -247,6 +290,7 @@ async function fixture({ legacy = false } = {}) {
     writeCompletionRecord: async () =>
       join(successorRun, "active-claim-completion.json"),
     legacyAudit,
+    prePublicWriteAudit,
   });
   return {
     root,
@@ -255,6 +299,7 @@ async function fixture({ legacy = false } = {}) {
     predecessorRun,
     successorRun,
     predecessorClaim,
+    prePublicWriteAudit,
     successorCommon,
     lifecycle,
     counters: {
@@ -589,7 +634,103 @@ test("rejects any Gate 3 artifact and a gate3-entered predecessor", async () => 
     });
     await assert.rejects(
       lifecycle.execute("acquire-or-roll-forward"),
-      /already crossed Gate 3|claim v2 state is invalid/,
+      /already crossed Gate 3|claim v2 state is invalid|audited|ENOENT/,
+    );
+  });
+});
+
+test("rolls forward one audited Gate 3 pre-public-write rejection", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    await writeJson(
+      gate3Path,
+      auditedPrePublicWriteGate3Report(predecessorClaim),
+    );
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-public-write-gate3-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.status, "audited-fingerprint-rejection");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.version, 2);
+    assert.equal(evidence.status, "retired-pre-public-write");
+    assert.equal(
+      evidence.proof.gate3Artifacts,
+      "audited-fingerprint-rejection",
+    );
+    assert.equal(
+      (await lifecycle.execute("state")).output,
+      "active-pre-gate3",
+    );
+  });
+});
+
+test("rejects altered audited Gate 3 pre-public-write evidence", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = auditedPrePublicWriteGate3Report(predecessorClaim);
+    report.identities = { a: { unexpected: true } };
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    await assert.rejects(
+      lifecycle.execute("acquire-or-roll-forward"),
+      /pre-public-write report is invalid/,
     );
   });
 });
