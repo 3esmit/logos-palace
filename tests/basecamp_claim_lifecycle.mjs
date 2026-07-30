@@ -43,6 +43,8 @@ const preGate3Phases = new Set([
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const sourceCommitPattern = /^[0-9a-f]{40}$/;
 const narHashPattern = /^sha256-[A-Za-z0-9+/]{43}=$/;
+const identityRegistrationAndIdleStorageProfile =
+  "identity-registration-and-idle-storage-before-palace-write";
 
 export const auditedLegacyPreGate3 = Object.freeze({
   gitCommit: "1a61a457bb13e0c016f838a7fcd9c8820098a68a",
@@ -130,14 +132,35 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
       "worker a: gate4StartLez receipt timeout: before=\"\" after=\"\" sequence=0->1",
     retirementStatus: "audited-pre-public-write-failure",
   }),
+  Object.freeze({
+    gitCommit: "bc0fdf742d695d3750e30f7bd76125c0b9ba4b87",
+    snapshotNarHash:
+      "sha256-XrqEsotCFYBxsruXJUcc6EYWUZ4PweC0pXLmVun+T9E=",
+    snapshotNarSize: 7_155_584,
+    snapshotRunnerSha256:
+      "264ac08a6cb5d5709eb85e90c9947107ba575284100863c96172d20b170cdba0",
+    runtimeManifestSha256:
+      "5673105501814c2389f03de87c2811cc773d7817ebaa580fcf5b4e3ce114a808",
+    compiledReportSha256:
+      "50c413d01dd965ad5a5e8cee0612494ec93f1acb1181fd53c87734e0d3db7da0",
+    gate3ReportSha256:
+      "6ff81a0b4ff1ec18e102051fd113387216aac211d8cf985523fcd422df247631",
+    gate3Failure: "worker a: asset picker opened multiple dialogs",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndIdleStorageProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
+  const hasProfile = audit !== null
+    && typeof audit === "object"
+    && Object.hasOwn(audit, "reportProfile");
   return exactKeys(audit, [
       "compiledReportSha256",
       "gate3ReportSha256",
       "gate3Failure",
       "gitCommit",
+      ...(hasProfile ? ["reportProfile"] : []),
       "retirementStatus",
       "runtimeManifestSha256",
     "snapshotNarHash",
@@ -155,6 +178,8 @@ function validPrePublicWriteAudit(audit) {
     && typeof audit.gate3Failure === "string"
     && audit.gate3Failure.length > 0
     && audit.gate3Failure.length <= 1024
+    && (!hasProfile
+      || audit.reportProfile === identityRegistrationAndIdleStorageProfile)
     && [
       "audited-fingerprint-rejection",
       "audited-pre-public-write-failure",
@@ -834,13 +859,163 @@ function matchesAuditedPrePublicWriteFailure(predecessor, audit) {
     && predecessor.runtimeManifestSha256 === audit.runtimeManifestSha256;
 }
 
+function receiptFields(receipt) {
+  const fields = Object.create(null);
+  for (const field of String(receipt).split(";")) {
+    const separator = field.indexOf("=");
+    if (separator > 0) {
+      fields[field.slice(0, separator)] = field.slice(separator + 1);
+    }
+  }
+  return fields;
+}
+
+function validIdentityRegistration(record, display) {
+  if (
+    !exactKeys(record, [
+      "accountId",
+      "deliveryKey",
+      "display",
+      "existing",
+      "keyEpoch",
+      "receipt",
+      "registrationTransaction",
+    ])
+    || record.display !== display
+    || record.existing !== false
+    || record.keyEpoch !== "1"
+    || !sha256Pattern.test(record.accountId)
+    || !sha256Pattern.test(record.deliveryKey)
+    || !sha256Pattern.test(record.registrationTransaction)
+  ) {
+    return false;
+  }
+  const fields = receiptFields(record.receipt);
+  return fields.identity === record.accountId
+    && fields.display === display
+    && fields.delivery_key === record.deliveryKey
+    && fields.key_epoch === "1"
+    && fields.registration === "submitted"
+    && fields.registration_ready === "1"
+    && fields.registration_tx === record.registrationTransaction;
+}
+
+function validCurrentNoAuthorityLez(startup) {
+  if (
+    !exactKeys(startup, ["basecampPid", "lez", "startupMs"])
+    || !Number.isSafeInteger(startup.basecampPid)
+    || startup.basecampPid <= 1
+    || !Number.isSafeInteger(startup.startupMs)
+    || startup.startupMs < 0
+    || !exactKeys(startup.lez, ["elapsedMs", "lezStateObservation", "receipt"])
+    || startup.lez.receipt !== ""
+    || !Number.isSafeInteger(startup.lez.elapsedMs)
+    || startup.lez.elapsedMs < 0
+    || !exactKeys(startup.lez.lezStateObservation, ["receipt", "source"])
+    || startup.lez.lezStateObservation.source !== "gate4LezState"
+  ) {
+    return false;
+  }
+  const fields = receiptFields(startup.lez.lezStateObservation.receipt);
+  return fields.ready === "1"
+    && fields.compatible === "1"
+    && fields.running === "1"
+    && fields.tracked === "0"
+    && fields.sync === "current"
+    && fields.current_height === fields.synced_height
+    && /^[1-9][0-9]*$/.test(fields.current_height ?? "")
+    && fields.authority === "missing"
+    && fields.vm === "idle"
+    && fields.vm_action === "none"
+    && fields.program === releaseProgramId;
+}
+
+function validIdleStorageStatus(status, expectedState) {
+  if (
+    !exactKeys(status, ["elapsedMs", "receipt"])
+    || !Number.isSafeInteger(status.elapsedMs)
+    || status.elapsedMs < 0
+  ) {
+    return false;
+  }
+  const fields = receiptFields(status.receipt);
+  return fields.storage === expectedState
+    && fields.pending === "0"
+    && fields.callbacks === "0"
+    && fields.callback_registration === "ready"
+    && fields.reconciliation_required === "0"
+    && fields.catalog === "idle"
+    && fields.catalog_verified === "0"
+    && fields.retention_round === "0"
+    && fields.retained === "0";
+}
+
+function validIdentityRegistrationAndIdleStorageAssetAuthoring(authoring) {
+  return exactKeys(authoring, [
+    "assets",
+    "boundary",
+    "elapsedMs",
+    "graphBindings",
+    "inputManifest",
+    "phase",
+    "propStory",
+    "selectedAssetCount",
+    "version",
+  ])
+    && authoring.version === 1
+    && authoring.phase === "input-validated"
+    && Number.isSafeInteger(authoring.selectedAssetCount)
+    && authoring.selectedAssetCount > 0
+    && typeof authoring.propStory === "string"
+    && typeof authoring.boundary === "string"
+    && authoring.elapsedMs === 0
+    && exactJson(authoring.assets, [])
+    && exactJson(authoring.graphBindings, [])
+    && exactKeys(authoring.inputManifest, [
+      "assetCount",
+      "schema",
+      "sha256",
+      "version",
+    ])
+    && authoring.inputManifest.schema === "logos.palace.e2e-asset-inputs"
+    && authoring.inputManifest.version === 1
+    && Number.isSafeInteger(authoring.inputManifest.assetCount)
+    && authoring.inputManifest.assetCount > 0
+    && sha256Pattern.test(authoring.inputManifest.sha256);
+}
+
+function validIdentityRegistrationAndIdleStorageGate3Report(report) {
+  return exactKeys(report.identities, ["a", "b", "c"])
+    && validIdentityRegistration(report.identities.a, "Alice")
+    && validIdentityRegistration(report.identities.b, "Bob")
+    && validIdentityRegistration(report.identities.c, "Carol")
+    && exactKeys(report.startup, ["a", "b", "c"])
+    && validCurrentNoAuthorityLez(report.startup.a)
+    && validCurrentNoAuthorityLez(report.startup.b)
+    && validCurrentNoAuthorityLez(report.startup.c)
+    && exactKeys(report.storageConfigs, ["a", "b", "c"])
+    && Object.values(report.storageConfigs).every(
+      (config) => typeof config === "string" && config.length > 0,
+    )
+    && exactKeys(report.storageStartup, ["a", "b"])
+    && ["a", "b"].every((label) =>
+      exactKeys(report.storageStartup[label], ["running", "start"])
+      && validIdleStorageStatus(report.storageStartup[label].start, "starting")
+      && validIdleStorageStatus(report.storageStartup[label].running, "running"),
+    )
+    && validIdentityRegistrationAndIdleStorageAssetAuthoring(report.assetAuthoring);
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
   audit,
 ) {
+  const identityRegistrationAndIdleStorage =
+    audit.reportProfile === identityRegistrationAndIdleStorageProfile;
   if (
     !exactKeys(report, [
+      ...(identityRegistrationAndIdleStorage ? ["assetAuthoring"] : []),
       "basecampBinarySha256",
       "basecampRevision",
       "blockers",
@@ -885,14 +1060,20 @@ function validatesAuditedPrePublicWriteGate3Report(
     || report.cleanup.status !== "passed"
     || !exactJson(report.cleanup.failures, [])
     || !exactJson(report.blockers, [])
-    || !exactKeys(report.identities, [])
-    || !exactKeys(report.storageStartup, [])
-    || !exactKeys(report.startup, ["a"])
-    || !exactKeys(report.startup.a, ["basecampPid", "startupMs"])
-    || !Number.isSafeInteger(report.startup.a.basecampPid)
-    || report.startup.a.basecampPid <= 1
-    || !Number.isSafeInteger(report.startup.a.startupMs)
-    || report.startup.a.startupMs < 0
+    || (
+      identityRegistrationAndIdleStorage
+        ? !validIdentityRegistrationAndIdleStorageGate3Report(report)
+        : (
+          !exactKeys(report.identities, [])
+          || !exactKeys(report.storageStartup, [])
+          || !exactKeys(report.startup, ["a"])
+          || !exactKeys(report.startup.a, ["basecampPid", "startupMs"])
+          || !Number.isSafeInteger(report.startup.a.basecampPid)
+          || report.startup.a.basecampPid <= 1
+          || !Number.isSafeInteger(report.startup.a.startupMs)
+          || report.startup.a.startupMs < 0
+        )
+    )
     || !Array.isArray(report.providerBRetentionProofs)
     || report.providerBRetentionProofs.length !== 0
     || report.creatorOffline !== false
