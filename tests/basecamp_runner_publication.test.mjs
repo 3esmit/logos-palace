@@ -668,6 +668,14 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   ]) {
     assert.match(gate3Worker, new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.match(
+    gate3Worker,
+    /lastPublicationState = moderationCatalogAsset\(\s*snapshot\.catalog,\s*handle,\s*\)\.publicationState/,
+  );
+  assert.doesNotMatch(
+    gate3Worker,
+    /snapshot\.catalog\.assets\.find\(\s*\(asset\) => asset\?\.publicationState !== undefined/,
+  );
   assert.doesNotMatch(gate3Worker, /backgroundModerationOpen\s*=(?!=)/);
   assert.match(gate3, /"importSelectedAsset"/);
   assert.match(gate3, /assetInputs\.selectionPathFor\(fixture\.assetId\)/);

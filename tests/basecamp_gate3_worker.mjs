@@ -697,6 +697,7 @@ async function moderationSnapshot() {
 
 async function waitForModerationCatalog({
   description,
+  handle,
   startedAt,
   beforeSequence,
   timeout = moderationPublicationTimeoutMs,
@@ -716,11 +717,10 @@ async function waitForModerationCatalog({
     }
     const accepted = accept(snapshot);
     if (accepted) return { ...snapshot, accepted };
-    lastPublicationState = String(
-      snapshot.catalog.assets.find(
-        (asset) => asset?.publicationState !== undefined,
-      )?.publicationState ?? lastPublicationState,
-    );
+    lastPublicationState = moderationCatalogAsset(
+      snapshot.catalog,
+      handle,
+    ).publicationState;
     // The backend refreshes the catalog from its 500 ms delivery poll. Avoid
     // a synthetic action here: its receipt sequence must remain attributable
     // to the visible moderation control that started this transition.
@@ -761,6 +761,7 @@ async function approveAndPublishAsset(params) {
   let dispatched;
   const completed = await waitForModerationCatalog({
     description: "approval and upload",
+    handle,
     startedAt,
     beforeSequence: before.invocationSequence,
     accept(snapshot) {
@@ -816,6 +817,7 @@ async function waitForPublishedAsset(params) {
   }
   const completed = await waitForModerationCatalog({
     description: "publication completion",
+    handle,
     startedAt,
     beforeSequence: before.invocationSequence,
     accept(snapshot) {
@@ -871,6 +873,7 @@ async function assignRoomBackgroundFromModeration(params) {
   );
   await waitForModerationCatalog({
     description: `${roomId} assignment`,
+    handle,
     startedAt,
     beforeSequence: before.invocationSequence,
     accept(snapshot) {
@@ -970,6 +973,7 @@ async function assignPropAssetFromModeration(params) {
   );
   await waitForModerationCatalog({
     description: "prop assignment",
+    handle: request.handle,
     startedAt,
     beforeSequence: before.invocationSequence,
     accept(snapshot) {
