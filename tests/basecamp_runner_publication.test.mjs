@@ -667,9 +667,14 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   assert.doesNotMatch(gate3, /fixture\.bytes/);
   assert.match(gate3Worker, /case "importSelectedAsset":/);
   assert.match(gate3Worker, /app\.listFileDialogs\(\)/);
-  assert.match(gate3Worker, /app\.fileDialogAction\(objectId, action, selectionPath\)/);
-  assert.match(gate3Worker, /fileDialogAction\(dialogId, "select", request\.selectionPath\)/);
-  assert.match(gate3Worker, /fileDialogAction\(dialogId, "accept"\)/);
+  assert.match(gate3Worker, /node\.objectName === "fileNameEdit"/);
+  assert.match(gate3Worker, /node\.text === "&Open"/);
+  assert.match(gate3Worker, /inspector\.send\("sendKeys", \{ text: selectionPath \}\)/);
+  assert.match(gate3Worker, /acceptPickerFile\(dialogId, request\.selectionPath\)/);
+  assert.doesNotMatch(
+    gate3Worker,
+    /fileDialogAction\(dialogId, "select", request\.selectionPath\)/,
+  );
   for (const directStageRpc of [
     "beginAssetStage",
     "appendAssetStageChunk",

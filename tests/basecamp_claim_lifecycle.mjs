@@ -149,6 +149,23 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndIdleStorageProfile,
   }),
+  Object.freeze({
+    gitCommit: "49d4aa58d08611417def4743ef62c0a4befa3f65",
+    snapshotNarHash:
+      "sha256-Gvf0HlnoEf+RYF6LAQJgE1y9OEzXNOBw/TU9NU8PYNg=",
+    snapshotNarSize: 7_170_928,
+    snapshotRunnerSha256:
+      "264ac08a6cb5d5709eb85e90c9947107ba575284100863c96172d20b170cdba0",
+    runtimeManifestSha256:
+      "5673105501814c2389f03de87c2811cc773d7817ebaa580fcf5b4e3ce114a808",
+    compiledReportSha256:
+      "f6ce2bca3b69306f6b87f54b62d9212bbc2cbef279b5edbf7b05dd74c4adb161",
+    gate3ReportSha256:
+      "0aac75f279b12fcc9b183d9094a08295dae4845dea83dd35b377ec7b1bcd5e8c",
+    gate3Failure: "worker a: asset picker import did not complete",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndIdleStorageProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {

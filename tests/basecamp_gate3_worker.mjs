@@ -1136,12 +1136,127 @@ async function waitForAssetDialog(priorDialogIds) {
   throw new Error("asset picker dialog did not open");
 }
 
-async function fileDialogAction(objectId, action, selectionPath) {
+function pickerControlId(node, matches, predicate) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) {
+    throw new Error("asset picker control tree is invalid");
+  }
+  if (predicate(node)) {
+    const objectId = String(node.id ?? "");
+    if (objectId.length === 0 || objectId.length > 512) {
+      throw new Error("asset picker control identity is invalid");
+    }
+    matches.push(objectId);
+  }
+  if (node.children === undefined) return;
+  if (!Array.isArray(node.children)) {
+    throw new Error("asset picker control tree is invalid");
+  }
+  for (const child of node.children) {
+    pickerControlId(child, matches, predicate);
+  }
+}
+
+function singleVisiblePickerControl(tree, predicate, description) {
+  const matches = [];
+  pickerControlId(tree, matches, predicate);
+  const distinct = [...new Set(matches)];
+  if (distinct.length !== 1) {
+    throw new Error(`asset picker ${description} control is ambiguous`);
+  }
+  return distinct[0];
+}
+
+async function pickerDialogTree(dialogId) {
   let result;
   try {
-    result = action === "select"
-      ? await app.fileDialogAction(objectId, action, selectionPath)
-      : await app.fileDialogAction(objectId, action);
+    result = await app.getTree({ objectId: dialogId, depth: 16 });
+  } catch {
+    throw new Error("asset picker control discovery failed");
+  }
+  if (result?.error || !result?.tree) {
+    throw new Error("asset picker control discovery failed");
+  }
+  return result.tree;
+}
+
+async function pickerFileNameInput(dialogId) {
+  return singleVisiblePickerControl(
+    await pickerDialogTree(dialogId),
+    (node) => (
+      node.type === "QLineEdit"
+      && node.objectName === "fileNameEdit"
+      && node.visible === true
+      && node.enabled === true
+    ),
+    "file name",
+  );
+}
+
+async function pickerOpenButton(dialogId) {
+  return singleVisiblePickerControl(
+    await pickerDialogTree(dialogId),
+    (node) => (
+      node.type === "QPushButton"
+      && node.text === "&Open"
+      && node.visible === true
+      && node.enabled === true
+    ),
+    "Open",
+  );
+}
+
+async function clickPickerControl(objectId, description) {
+  let clicked;
+  try {
+    clicked = await inspector.send("click", { objectId });
+  } catch {
+    throw new Error(`asset picker ${description} click failed`);
+  }
+  if (clicked?.error || clicked?.clicked !== true) {
+    throw new Error(`asset picker ${description} click failed`);
+  }
+}
+
+async function typePickerFileName(dialogId, selectionPath) {
+  const inputId = await pickerFileNameInput(dialogId);
+  await clickPickerControl(inputId, "file name");
+  let sent;
+  try {
+    sent = await inspector.send("sendKeys", { text: selectionPath });
+  } catch {
+    throw new Error("asset picker file name input failed");
+  }
+  if (sent?.error) {
+    throw new Error("asset picker file name input failed");
+  }
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("asset picker interrupted");
+    let properties;
+    try {
+      properties = propertyMap(await app.getProperties(inputId));
+    } catch {
+      throw new Error("asset picker file name properties failed");
+    }
+    if (String(properties.text ?? "") === selectionPath) {
+      return;
+    }
+    await sleep(50);
+  }
+  throw new Error("asset picker file name input timed out");
+}
+
+async function acceptPickerFile(dialogId, selectionPath) {
+  await typePickerFileName(dialogId, selectionPath);
+  const openId = await pickerOpenButton(dialogId);
+  await clickPickerControl(openId, "Open");
+}
+
+async function fileDialogAction(objectId, action) {
+  let result;
+  try {
+    result = await app.fileDialogAction(objectId, action);
   } catch {
     throw new Error(`asset picker ${action} action failed`);
   }
@@ -1170,9 +1285,7 @@ async function importSelectedAsset(params) {
   const priorDialogIds = await listedFileDialogIds();
   await clickModerationControl("palaceAssetSelectFile", "file picker");
   const dialogId = await waitForAssetDialog(priorDialogIds);
-  await fileDialogAction(dialogId, "select", request.selectionPath);
-  await sleep(50);
-  await fileDialogAction(dialogId, "accept");
+  await acceptPickerFile(dialogId, request.selectionPath);
 
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
