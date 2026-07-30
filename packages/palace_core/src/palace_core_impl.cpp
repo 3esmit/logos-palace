@@ -8606,13 +8606,13 @@ void PalaceCoreImpl::applyStorageTerminal(
     }
 
     const auto verification =
-        m_storagePublicationVerificationByOperation.find(
+        m_assetPublicationVerificationByOperation.find(
             terminal.domainOperationId);
     if (verification
-        != m_storagePublicationVerificationByOperation.end()) {
+        != m_assetPublicationVerificationByOperation.end()) {
         const AssetPublicationVerification pending =
             verification->second;
-        m_storagePublicationVerificationByOperation.erase(
+        m_assetPublicationVerificationByOperation.erase(
             verification);
         const bool verified = terminal.outcome
                 == palace::StorageTransferOutcome::Succeeded
@@ -8661,7 +8661,7 @@ void PalaceCoreImpl::applyStorageTerminal(
                     "publish-failed;reason=verification-dispatch";
                 return;
             }
-            m_storagePublicationVerificationByOperation.emplace(
+            m_assetPublicationVerificationByOperation.emplace(
                 verificationOperationId,
                 AssetPublicationVerification{
                     handle,
