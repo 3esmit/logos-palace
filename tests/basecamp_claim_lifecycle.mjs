@@ -45,6 +45,8 @@ const sourceCommitPattern = /^[0-9a-f]{40}$/;
 const narHashPattern = /^sha256-[A-Za-z0-9+/]{43}=$/;
 const identityRegistrationAndIdleStorageProfile =
   "identity-registration-and-idle-storage-before-palace-write";
+const identityRegistrationAndApprovalGuardedAssetsProfile =
+  "identity-registration-and-approval-guarded-assets-before-palace-write";
 
 export const auditedLegacyPreGate3 = Object.freeze({
   gitCommit: "1a61a457bb13e0c016f838a7fcd9c8820098a68a",
@@ -166,6 +168,23 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndIdleStorageProfile,
   }),
+  Object.freeze({
+    gitCommit: "85aac443fb5eafc1d74c61a8b791c4ed9ec4007c",
+    snapshotNarHash:
+      "sha256-MejD+MHN4A7asEdYOXuH8eSA2un5lDXzpG1wv5s50bg=",
+    snapshotNarSize: 7_175_048,
+    snapshotRunnerSha256:
+      "264ac08a6cb5d5709eb85e90c9947107ba575284100863c96172d20b170cdba0",
+    runtimeManifestSha256:
+      "5673105501814c2389f03de87c2811cc773d7817ebaa580fcf5b4e3ce114a808",
+    compiledReportSha256:
+      "fa7d09f9239cbf64f9f369f2653a45fbf7bc87787dffbbadbd739718853fd917",
+    gate3ReportSha256:
+      "072b2d6021d3701e889191573a251e47fb4c7bf5f6e2c6f642e8d9bd678686cd",
+    gate3Failure: "worker a: moderation asset upload failed",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndApprovalGuardedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -196,7 +215,10 @@ function validPrePublicWriteAudit(audit) {
     && audit.gate3Failure.length > 0
     && audit.gate3Failure.length <= 1024
     && (!hasProfile
-      || audit.reportProfile === identityRegistrationAndIdleStorageProfile)
+      || [
+        identityRegistrationAndIdleStorageProfile,
+        identityRegistrationAndApprovalGuardedAssetsProfile,
+      ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
       "audited-pre-public-write-failure",
@@ -1001,7 +1023,167 @@ function validIdentityRegistrationAndIdleStorageAssetAuthoring(authoring) {
     && sha256Pattern.test(authoring.inputManifest.sha256);
 }
 
-function validIdentityRegistrationAndIdleStorageGate3Report(report) {
+function validApprovalGuardedStagedAsset(asset) {
+  if (
+    !exactKeys(asset, [
+      "appends",
+      "assetId",
+      "begin",
+      "byteLength",
+      "chunkBytes",
+      "chunkCount",
+      "commit",
+      "file",
+      "handle",
+      "height",
+      "label",
+      "role",
+      "target",
+      "width",
+    ])
+    || !/^[a-z0-9][a-z0-9-]{0,127}$/.test(asset.assetId)
+    || !sha256Pattern.test(asset.handle)
+    || asset.role !== "room-background"
+    || !exactKeys(asset.target, ["kind", "roomId"])
+    || asset.target.kind !== "room-background"
+    || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(asset.target.roomId)
+    || typeof asset.file !== "string"
+    || asset.file.length === 0
+    || asset.file.length > 256
+    || asset.file !== asset.label
+    || !asset.file.endsWith(".png")
+    || /[\\/]/.test(asset.file)
+    || !Number.isSafeInteger(asset.byteLength)
+    || asset.byteLength <= 0
+    || asset.byteLength > 10 * 1024 * 1024
+    || asset.chunkBytes !== 32 * 1024
+    || !Number.isSafeInteger(asset.chunkCount)
+    || asset.chunkCount !== Math.ceil(asset.byteLength / asset.chunkBytes)
+    || !Number.isSafeInteger(asset.width)
+    || asset.width <= 0
+    || asset.width > 16_384
+    || !Number.isSafeInteger(asset.height)
+    || asset.height <= 0
+    || asset.height > 16_384
+    || !exactKeys(asset.begin, ["elapsedMs", "receipt"])
+    || !Number.isSafeInteger(asset.begin.elapsedMs)
+    || asset.begin.elapsedMs < 0
+    || typeof asset.begin.receipt !== "string"
+    || !asset.begin.receipt.startsWith("ok;")
+    || !Array.isArray(asset.appends)
+    || asset.appends.length !== asset.chunkCount
+    || !exactKeys(asset.commit, ["elapsedMs", "receipt"])
+    || !Number.isSafeInteger(asset.commit.elapsedMs)
+    || asset.commit.elapsedMs < 0
+    || typeof asset.commit.receipt !== "string"
+    || !asset.commit.receipt.startsWith("ok;")
+  ) {
+    return false;
+  }
+
+  const begin = receiptFields(asset.begin.receipt);
+  const maxTotalBytes = Number(begin.maxTotalBytes);
+  if (
+    !exactKeys(begin, ["maxChunkBytes", "maxTotalBytes", "next", "session"])
+    || !/^[a-f0-9]{32}$/.test(begin.session)
+    || begin.next !== "0"
+    || begin.maxChunkBytes !== String(asset.chunkBytes)
+    || !/^[1-9][0-9]*$/.test(begin.maxTotalBytes)
+    || !Number.isSafeInteger(maxTotalBytes)
+    || maxTotalBytes < asset.byteLength
+  ) {
+    return false;
+  }
+
+  let totalBytes = 0;
+  for (const [sequence, append] of asset.appends.entries()) {
+    if (
+      !exactKeys(append, ["byteLength", "elapsedMs", "receipt", "sequence"])
+      || append.sequence !== sequence
+      || !Number.isSafeInteger(append.byteLength)
+      || append.byteLength <= 0
+      || append.byteLength > asset.chunkBytes
+      || !Number.isSafeInteger(append.elapsedMs)
+      || append.elapsedMs < 0
+      || typeof append.receipt !== "string"
+      || !append.receipt.startsWith("ok;")
+    ) {
+      return false;
+    }
+    totalBytes += append.byteLength;
+    const fields = receiptFields(append.receipt);
+    if (
+      !exactKeys(fields, ["bytes", "next", "session"])
+      || fields.session !== begin.session
+      || fields.next !== String(sequence + 1)
+      || fields.bytes !== String(totalBytes)
+    ) {
+      return false;
+    }
+  }
+  if (totalBytes !== asset.byteLength) return false;
+
+  const commit = receiptFields(asset.commit.receipt);
+  return exactKeys(commit, ["bytes", "handle", "height", "width"])
+    && commit.handle === asset.handle
+    && commit.width === String(asset.width)
+    && commit.height === String(asset.height)
+    && commit.bytes === String(asset.byteLength);
+}
+
+function validIdentityRegistrationAndApprovalGuardedAssets(authoring) {
+  if (
+    !exactKeys(authoring, [
+      "assets",
+      "boundary",
+      "elapsedMs",
+      "graphBindings",
+      "guardedBeforeApproval",
+      "inputManifest",
+      "phase",
+      "propStory",
+      "selectedAssetCount",
+      "version",
+    ])
+    || authoring.version !== 1
+    || authoring.phase !== "approval-guarded"
+    || authoring.propStory !== "not-requested"
+    || typeof authoring.boundary !== "string"
+    || authoring.boundary.length === 0
+    || !Number.isSafeInteger(authoring.elapsedMs)
+    || authoring.elapsedMs < 0
+    || !Number.isSafeInteger(authoring.selectedAssetCount)
+    || authoring.selectedAssetCount <= 0
+    || !Array.isArray(authoring.assets)
+    || authoring.assets.length !== authoring.selectedAssetCount
+    || !exactJson(authoring.graphBindings, [])
+    || !exactKeys(authoring.guardedBeforeApproval, ["elapsedMs", "receipt"])
+    || authoring.guardedBeforeApproval.receipt !== "rejected=asset-not-approved"
+    || !Number.isSafeInteger(authoring.guardedBeforeApproval.elapsedMs)
+    || authoring.guardedBeforeApproval.elapsedMs < 0
+    || !exactKeys(authoring.inputManifest, [
+      "assetCount",
+      "schema",
+      "sha256",
+      "version",
+    ])
+    || authoring.inputManifest.schema !== "logos.palace.e2e-asset-inputs"
+    || authoring.inputManifest.version !== 1
+    || authoring.inputManifest.assetCount !== authoring.selectedAssetCount
+    || !sha256Pattern.test(authoring.inputManifest.sha256)
+    || !authoring.assets.every(validApprovalGuardedStagedAsset)
+  ) {
+    return false;
+  }
+  const assetIds = authoring.assets.map((asset) => asset.assetId);
+  const files = authoring.assets.map((asset) => asset.file);
+  const handles = authoring.assets.map((asset) => asset.handle);
+  return new Set(assetIds).size === assetIds.length
+    && new Set(files).size === files.length
+    && new Set(handles).size === handles.length;
+}
+
+function validIdentityRegistrationAndIdleStorageBase(report) {
   return exactKeys(report.identities, ["a", "b", "c"])
     && validIdentityRegistration(report.identities.a, "Alice")
     && validIdentityRegistration(report.identities.b, "Bob")
@@ -1019,8 +1201,17 @@ function validIdentityRegistrationAndIdleStorageGate3Report(report) {
       exactKeys(report.storageStartup[label], ["running", "start"])
       && validIdleStorageStatus(report.storageStartup[label].start, "starting")
       && validIdleStorageStatus(report.storageStartup[label].running, "running"),
-    )
+    );
+}
+
+function validIdentityRegistrationAndIdleStorageGate3Report(report) {
+  return validIdentityRegistrationAndIdleStorageBase(report)
     && validIdentityRegistrationAndIdleStorageAssetAuthoring(report.assetAuthoring);
+}
+
+function validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(report) {
+  return validIdentityRegistrationAndIdleStorageBase(report)
+    && validIdentityRegistrationAndApprovalGuardedAssets(report.assetAuthoring);
 }
 
 function validatesAuditedPrePublicWriteGate3Report(
@@ -1030,9 +1221,14 @@ function validatesAuditedPrePublicWriteGate3Report(
 ) {
   const identityRegistrationAndIdleStorage =
     audit.reportProfile === identityRegistrationAndIdleStorageProfile;
+  const identityRegistrationAndApprovalGuardedAssets =
+    audit.reportProfile
+      === identityRegistrationAndApprovalGuardedAssetsProfile;
+  const hasAssetAuthoring = identityRegistrationAndIdleStorage
+    || identityRegistrationAndApprovalGuardedAssets;
   if (
     !exactKeys(report, [
-      ...(identityRegistrationAndIdleStorage ? ["assetAuthoring"] : []),
+      ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
       "basecampBinarySha256",
       "basecampRevision",
       "blockers",
@@ -1078,8 +1274,14 @@ function validatesAuditedPrePublicWriteGate3Report(
     || !exactJson(report.cleanup.failures, [])
     || !exactJson(report.blockers, [])
     || (
-      identityRegistrationAndIdleStorage
-        ? !validIdentityRegistrationAndIdleStorageGate3Report(report)
+      hasAssetAuthoring
+        ? !(
+          identityRegistrationAndIdleStorage
+            ? validIdentityRegistrationAndIdleStorageGate3Report(report)
+            : validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(
+              report,
+            )
+        )
         : (
           !exactKeys(report.identities, [])
           || !exactKeys(report.storageStartup, [])

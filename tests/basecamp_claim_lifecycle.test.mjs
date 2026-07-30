@@ -206,6 +206,61 @@ function identityRegistrationAndIdleStorageGate3Report(predecessor) {
   };
 }
 
+function identityRegistrationAndApprovalGuardedAssetsGate3Report(predecessor) {
+  const report = identityRegistrationAndIdleStorageGate3Report(predecessor);
+  const handle = "a".repeat(64);
+  report.assetAuthoring = {
+    version: 1,
+    phase: "approval-guarded",
+    inputManifest: {
+      schema: "logos.palace.e2e-asset-inputs",
+      version: 1,
+      sha256: "b".repeat(64),
+      assetCount: 1,
+    },
+    selectedAssetCount: 1,
+    propStory: "not-requested",
+    boundary: "selected bytes -> verified handle",
+    assets: [{
+      assetId: "fixture-background",
+      file: "fixture-background.png",
+      label: "fixture-background.png",
+      role: "room-background",
+      target: { kind: "room-background", roomId: "atrium" },
+      handle,
+      byteLength: 10,
+      chunkBytes: 32 * 1024,
+      chunkCount: 1,
+      width: 1,
+      height: 1,
+      begin: {
+        receipt:
+          `ok;session=${"c".repeat(32)};next=0;maxChunkBytes=32768;`
+          + "maxTotalBytes=10485760",
+        elapsedMs: 1,
+      },
+      appends: [{
+        sequence: 0,
+        byteLength: 10,
+        receipt: `ok;session=${"c".repeat(32)};next=1;bytes=10`,
+        elapsedMs: 1,
+      }],
+      commit: {
+        receipt: `ok;handle=${handle};width=1;height=1;bytes=10`,
+        elapsedMs: 1,
+      },
+    }],
+    graphBindings: [],
+    guardedBeforeApproval: {
+      receipt: "rejected=asset-not-approved",
+      elapsedMs: 1,
+    },
+    elapsedMs: 1,
+  };
+  report.failure = "worker a: moderation asset upload failed";
+  return report;
+}
+
 async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
@@ -854,6 +909,66 @@ test("rolls forward exact identity and idle-storage state before a Palace write"
   });
 });
 
+test("rolls forward exact approval-guarded staged assets before a Palace write", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    await writeJson(
+      gate3Path,
+      identityRegistrationAndApprovalGuardedAssetsGate3Report(
+        predecessorClaim,
+      ),
+    );
+    prePublicWriteAudit.reportProfile =
+      "identity-registration-and-approval-guarded-assets-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure =
+      "worker a: moderation asset upload failed";
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-public-write-gate3-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.status, "audited-pre-public-write-failure");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(
+      evidence.proof.gate3Artifacts,
+      "audited-pre-public-write-failure",
+    );
+  });
+});
+
 test("rejects identity and idle-storage recovery after any staged asset", async () => {
   await withFixture({}, async ({
     claimPath,
@@ -879,6 +994,52 @@ test("rejects identity and idle-storage recovery after any staged asset", async 
       "audited-pre-public-write-failure";
     prePublicWriteAudit.gate3Failure =
       "worker a: asset picker opened multiple dialogs";
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    await assert.rejects(
+      lifecycle.execute("acquire-or-roll-forward"),
+      /pre-public-write report is invalid/,
+    );
+  });
+});
+
+test("rejects approval-guarded recovery after an asset publication field", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = identityRegistrationAndApprovalGuardedAssetsGate3Report(
+      predecessorClaim,
+    );
+    report.assetAuthoring.assets[0].publication = { cid: "forbidden" };
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.reportProfile =
+      "identity-registration-and-approval-guarded-assets-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure =
+      "worker a: moderation asset upload failed";
     prePublicWriteAudit.compiledReportSha256 = sha256(
       await readFile(compiledPath),
     );
