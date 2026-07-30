@@ -346,6 +346,7 @@
               ${acceptanceSource}/tests/basecamp_claim_lifecycle.test.mjs \
               ${acceptanceSource}/tests/basecamp_direct_child.test.mjs \
               ${acceptanceSource}/tests/basecamp_frame_timing.test.mjs \
+              ${acceptanceSource}/tests/basecamp_file_dialogs.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate2_settlement.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_cold_state.test.mjs \
               ${acceptanceSource}/tests/basecamp_gate4_creator_identity.test.mjs \

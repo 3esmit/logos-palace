@@ -20,6 +20,10 @@ import {
   acceptsLezStartupObservation,
   workerInvocationTimeoutLimit,
 } from "./basecamp_lez_startup.mjs";
+import {
+  newlyOpenedFileDialogId,
+  uniqueFileDialogIds,
+} from "./basecamp_file_dialogs.mjs";
 
 const [
   basecampArgument,
@@ -1101,28 +1105,32 @@ function importedAssetMatches(properties, expected) {
   ));
 }
 
-async function waitForAssetDialog() {
+async function listedFileDialogIds() {
+  let listed;
+  try {
+    listed = await app.listFileDialogs();
+  } catch {
+    throw new Error("asset picker dialog discovery failed");
+  }
+  if (listed?.error) {
+    throw new Error("asset picker dialog discovery failed");
+  }
+  const dialogIds = uniqueFileDialogIds(listed?.dialogs);
+  if (!dialogIds) {
+    throw new Error("asset picker dialog discovery failed");
+  }
+  return dialogIds;
+}
+
+async function waitForAssetDialog(priorDialogIds) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (shuttingDown) throw new Error("asset picker interrupted");
-    let listed;
-    try {
-      listed = await app.listFileDialogs();
-    } catch {
-      throw new Error("asset picker dialog discovery failed");
-    }
-    if (listed?.error) {
-      throw new Error("asset picker dialog discovery failed");
-    }
-    const dialogs = listed?.dialogs;
-    if (Array.isArray(dialogs) && dialogs.length === 1) {
-      const objectId = String(dialogs[0]?.id ?? "");
-      if (objectId.length > 0 && objectId.length <= 512) return objectId;
-      throw new Error("asset picker dialog identity is invalid");
-    }
-    if (Array.isArray(dialogs) && dialogs.length > 1) {
-      throw new Error("asset picker opened multiple dialogs");
-    }
+    const objectId = newlyOpenedFileDialogId(
+      await listedFileDialogIds(),
+      priorDialogIds,
+    );
+    if (objectId) return objectId;
     await sleep(50);
   }
   throw new Error("asset picker dialog did not open");
@@ -1156,8 +1164,12 @@ async function importSelectedAsset(params) {
     await ensureModerationPanelOpen();
   }
 
+  // The inspector walks each top-level Qt root independently. A parented
+  // QFileDialog can therefore be reported through both its parent and itself;
+  // identify the one new host picker by its stable object ID.
+  const priorDialogIds = await listedFileDialogIds();
   await clickModerationControl("palaceAssetSelectFile", "file picker");
-  const dialogId = await waitForAssetDialog();
+  const dialogId = await waitForAssetDialog(priorDialogIds);
   await fileDialogAction(dialogId, "select", request.selectionPath);
   await sleep(50);
   await fileDialogAction(dialogId, "accept");
