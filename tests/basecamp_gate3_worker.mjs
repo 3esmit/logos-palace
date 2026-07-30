@@ -17,6 +17,7 @@ import {
   palaceFrameTimingContract,
 } from "./basecamp_frame_timing.mjs";
 import {
+  hasNonEmptyReceipt,
   workerInvocationTimeoutLimit,
 } from "./basecamp_lez_startup.mjs";
 
@@ -1249,6 +1250,9 @@ const allowedFunctions = new Set([
 
 function receiptMatches(receipt, expected) {
   if (!expected) return true;
+  if (expected.nonEmpty === true && !hasNonEmptyReceipt(receipt)) {
+    return false;
+  }
   if (
     expected.exact !== undefined &&
     receipt !== String(expected.exact)

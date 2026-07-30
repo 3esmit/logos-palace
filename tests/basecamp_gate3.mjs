@@ -44,6 +44,7 @@ import {
   loadGate3AssetInputs,
 } from "./basecamp_gate3_asset_inputs.mjs";
 import {
+  lezStartupReceiptExpectation,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -559,7 +560,7 @@ async function startProductionLez(worker) {
       worker,
       "gate4StartLez",
       [password],
-      undefined,
+      lezStartupReceiptExpectation,
       false,
       lezStartupTimeoutMs,
     );

@@ -80,6 +80,7 @@ import {
   canonicalStorageCidSha256 as cidSha256,
 } from "./basecamp_storage_cid.mjs";
 import {
+  lezStartupReceiptExpectation,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -2445,7 +2446,7 @@ async function startLez(worker, attempts) {
       worker,
       "gate4StartLez",
       [password],
-      undefined,
+      lezStartupReceiptExpectation,
       lezStartupTimeoutMs,
     );
     lastReceipt = result.receipt;
