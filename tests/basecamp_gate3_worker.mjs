@@ -17,7 +17,7 @@ import {
   palaceFrameTimingContract,
 } from "./basecamp_frame_timing.mjs";
 import {
-  hasNonEmptyReceipt,
+  acceptsLezStartupObservation,
   workerInvocationTimeoutLimit,
 } from "./basecamp_lez_startup.mjs";
 
@@ -1248,9 +1248,16 @@ const allowedFunctions = new Set([
   "gate5VmTurnMetrics",
 ]);
 
-function receiptMatches(receipt, expected) {
+function receiptMatches(receipt, expected, properties) {
   if (!expected) return true;
-  if (expected.nonEmpty === true && !hasNonEmptyReceipt(receipt)) {
+  if (
+    expected.currentLezState !== undefined
+    && !acceptsLezStartupObservation(
+      receipt,
+      String(properties.gate4LezState ?? ""),
+      expected.currentLezState,
+    )
+  ) {
     return false;
   }
   if (
@@ -1305,6 +1312,7 @@ async function invoke(params) {
   );
   const deadline = Date.now() + timeout;
   let receipt = "";
+  let lezState = "";
   let sequence = beforeSequence;
   while (Date.now() < deadline) {
     if (shuttingDown) {
@@ -1312,9 +1320,10 @@ async function invoke(params) {
     }
     const properties = await rootProperties();
     receipt = String(properties[receiptProperty] ?? "");
+    lezState = String(properties.gate4LezState ?? "");
     sequence = Number(properties.invocationSequence ?? -1);
     if (
-      receiptMatches(receipt, params.expect) &&
+      receiptMatches(receipt, params.expect, properties) &&
       Number.isSafeInteger(sequence) &&
       sequence > beforeSequence
     ) {
@@ -1322,6 +1331,7 @@ async function invoke(params) {
       return {
         evaluated,
         receipt,
+        lezState,
         invocationSequence: sequence,
         elapsedMs: Math.round(performance.now() - startedAt),
         startedAtUnixMs,
@@ -1331,7 +1341,7 @@ async function invoke(params) {
     await sleep(50);
   }
   throw new Error(
-    `${name} receipt timeout: before=${JSON.stringify(before)} after=${JSON.stringify(receipt)} sequence=${beforeSequence}->${sequence}`,
+    `${name} receipt timeout: before=${JSON.stringify(before)} after=${JSON.stringify(receipt)} state=${JSON.stringify(lezState)} sequence=${beforeSequence}->${sequence}`,
   );
 }
 

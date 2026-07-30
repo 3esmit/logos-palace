@@ -113,6 +113,23 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     gate3Failure: "production LEZ a: ",
     retirementStatus: "audited-pre-public-write-failure",
   }),
+  Object.freeze({
+    gitCommit: "51375a2a136611f5c8b9dc490619ff7f6154babf",
+    snapshotNarHash:
+      "sha256-NVv+KyANhwtF1wk/oQ4nKBB+VVGVLCelNL30HP5Sbio=",
+    snapshotNarSize: 7_152_184,
+    snapshotRunnerSha256:
+      "264ac08a6cb5d5709eb85e90c9947107ba575284100863c96172d20b170cdba0",
+    runtimeManifestSha256:
+      "5673105501814c2389f03de87c2811cc773d7817ebaa580fcf5b4e3ce114a808",
+    compiledReportSha256:
+      "a2a25bcdd6864ef638979f255d88f4784982365945faaf811a97cc27c50bc3a0",
+    gate3ReportSha256:
+      "18aae314e77ce1408c198b1cb78988399a276c3fdd62924f7d6bdf881df031df",
+    gate3Failure:
+      "worker a: gate4StartLez receipt timeout: before=\"\" after=\"\" sequence=0->1",
+    retirementStatus: "audited-pre-public-write-failure",
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {

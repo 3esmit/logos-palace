@@ -44,7 +44,8 @@ import {
   loadGate3AssetInputs,
 } from "./basecamp_gate3_asset_inputs.mjs";
 import {
-  lezStartupReceiptExpectation,
+  currentLezStateExpectation,
+  isCurrentLezState,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -525,10 +526,15 @@ async function invoke(
     },
     timeout + 15_000,
   );
-  return {
+  const evidence = {
     receipt: String(result.receipt),
     elapsedMs: result.elapsedMs,
   };
+  Object.defineProperty(evidence, "lezState", {
+    value: String(result.lezState ?? ""),
+    enumerable: false,
+  });
+  return evidence;
 }
 
 function identityFields(receipt) {
@@ -560,22 +566,29 @@ async function startProductionLez(worker) {
       worker,
       "gate4StartLez",
       [password],
-      lezStartupReceiptExpectation,
+      currentLezStateExpectation(palaceRelease.programIdHex),
       false,
       lezStartupTimeoutMs,
     );
     lastReceipt = result.receipt;
-    const fields = statusFields(lastReceipt);
+    const { lezState, ...actionResult } = result;
     if (
       lastReceipt.startsWith("ok;")
-      && fields.ready === "1"
-      && fields.compatible === "1"
-      && fields.running === "1"
-      && fields.sync === "current"
-      && fields.current_height === fields.synced_height
-      && fields.program === palaceRelease.programIdHex
+      && isCurrentLezState(lastReceipt, palaceRelease.programIdHex)
     ) {
-      return result;
+      return actionResult;
+    }
+    if (
+      lastReceipt.length === 0
+      && isCurrentLezState(lezState, palaceRelease.programIdHex)
+    ) {
+      return {
+        ...actionResult,
+        lezStateObservation: {
+          source: "gate4LezState",
+          receipt: lezState,
+        },
+      };
     }
     if (
       !/^rejected=lez-sync;reason=(current-height-failed|last-synced-height-failed|chunk-failed|chunk-progress-mismatch|terminal-height-mismatch)$/.test(

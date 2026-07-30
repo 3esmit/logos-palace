@@ -80,7 +80,8 @@ import {
   canonicalStorageCidSha256 as cidSha256,
 } from "./basecamp_storage_cid.mjs";
 import {
-  lezStartupReceiptExpectation,
+  currentLezStateExpectation,
+  isCurrentLezState,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -1041,6 +1042,10 @@ async function invoke(
     receipt: String(result.receipt),
     elapsedMs: timing.elapsedMs,
   };
+  Object.defineProperty(evidence, "lezState", {
+    value: String(result.lezState ?? ""),
+    enumerable: false,
+  });
   Object.defineProperty(evidence, "observationTiming", {
     value: Object.freeze({
       startedAtUnixMs: timing.startedAtUnixMs,
@@ -2446,22 +2451,30 @@ async function startLez(worker, attempts) {
       worker,
       "gate4StartLez",
       [password],
-      lezStartupReceiptExpectation,
+      currentLezStateExpectation(releaseProgramId),
       lezStartupTimeoutMs,
     );
-    lastReceipt = result.receipt;
-    attempts.push(result);
-    const fields = statusFields(lastReceipt);
+    const { lezState, ...actionResult } = result;
+    lastReceipt = actionResult.receipt;
+    attempts.push(actionResult);
     if (
       lastReceipt.startsWith("ok;") &&
-      fields.ready === "1" &&
-      fields.compatible === "1" &&
-      fields.running === "1" &&
-      fields.sync === "current" &&
-      fields.current_height === fields.synced_height &&
-      fields.program === releaseProgramId
+      isCurrentLezState(lastReceipt, releaseProgramId)
     ) {
-      return { receipt: lastReceipt, fields };
+      return { receipt: lastReceipt, fields: statusFields(lastReceipt) };
+    }
+    if (
+      lastReceipt.length === 0
+      && isCurrentLezState(lezState, releaseProgramId)
+    ) {
+      return {
+        receipt: lastReceipt,
+        fields: statusFields(lezState),
+        lezStateObservation: {
+          source: "gate4LezState",
+          receipt: lezState,
+        },
+      };
     }
     if (!safeSyncRejection(lastReceipt)) {
       throw new Error(`LEZ start ${worker.label} rejected: ${lastReceipt}`);
