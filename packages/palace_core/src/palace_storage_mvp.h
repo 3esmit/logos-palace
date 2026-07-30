@@ -123,7 +123,7 @@ public:
 
     // Canonical catalog is an untrusted transport object, not authority.
     // Restore can start without administrator-local authored bytes. It creates
-    // digest-bound leaf placeholders for the catalog's validated graph,
+    // content-verified leaf placeholders for the catalog's validated graph,
     // reconstructs every derived
     // manifest, then requires exact graph and canonical-byte matches.
     std::string canonicalCatalog() const;

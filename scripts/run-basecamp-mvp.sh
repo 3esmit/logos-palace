@@ -2123,7 +2123,7 @@ gate_report_passes() {
             or $authoring.propStory == "not-requested"
           )
           and $authoring.boundary
-            == "operator-selected bounded PNG bytes -> verified handle -> approval -> digest-bound Storage CID -> manifest assignment"
+            == "operator-selected bounded PNG bytes -> verified handle -> approval -> local-byte-verified Storage CID -> manifest assignment"
           and (
             $authoring.guardedBeforeApproval
             | valid_asset_invocation

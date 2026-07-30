@@ -362,6 +362,15 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function validStorageCid(value) {
+  try {
+    cidSha256(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stableId(label) {
   return sha256(`logos-palace-basecamp-gate4-v1\n${label}\n`);
 }
@@ -1267,7 +1276,7 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
     || !["requested", "not-requested"].includes(authoring.propStory)
     || authoring.boundary
       !== "operator-selected bounded PNG bytes -> verified handle -> approval"
-        + " -> digest-bound Storage CID -> manifest assignment"
+        + " -> local-byte-verified Storage CID -> manifest assignment"
     || !validElapsedEvidence(
       authoring.guardedBeforeApproval,
       (receipt) => receipt === "rejected=asset-not-approved",
@@ -1421,7 +1430,7 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
         actual.publication.completed,
         (receipt) => receipt === `published;cid=${actual.cid}`,
       )
-      || cidSha256(actual.cid) !== actual.handle
+      || !validStorageCid(actual.cid)
     ) {
       throw new Error(
         `Gate 3 asset authoring fixture is invalid: ${actual?.assetId}`,
@@ -1610,7 +1619,7 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
       || actual.contentSha256 !== authoredAsset?.handle
       || publishedObject?.cid !== actual.cid
       || publishedObject?.contentSha256 !== actual.contentSha256
-      || cidSha256(actual.cid) !== actual.contentSha256
+      || !validStorageCid(actual.cid)
     ) {
       throw new Error(
         `Gate 3 active asset graph binding is invalid: ${expected.kind}`,

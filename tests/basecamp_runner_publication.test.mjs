@@ -47,6 +47,12 @@ const palaceQmlPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const palaceCoreImplPath = fileURLToPath(
+  new URL(
+    "../packages/palace_core/src/palace_core_impl.cpp",
+    import.meta.url,
+  ),
+);
 const standaloneScopeRunnerPath = fileURLToPath(
   new URL("../scripts/run-basecamp-standalone-scoped.sh", import.meta.url),
 );
@@ -580,13 +586,14 @@ test("Gate 2 publication binds accepted traffic to persisted sequences", async (
 });
 
 test("Gate 3 binds external admin-selected assets to Storage and pixels", async () => {
-  const [runner, gate3, gate3Worker, gate4, assetInputs] =
+  const [runner, gate3, gate3Worker, gate4, assetInputs, coreImpl] =
     await Promise.all([
     readFile(runnerPath, "utf8"),
     readFile(gate3HarnessPath, "utf8"),
     readFile(gate3WorkerPath, "utf8"),
     readFile(gate4HarnessPath, "utf8"),
     readFile(gate3AssetInputsPath, "utf8"),
+    readFile(palaceCoreImplPath, "utf8"),
   ]);
   const validatorStart = runner.indexOf(
     "def valid_asset_authoring_evidence:",
@@ -697,6 +704,16 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   assert.match(assetInputs, /maxAssetBytes = 10 \* 1024 \* 1024/);
   assert.match(runner, /PALACE_E2E_ASSET_INPUT_ROOT/);
   assert.match(runner, /PALACE_E2E_ASSET_MANIFEST/);
+  assert.match(coreImpl, /beginLocalVerification\(/);
+  assert.match(coreImpl, /verifyAssetPublication\(/);
+  assert.match(
+    coreImpl,
+    /palace::crypto::sha256Hex\(bytes\) != verification\.handle/,
+  );
+  assert.match(
+    coreImpl,
+    /recordPublishedCid\(\s*verification\.handle, verification\.cid\)/,
+  );
 
   const publicSources = [
     runner,

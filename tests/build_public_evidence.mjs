@@ -213,7 +213,7 @@ function gate3ObjectOrder(propId) {
 
 const assetAuthoringBoundary =
   "operator-selected bounded PNG bytes -> verified handle -> approval"
-  + " -> digest-bound Storage CID -> manifest assignment";
+  + " -> local-byte-verified Storage CID -> manifest assignment";
 const assetAuthoringScreenshotFile =
   "gate3-admin-assets-published.png";
 const assetAuthoringScreenshotStage =
@@ -491,6 +491,15 @@ function exactJson(left, right) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function validStorageCid(value) {
+  try {
+    cidSha256(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
@@ -3842,11 +3851,7 @@ function publicAssetAuthoringProjection(gate3, gate4) {
       "asset publication completion",
       (receipt) => receipt === `published;cid=${asset.cid}`,
     );
-    try {
-      if (cidSha256(asset.cid) !== asset.handle) {
-        throw new Error("CID digest differs");
-      }
-    } catch {
+    if (!validStorageCid(asset.cid)) {
       throw new Error("asset publication CID is invalid");
     }
     if (hasTarget) {
@@ -3976,11 +3981,7 @@ function publicAssetAuthoringProjection(gate3, gate4) {
     ) {
       throw new Error("asset graph publication is invalid");
     }
-    try {
-      if (cidSha256(object.cid) !== object.contentSha256) {
-        throw new Error("CID digest differs");
-      }
-    } catch {
+    if (!validStorageCid(object.cid)) {
       throw new Error("asset graph publication is invalid");
     }
     publishedCids.add(object.cid);

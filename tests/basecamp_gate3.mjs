@@ -166,6 +166,15 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function validStorageCid(value) {
+  try {
+    cidSha256(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stableId(label) {
   return sha256(`logos-palace-basecamp-gate4-v1\n${label}\n`);
 }
@@ -836,7 +845,7 @@ function parseAssetAuthoringCatalog(encoded) {
       )
       || (
         actual.publicationState === "published"
-          ? cidSha256(actual.cid) !== actual.handle
+          ? !validStorageCid(actual.cid)
           : actual.cid !== ""
       )
       || !Array.isArray(actual.roles)
@@ -1084,7 +1093,7 @@ function approvedAndPublishedAssetEvidence(result, fixture) {
     || !validElapsedStageEvidence(result.publication.completed)
     || typeof result.cid !== "string"
     || result.publication.completed.receipt !== `published;cid=${result.cid}`
-    || cidSha256(result.cid) !== fixture.handle
+    || !validStorageCid(result.cid)
   ) {
     throw new Error(`moderation publication evidence is invalid: ${fixture.assetId}`);
   }
@@ -1097,7 +1106,7 @@ function completedPublicationEvidence(result, fixture) {
     || !validElapsedStageEvidence(result.completed)
     || typeof result.cid !== "string"
     || result.completed.receipt !== `published;cid=${result.cid}`
-    || cidSha256(result.cid) !== fixture.handle
+    || !validStorageCid(result.cid)
   ) {
     throw new Error(`moderation completion evidence is invalid: ${fixture.assetId}`);
   }
@@ -1262,7 +1271,7 @@ async function authorAssetFixtures(
       : "not-requested",
     boundary:
       "operator-selected bounded PNG bytes -> verified handle -> approval"
-      + " -> digest-bound Storage CID -> manifest assignment",
+      + " -> local-byte-verified Storage CID -> manifest assignment",
     guardedBeforeApproval: previousEvidence?.guardedBeforeApproval,
     assets: [],
     graphBindings: previousEvidence?.graphBindings ?? [],
@@ -1325,7 +1334,7 @@ async function authorAssetFixtures(
         || !assetEvidence.publication?.dispatched
         || !assetEvidence.publication?.completed
         || assetEvidence.cid !== entry.cid
-        || cidSha256(entry.cid) !== fixture.handle
+        || !validStorageCid(entry.cid)
       ) {
         throw new Error(
           `published asset lacks prior moderation evidence: ${fixture.assetId}`,
@@ -1477,7 +1486,7 @@ async function authorAssetFixtures(
     if (
       entry.reviewState !== "approved"
       || entry.publicationState !== "published"
-      || cidSha256(entry.cid) !== fixture.handle
+      || !validStorageCid(entry.cid)
       || !assignmentMatches
     ) {
       throw new Error(`asset authoring incomplete: ${fixture.assetId}`);
@@ -1551,7 +1560,7 @@ function parseMvpCatalog(receipt, propId) {
       byteLength <= 0 ||
       byteLength > 10 * 1024 * 1024 ||
       !/^[0-9a-f]{64}$/.test(contentSha256) ||
-      cidSha256(cid) !== contentSha256
+      !validStorageCid(cid)
     ) {
       throw new Error(`MVP catalog object ${objectId} is not exact`);
     }

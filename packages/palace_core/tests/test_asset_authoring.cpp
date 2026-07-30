@@ -281,11 +281,13 @@ LOGOS_TEST(asset_authoring_review_publish_assignment_and_restart)
             1U, 1U, "head").accepted);
     LOGOS_ASSERT_FALSE(
         fixture.catalog.recordPublishedCid(
-            staged.handle,
-            cidForDigest(std::string(64U, '0'))).accepted);
+            staged.handle, "not-a-cid").accepted);
 
+    // Native Storage returns a manifest CID, whose digest is not necessarily
+    // the raw PNG digest. Core records this only after local byte verification.
     const std::string cid =
-        cidForDigest(staged.handle);
+        cidForDigest(std::string(64U, '0'));
+    LOGOS_ASSERT_NE(cid, cidForDigest(staged.handle));
     LOGOS_ASSERT_TRUE(
         fixture.catalog.recordPublishedCid(
             staged.handle, cid).accepted);

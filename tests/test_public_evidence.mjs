@@ -171,7 +171,7 @@ const gate3MediaTypes = [
 
 const assetAuthoringBoundary =
   "operator-selected bounded PNG bytes -> verified handle -> approval"
-  + " -> digest-bound Storage CID -> manifest assignment";
+  + " -> local-byte-verified Storage CID -> manifest assignment";
 const assetAuthoringScreenshotFile =
   "gate3-admin-assets-published.png";
 

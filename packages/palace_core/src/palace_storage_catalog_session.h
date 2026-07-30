@@ -173,8 +173,8 @@ public:
 struct StorageCatalogObjectStatus {
     bool found = false;
     bool reconciliationRequired = false;
-    // False only for a child commitment learned from a CID-verified
-    // bootstrap manifest whose own bytes have not yet been admitted.
+    // False only for a child commitment learned from a canonical Storage
+    // transport locator whose own bytes have not yet been admitted.
     bool specificationAdmitted = false;
     StorageCatalogObjectSpecV2 specification;
     StorageCatalogLocalPhase localPhase =
@@ -228,10 +228,11 @@ public:
         const StorageCatalogObjectSpecV2& specification,
         const std::string& cid);
 
-    // Cold-start trust seam. The expected CID must be a canonical SHA-256 CID
-    // whose digest matches fullBytes. Only an exact bounded canonical Palace
-    // manifest is admitted; its Room child commitments become fetchable but
-    // remain unadmitted until their own bytes pass the same trust boundary.
+    // Cold-start trust seam. The expected CID is a canonical immutable Storage
+    // transport locator; it need not encode the raw dataset SHA-256. Only an
+    // exact bounded canonical Palace manifest is admitted. Its Room child
+    // commitments become fetchable but remain unadmitted until their own
+    // bounded bytes match the committed contentSha256.
     StorageCatalogTransition admitFinalizedPalaceManifest(
         const std::string& expectedCid,
         const std::string& fullBytes);

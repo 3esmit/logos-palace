@@ -279,6 +279,7 @@
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
               ./flake.nix
+              ./packages/palace_core/src/palace_core_impl.cpp
               ./packages/logos_palace_ui/src/qml/Main.qml
               ./scripts
               ./tests

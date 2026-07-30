@@ -112,16 +112,6 @@ bool isLowerHexDigest(const std::string& value)
     return isLowerHex(value, 64U);
 }
 
-bool cidMatchesDigest(
-    const std::string& cid,
-    const std::string& digest)
-{
-    std::string cidDigest;
-    return isLowerHexDigest(digest)
-        && canonicalStorageCidSha256(cid, cidDigest)
-        && cidDigest == digest;
-}
-
 bool validObjectKind(StorageCatalogObjectKind kind)
 {
     switch (kind) {
@@ -868,8 +858,12 @@ PalaceStorageCatalogSession::admitFinalizedPalaceManifest(
         return transition(false, "bootstrap-manifest-size-invalid");
 
     const std::string digest = crypto::sha256Hex(fullBytes);
-    if (!cidMatchesDigest(expectedCid, digest))
-        return transition(false, "bootstrap-manifest-cid-mismatch");
+    // Native Storage CIDs identify its immutable upload manifest, rather
+    // than necessarily the raw data digest. The fetched manifest is parsed
+    // here, and every child is later admitted only after its committed bytes
+    // match contentSha256.
+    if (!isCanonicalStorageCid(expectedCid))
+        return transition(false, "bootstrap-manifest-cid-invalid");
 
     ParsedManifest parsed;
     if (!parseCanonicalManifest(fullBytes, parsed)
@@ -884,7 +878,7 @@ PalaceStorageCatalogSession::admitFinalizedPalaceManifest(
         if (child.objectId == parsed.objectId)
             return transition(false, "bootstrap-manifest-cycle");
         if (child.byteLength > m_config.maxObjectBytes
-            || !cidMatchesDigest(child.cid, child.contentSha256)) {
+            || !isCanonicalStorageCid(child.cid)) {
             return transition(false, "bootstrap-child-commitment-invalid");
         }
         if (m_objects.find(child.objectId) != m_objects.end())
@@ -2100,9 +2094,7 @@ PalaceStorageCatalogSession::admitBootstrapRetrievedObject(
         || fullBytes.size() > m_config.maxObjectBytes
         || crypto::sha256Hex(fullBytes)
             != committed.specification.contentSha256
-        || !cidMatchesDigest(
-            committed.cid,
-            committed.specification.contentSha256)) {
+        || !isCanonicalStorageCid(committed.cid)) {
         return transition(false, "bootstrap-object-verification-failed");
     }
 
@@ -2167,7 +2159,7 @@ PalaceStorageCatalogSession::admitBootstrapRetrievedObject(
             return transition(false, "bootstrap-manifest-cycle");
         }
         if (child.byteLength > m_config.maxObjectBytes
-            || !cidMatchesDigest(child.cid, child.contentSha256)) {
+            || !isCanonicalStorageCid(child.cid)) {
             return transition(
                 false, "bootstrap-child-commitment-invalid");
         }
@@ -2249,8 +2241,7 @@ bool PalaceStorageCatalogSession::validBootstrapPendingObject(
         || (object.localPhase != StorageCatalogLocalPhase::Missing
             && object.localPhase != StorageCatalogLocalPhase::Fetching)
         || !object.attestations.empty()
-        || !cidMatchesDigest(
-            object.cid, object.specification.contentSha256)) {
+        || !isCanonicalStorageCid(object.cid)) {
         return false;
     }
 

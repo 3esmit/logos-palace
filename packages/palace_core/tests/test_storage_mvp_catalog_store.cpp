@@ -131,10 +131,13 @@ bool publishAll(palace::PalaceStorageMvpBundle &bundle) {
     for (const std::string &objectId : stageable) {
       const palace::PalaceStorageMvpArtifactV1 *artifact =
           bundle.artifact(objectId);
-      if (artifact == nullptr || !bundle.assignPublicationCid(
-                                     objectId,
-                                     storageCid(
-                                         artifact->specification.contentSha256))) {
+      if (artifact == nullptr)
+        return false;
+      const std::string nativeManifestDigest = palace::crypto::sha256Hex(
+          "native-storage-manifest-v1\n" + objectId + "\n" +
+          artifact->specification.contentSha256);
+      if (!bundle.assignPublicationCid(
+              objectId, storageCid(nativeManifestDigest))) {
         return false;
       }
     }

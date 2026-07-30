@@ -174,7 +174,6 @@ bool validate(const AssetAuthoringStateV1& state)
         return false;
     }
     for (const auto& [handle, asset] : state.assets) {
-        std::string cidDigest;
         if (handle != asset.handle
             || !isLowerHex64(handle)
             || !validLabel(asset.label)
@@ -191,9 +190,8 @@ bool validate(const AssetAuthoringStateV1& state)
             || !validReview(asset.reviewState)
             || (!asset.publishedCid.empty()
                 && (asset.reviewState != "approved"
-                    || !canonicalStorageCidV1Sha256(
-                        asset.publishedCid, cidDigest)
-                    || cidDigest != handle))) {
+                    || !isCanonicalStorageCid(
+                        asset.publishedCid)))) {
             return false;
         }
     }

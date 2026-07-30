@@ -140,10 +140,11 @@ associated manifests. An optional prop image and placement metadata appear
 only after an administrator supplies and assigns that prop through the
 authoring flow.
 
-Core generates operation IDs and destinations. Downloaded bytes must match
-the expected CID, size, media type, digest, dimensions, and decoder profile
-before Basecamp receives a verified handle. Publication revalidates the
-handle; UI-provided paths are never accepted.
+Core generates operation IDs and destinations. Downloaded bytes must correlate
+with the expected canonical Storage CID and match the expected size, media
+type, digest, dimensions, and decoder profile before Basecamp receives a
+verified handle. Publication revalidates the handle; UI-provided paths are
+never accepted.
 
 Core stages a verified PNG atomically in an owner-only, per-instance producer
 root after a bounded full decode. Basecamp accepts only the lowercase
@@ -168,8 +169,9 @@ a host path. The UI invalidates abandoned requests, releases selected
 capabilities before commit, and streams the immutable selection to Core through
 a bounded, ordered chunk protocol. Core derives the digest and dimensions,
 stages only a fully verified PNG, and exposes an opaque content handle. Upload
-is blocked until human approval; a returned Storage CID is accepted only when
-its SHA-256 multihash equals the verified handle.
+is blocked until human approval; a returned canonical Storage CID is accepted
+only after Core locally retrieves its bounded dataset and confirms the exact
+PNG bytes, digest, decode, and dimensions match the verified handle.
 Persisted assignments supply graph leaves only for administrator-authorized
 assets. Restart loading rejects checksum, record, review, publication-CID,
 permission, and symlink mismatches.
@@ -286,7 +288,8 @@ before public projection.
 - Testnet LEZ is canonical for Palace authority.
 - Explorer data is accepted only through pinned schema and exact evidence.
 - Delivery is authenticated transport, not finality.
-- Storage CIDs identify bytes; manifests and decoder checks determine use.
+- Storage CIDs identify immutable Storage manifests; bounded retrieved bytes,
+  manifest commitments, and decoder checks determine use.
 - Basecamp verified handles expose approved assets without exposing paths.
 - Provider status grants no Palace capability.
 - Missing or conflicting data produces pending, offline, degraded, or

@@ -642,12 +642,9 @@ bool PalaceStorageMvpBundle::assignPublicationCid(
     const std::string& cid)
 {
     const auto found = m_artifacts.find(objectId);
-    std::string cidDigest;
     if (found == m_artifacts.end()
         || !found->second.cid.empty()
-        || !canonicalStorageCidV1Sha256(cid, cidDigest)
-        || cidDigest
-            != found->second.specification.contentSha256
+        || !isCanonicalStorageCid(cid)
         || std::any_of(
             m_artifacts.begin(),
             m_artifacts.end(),
@@ -920,7 +917,7 @@ bool PalaceStorageMvpBundle::restoreCanonicalCatalog(
             || fields[0] != catalogIds->canonicalOrder[index]
             || !parseArtifactType(fields[1], record.type)
             || fields[2].empty() || fields[2].size() > 96U
-            || !isSafePalaceCid(fields[3])
+            || !isCanonicalStorageCid(fields[3])
             || !parseSize(fields[4], record.byteLength)
             || record.byteLength == 0U
             || record.byteLength > kMaximumLeafBytes

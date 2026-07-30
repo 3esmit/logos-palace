@@ -707,13 +707,16 @@ LOGOS_TEST(storage_catalog_bootstraps_finalized_palace_and_admits_bound_tree)
         std::string("duplicate-object-id"));
 }
 
-LOGOS_TEST(storage_catalog_bootstrap_rejects_unverified_or_noncanonical_root)
+LOGOS_TEST(storage_catalog_bootstrap_accepts_manifest_cids_and_verifies_bytes)
 {
+    const std::string assetBytes = "asset-bytes";
+    auto assetCommitment = committedChild("asset", assetBytes);
+    assetCommitment.cid = cid('q');
     const std::string roomBytes =
         palace::canonicalStorageCatalogManifestV1(
             palace::StorageCatalogObjectKind::RoomManifest,
             "room",
-            {committedChild("asset", "asset-bytes")});
+            {assetCommitment});
     const auto roomCommitment = committedChild("room", roomBytes);
     const std::string palaceBytes =
         palace::canonicalStorageCatalogManifestV1(
@@ -721,12 +724,39 @@ LOGOS_TEST(storage_catalog_bootstrap_rejects_unverified_or_noncanonical_root)
             "palace",
             {roomCommitment});
 
+    // Native Storage returns a canonical manifest CID that is independent of
+    // the raw dataset SHA-256. It remains only a transport locator: exact
+    // child bytes must still satisfy the manifest commitment before admission.
+    auto nativeRoomCommitment = roomCommitment;
+    nativeRoomCommitment.cid = cid('r');
+    const std::string nativePalaceBytes =
+        palace::canonicalStorageCatalogManifestV1(
+            palace::StorageCatalogObjectKind::PalaceManifest,
+            "palace",
+            {nativeRoomCommitment});
+    palace::PalaceStorageCatalogSession native;
+    LOGOS_ASSERT_TRUE(native.configure(config()));
+    LOGOS_ASSERT_TRUE(native.admitFinalizedPalaceManifest(
+        cid('s'), nativePalaceBytes).accepted);
+    const std::string nativeRoomFetch = requireOperation(
+        native, native.beginLocalFetch("room"));
+    LOGOS_ASSERT_TRUE(native.downloadFinished(
+        terminal(nativeRoomFetch, nativeRoomCommitment.cid),
+        roomBytes).accepted);
+    const std::string nativeAssetFetch = requireOperation(
+        native, native.beginLocalFetch("asset"));
+    LOGOS_ASSERT_TRUE(native.downloadFinished(
+        terminal(nativeAssetFetch, assetCommitment.cid),
+        assetBytes).accepted);
+
+    palace::PalaceStorageCatalogSession invalidRoot;
+    LOGOS_ASSERT_TRUE(invalidRoot.configure(config()));
+    LOGOS_ASSERT_EQ(invalidRoot.admitFinalizedPalaceManifest(
+        "not-a-canonical-cid", nativePalaceBytes).reason,
+        std::string("bootstrap-manifest-cid-invalid"));
+
     palace::PalaceStorageCatalogSession session;
     LOGOS_ASSERT_TRUE(session.configure(config()));
-    LOGOS_ASSERT_EQ(
-        session.admitFinalizedPalaceManifest(
-            cidForBytes("different-root"), palaceBytes).reason,
-        std::string("bootstrap-manifest-cid-mismatch"));
 
     const std::string malformed =
         palaceBytes.substr(0U, palaceBytes.size() - 1U);
@@ -772,10 +802,16 @@ LOGOS_TEST(storage_catalog_bootstrap_rejects_unverified_or_noncanonical_root)
             palace::StorageCatalogObjectKind::PalaceManifest,
             "palace",
             {wrongDigestChild});
-    LOGOS_ASSERT_EQ(
-        session.admitFinalizedPalaceManifest(
-            cidForBytes(wrongChildDigest), wrongChildDigest).reason,
-        std::string("bootstrap-child-commitment-invalid"));
+    palace::PalaceStorageCatalogSession wrongCommitment;
+    LOGOS_ASSERT_TRUE(wrongCommitment.configure(config()));
+    LOGOS_ASSERT_TRUE(wrongCommitment.admitFinalizedPalaceManifest(
+        cid('t'), wrongChildDigest).accepted);
+    const std::string wrongCommitmentFetch = requireOperation(
+        wrongCommitment, wrongCommitment.beginLocalFetch("room"));
+    LOGOS_ASSERT_EQ(wrongCommitment.downloadFinished(
+        terminal(wrongCommitmentFetch, wrongDigestChild.cid),
+        roomBytes).reason,
+        std::string("bootstrap-object-verification-failed"));
 
     auto boundedConfig = config();
     boundedConfig.maxObjectBytes = palaceBytes.size() - 1U;
@@ -889,21 +925,25 @@ LOGOS_TEST(storage_catalog_bootstrap_rejects_child_kind_parent_and_cycle)
 LOGOS_TEST(storage_catalog_bootstrap_pending_fetch_survives_restart_and_caps)
 {
     const std::string leafBytes = "restart-leaf";
+    auto leafCommitment = committedChild("leaf", leafBytes);
+    leafCommitment.cid = cid('n');
     const std::string roomBytes =
         palace::canonicalStorageCatalogManifestV1(
             palace::StorageCatalogObjectKind::RoomManifest,
             "room",
-            {committedChild("leaf", leafBytes)});
+            {leafCommitment});
+    auto roomCommitment = committedChild("room", roomBytes);
+    roomCommitment.cid = cid('o');
     const std::string palaceBytes =
         palace::canonicalStorageCatalogManifestV1(
             palace::StorageCatalogObjectKind::PalaceManifest,
             "palace",
-            {committedChild("room", roomBytes)});
+            {roomCommitment});
 
     palace::PalaceStorageCatalogSession source;
     LOGOS_ASSERT_TRUE(source.configure(config()));
     LOGOS_ASSERT_TRUE(source.admitFinalizedPalaceManifest(
-        cidForBytes(palaceBytes), palaceBytes).accepted);
+        cid('p'), palaceBytes).accepted);
     const std::string oldFetch = requireOperation(
         source, source.beginLocalFetch("room"));
     const std::string serialized = source.canonicalState();
@@ -923,13 +963,13 @@ LOGOS_TEST(storage_catalog_bootstrap_pending_fetch_survives_restart_and_caps)
     LOGOS_ASSERT_TRUE(restored.downloadFinished(
         terminal(
             reconciliation.requeuedOperations[0].operationId,
-            cidForBytes(roomBytes)),
+            roomCommitment.cid),
         roomBytes).accepted);
     LOGOS_ASSERT_TRUE(
         restored.status("room", kNow).specificationAdmitted);
     LOGOS_ASSERT_EQ(
         restored.downloadFinished(
-            terminal(oldFetch, cidForBytes(roomBytes)),
+            terminal(oldFetch, roomCommitment.cid),
             roomBytes).reason,
         std::string("operation-already-completed"));
 
@@ -942,18 +982,24 @@ LOGOS_TEST(storage_catalog_bootstrap_pending_fetch_survives_restart_and_caps)
         roundtrip.status("room", kNow).specificationAdmitted);
     LOGOS_ASSERT_FALSE(
         roundtrip.status("leaf", kNow).specificationAdmitted);
+    const std::string leafFetch = requireOperation(
+        roundtrip, roundtrip.beginLocalFetch("leaf"));
+    LOGOS_ASSERT_TRUE(roundtrip.downloadFinished(
+        terminal(leafFetch, leafCommitment.cid), leafBytes).accepted);
+    LOGOS_ASSERT_TRUE(
+        roundtrip.status("leaf", kNow).specificationAdmitted);
 
     auto capacityConfig = config();
     capacityConfig.maxObjects = 2U;
     palace::PalaceStorageCatalogSession capacity;
     LOGOS_ASSERT_TRUE(capacity.configure(capacityConfig));
     LOGOS_ASSERT_TRUE(capacity.admitFinalizedPalaceManifest(
-        cidForBytes(palaceBytes), palaceBytes).accepted);
+        cid('p'), palaceBytes).accepted);
     const std::string capacityFetch = requireOperation(
         capacity, capacity.beginLocalFetch("room"));
     LOGOS_ASSERT_EQ(
         capacity.downloadFinished(
-            terminal(capacityFetch, cidForBytes(roomBytes)),
+            terminal(capacityFetch, roomCommitment.cid),
             roomBytes).reason,
         std::string("object-capacity-exceeded"));
     LOGOS_ASSERT_FALSE(

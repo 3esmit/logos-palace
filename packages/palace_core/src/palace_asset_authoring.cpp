@@ -341,9 +341,10 @@ AssetAuthoringResult AssetAuthoringCatalog::recordPublishedCid(
         return reject("asset-unknown");
     if (found->second.reviewState != "approved")
         return reject("asset-not-approved");
-    std::string digest;
-    if (!canonicalStorageCidV1Sha256(cid, digest)
-        || digest != handle) {
+    // Storage upload CIDs identify Storage manifests rather than necessarily
+    // encoding the raw PNG digest. PalaceCore verifies the retrieved bytes
+    // against `handle` before invoking this trusted persistence boundary.
+    if (!isCanonicalStorageCid(cid)) {
         return reject("asset-cid-invalid");
     }
     if (found->second.publishedCid == cid)

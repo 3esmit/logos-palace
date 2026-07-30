@@ -136,10 +136,15 @@ bool publishAll(palace::PalaceStorageMvpBundle& bundle)
         for (const std::string& objectId : stageable) {
             const palace::PalaceStorageMvpArtifactV1* artifact =
                 bundle.artifact(objectId);
-            if (artifact == nullptr
-                || !bundle.assignPublicationCid(
-                    objectId,
-                    cid(artifact->specification.contentSha256))) {
+            if (artifact == nullptr)
+                return false;
+            const std::string nativeManifestDigest =
+                palace::crypto::sha256Hex(
+                    "native-storage-manifest-v1\n"
+                    + objectId + "\n"
+                    + artifact->specification.contentSha256);
+            if (!bundle.assignPublicationCid(
+                    objectId, cid(nativeManifestDigest))) {
                 return false;
             }
         }
@@ -470,15 +475,21 @@ LOGOS_TEST(storage_mvp_catalog_rejects_duplicate_and_out_of_order_cids)
     LOGOS_ASSERT_TRUE(lounge != nullptr);
     const std::string atriumCid =
         cid(atrium->specification.contentSha256);
+    const std::string loungeManifestCid =
+        cid(std::string(64U, 'a'));
     LOGOS_ASSERT_TRUE(bundle.assignPublicationCid(
         "background-atrium", atriumCid));
     LOGOS_ASSERT_FALSE(bundle.assignPublicationCid(
         "background-lounge", atriumCid));
-    LOGOS_ASSERT_FALSE(bundle.assignPublicationCid(
+    // Publication CIDs identify native Storage manifests. Exact object bytes
+    // are verified before this commit, rather than inferred from CID digest.
+    LOGOS_ASSERT_TRUE(bundle.assignPublicationCid(
         "background-lounge",
-        cid(std::string(64U, 'a'))));
+        loungeManifestCid));
     LOGOS_ASSERT_FALSE(bundle.assignPublicationCid(
-        propManifestObjectId(), atriumCid));
+        propManifestObjectId(), loungeManifestCid));
+    LOGOS_ASSERT_FALSE(bundle.assignPublicationCid(
+        propManifestObjectId(), "not-a-cid"));
     LOGOS_ASSERT_FALSE(bundle.assignPublicationCid(
         "unknown", atriumCid));
 }

@@ -5402,7 +5402,7 @@ std::string PalaceCoreImpl::verifyMvpStorageRetention()
             + std::to_string(m_storageRetentionRound)
             + "-" + std::to_string(++sequence);
         const std::string path =
-            storageMvpDownloadPath(operationId);
+            storageDownloadPath(operationId);
         if (path.empty()) {
             m_storageMvpFailures[artifact.objectId] =
                 "retention-path";
@@ -7971,7 +7971,7 @@ bool PalaceCoreImpl::writeStorageMvpArtifact(
     return true;
 }
 
-std::string PalaceCoreImpl::storageMvpDownloadPath(
+std::string PalaceCoreImpl::storageDownloadPath(
     const std::string& operationId) const
 {
     if (operationId.empty() || operationId.size() > 128U
@@ -8008,7 +8008,7 @@ std::string PalaceCoreImpl::storageMvpDownloadPath(
         : std::string{};
 }
 
-bool PalaceCoreImpl::readStorageMvpTransfer(
+bool PalaceCoreImpl::readStorageDownload(
     const std::string& path,
     std::uint64_t maximumBytes,
     std::string& bytes) const
@@ -8046,6 +8046,38 @@ bool PalaceCoreImpl::readStorageMvpTransfer(
     }
     bytes = encoded.toStdString();
     return true;
+}
+
+bool PalaceCoreImpl::verifyAssetPublication(
+    const AssetPublicationVerification& verification)
+{
+    if (!m_verifiedAssetStore
+        || !palace::isCanonicalStorageCid(verification.cid)) {
+        return false;
+    }
+    const palace::AssetAuthoringAssetV1* asset =
+        m_assetAuthoring.asset(verification.handle);
+    if (asset == nullptr || asset->reviewState != "approved"
+        || asset->byteLength == 0U) {
+        return false;
+    }
+
+    std::string bytes;
+    if (!readStorageDownload(
+            verification.path, asset->byteLength, bytes)
+        || bytes.size() != asset->byteLength
+        || palace::crypto::sha256Hex(bytes) != verification.handle) {
+        return false;
+    }
+    const palace::VerifiedAsset verified =
+        m_verifiedAssetStore->stagePngBytes(bytes);
+    if (!verified.accepted || verified.handle != verification.handle
+        || verified.width != asset->width
+        || verified.height != asset->height) {
+        return false;
+    }
+    return m_assetAuthoring.recordPublishedCid(
+        verification.handle, verification.cid).accepted;
 }
 
 void PalaceCoreImpl::scheduleStorageMvpPublications()
@@ -8132,7 +8164,7 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
     StorageMvpTransferPurpose purpose)
 {
     const std::string path =
-        storageMvpDownloadPath(operation.operationId);
+        storageDownloadPath(operation.operationId);
     if (path.empty())
         return false;
     const palace::StorageModuleSessionTransition dispatched =
@@ -8230,7 +8262,7 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
     bool succeeded =
         terminal.outcome
             == palace::StorageTransferOutcome::Succeeded
-        && readStorageMvpTransfer(
+        && readStorageDownload(
             transfer.path,
             artifact->specification.byteLength,
             bytes);
@@ -8573,6 +8605,26 @@ void PalaceCoreImpl::applyStorageTerminal(
         return;
     }
 
+    const auto verification =
+        m_storagePublicationVerificationByOperation.find(
+            terminal.domainOperationId);
+    if (verification
+        != m_storagePublicationVerificationByOperation.end()) {
+        const AssetPublicationVerification pending =
+            verification->second;
+        m_storagePublicationVerificationByOperation.erase(
+            verification);
+        const bool verified = terminal.outcome
+                == palace::StorageTransferOutcome::Succeeded
+            && terminal.cid == pending.cid
+            && verifyAssetPublication(pending);
+        QFile::remove(QString::fromStdString(pending.path));
+        m_publicationStatus[pending.handle] = verified
+            ? "published;cid=" + pending.cid
+            : "publish-failed;reason=content-verification";
+        return;
+    }
+
     if (terminal.kind == palace::StorageTransferKind::Upload) {
         const auto publication =
             m_storagePublicationByOperation.find(
@@ -8581,36 +8633,42 @@ void PalaceCoreImpl::applyStorageTerminal(
             return;
         const std::string handle = publication->second;
         m_storagePublicationByOperation.erase(publication);
-        const palace::AssetAuthoringAssetV1* background =
+        const palace::AssetAuthoringAssetV1* asset =
             m_assetAuthoring.asset(handle);
-        std::string cidDigest;
-        const bool validTerminalCid =
-            terminal.outcome
-                == palace::StorageTransferOutcome::Succeeded
-            && (background != nullptr
-                ? palace::canonicalStorageCidV1Sha256(
-                      terminal.cid, cidDigest)
-                : palace::canonicalStorageCidSha256(
-                      terminal.cid, cidDigest));
         if (terminal.outcome
                 != palace::StorageTransferOutcome::Succeeded) {
             m_publicationStatus[handle] = "publish-failed";
-        } else if (!validTerminalCid || cidDigest != handle) {
+        } else if (asset == nullptr
+            || !palace::isCanonicalStorageCid(terminal.cid)) {
             m_publicationStatus[handle] =
-                "publish-failed;reason=cid-digest-mismatch";
+                "publish-failed;reason=upload-cid";
         } else {
-            if (background != nullptr) {
-                const palace::AssetAuthoringResult persisted =
-                    m_assetAuthoring.recordPublishedCid(
-                        handle, terminal.cid);
-                if (!persisted.accepted) {
-                    m_publicationStatus[handle] =
-                        "publish-failed;reason=state-persistence";
-                    return;
-                }
+            const std::string verificationOperationId =
+                terminal.domainOperationId + "-verify";
+            const std::string verificationPath =
+                storageDownloadPath(verificationOperationId);
+            const palace::StorageModuleSessionTransition verified =
+                verificationPath.empty()
+                ? palace::StorageModuleSessionTransition{}
+                : m_storageSession.beginLocalVerification(
+                      verificationOperationId,
+                      terminal.cid,
+                      verificationPath,
+                      asset->byteLength,
+                      65536U);
+            if (!verified.accepted) {
+                m_publicationStatus[handle] =
+                    "publish-failed;reason=verification-dispatch";
+                return;
             }
-            m_publicationStatus[handle] =
-                "published;cid=" + terminal.cid;
+            m_storagePublicationVerificationByOperation.emplace(
+                verificationOperationId,
+                AssetPublicationVerification{
+                    handle,
+                    terminal.cid,
+                    verificationPath,
+                });
+            executeStorageCommands(verified.commands);
         }
         return;
     }
