@@ -1246,7 +1246,7 @@ async function fixture() {
         );
     return {
       assetId: asset.assetId,
-      label: asset.assetId,
+      label: `${asset.assetId}.png`,
       file: `${asset.assetId}.png`,
       handle: asset.handle,
       width: asset.width,

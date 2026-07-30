@@ -162,12 +162,14 @@ fetches, not an undocumented pin guarantee.
 
 Room images and any explicitly authorized prop images are
 administrator-authored inputs, not compiled resources. Basecamp owns the
-user-mediated file selection and exposes only an opaque, per-view capability;
-neither QML nor Core receives a host path. The UI streams the immutable
-selection to Core through a bounded, ordered chunk protocol. Core derives the
-digest and dimensions, stages only a fully verified PNG, and exposes an opaque
-content handle. Upload is blocked until human approval; a returned Storage CID
-is accepted only when its SHA-256 multihash equals the verified handle.
+user-mediated file selection: an opaque per-view request ID is followed only by
+the matching asynchronous completion capability; neither QML nor Core receives
+a host path. The UI invalidates abandoned requests, releases selected
+capabilities before commit, and streams the immutable selection to Core through
+a bounded, ordered chunk protocol. Core derives the digest and dimensions,
+stages only a fully verified PNG, and exposes an opaque content handle. Upload
+is blocked until human approval; a returned Storage CID is accepted only when
+its SHA-256 multihash equals the verified handle.
 Persisted assignments supply graph leaves only for administrator-authorized
 assets. Restart loading rejects checksum, record, review, publication-CID,
 permission, and symlink mismatches.
@@ -273,7 +275,7 @@ The active claim binds source commit, snapshot NAR, runner digest, runtime
 manifest, run directory, GC root, and process-scope identity. Safe pre-Gate-3
 roll-forward retires the predecessor slice and brackets replacement with two
 claim-bound process scans. Gate-3-entered claims cannot roll forward, except
-for one audited pre-public-write fingerprint rejection whose immutable source,
+for allowlisted audited pre-public-write failures whose immutable source,
 reports, and retirement certificate all match exact digests. That recovery
 retains predecessor-local state and still rejects every other entered claim.
 Completed claims bind the compiled report digest and must reopen all evidence

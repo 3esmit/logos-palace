@@ -1971,8 +1971,8 @@ gate_report_passes() {
             )) | sort
           )
           and (.assetId | test("^[a-z][a-z0-9_-]{0,63}$"))
-          and .label == .assetId
           and (.file | test("^[a-z0-9][a-z0-9._-]{0,127}\\.png$"))
+          and .label == (.file | if length > 32 then "selected-image.png" else . end)
           and (.handle | valid_sha256)
           and (.width | valid_nonnegative_integer)
           and .width > 0

@@ -127,7 +127,10 @@ function auditedPrePublicWriteGate3Report(predecessor) {
   };
 }
 
-async function fixture({ legacy = false } = {}) {
+async function fixture({
+  legacy = false,
+  additionalPrePublicWriteAudits = [],
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "palace-claim-lifecycle-"));
   const claimDirectory = join(root, "claims");
   const runs = join(root, "runs");
@@ -257,6 +260,8 @@ async function fixture({ legacy = false } = {}) {
     runtimeManifestSha256: predecessorCommon.runtimeManifestSha256,
     compiledReportSha256: sha256(await readFile(compiledPath)),
     gate3ReportSha256: "e".repeat(64),
+    gate3Failure: "production LEZ a: rejected=lez-network-fingerprint",
+    retirementStatus: "audited-fingerprint-rejection",
   };
   let timestamp = 1_700_000_001_000;
   let lockChecks = 0;
@@ -290,7 +295,10 @@ async function fixture({ legacy = false } = {}) {
     writeCompletionRecord: async () =>
       join(successorRun, "active-claim-completion.json"),
     legacyAudit,
-    prePublicWriteAudit,
+    prePublicWriteAudits: [
+      ...additionalPrePublicWriteAudits,
+      prePublicWriteAudit,
+    ],
   });
   return {
     root,
@@ -639,8 +647,20 @@ test("rejects any Gate 3 artifact and a gate3-entered predecessor", async () => 
   });
 });
 
-test("rolls forward one audited Gate 3 pre-public-write rejection", async () => {
-  await withFixture({}, async ({
+test("rolls forward only the matching audited Gate 3 pre-public-write failure", async () => {
+  await withFixture({
+    additionalPrePublicWriteAudits: [{
+      gitCommit: "f".repeat(40),
+      snapshotNarHash: narHash,
+      snapshotNarSize: 4096,
+      snapshotRunnerSha256: runnerSha256,
+      runtimeManifestSha256: "0".repeat(64),
+      compiledReportSha256: "1".repeat(64),
+      gate3ReportSha256: "2".repeat(64),
+      gate3Failure: "unmatched pre-public-write failure",
+      retirementStatus: "audited-pre-public-write-failure",
+    }],
+  }, async ({
     claimPath,
     predecessorClaim,
     predecessorRun,

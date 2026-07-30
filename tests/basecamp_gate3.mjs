@@ -18,7 +18,7 @@ import {
 } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   palaceRelease,
@@ -43,6 +43,9 @@ import {
 import {
   loadGate3AssetInputs,
 } from "./basecamp_gate3_asset_inputs.mjs";
+import {
+  lezStartupTimeoutMs,
+} from "./basecamp_lez_startup.mjs";
 
 const [
   basecampArgument,
@@ -549,7 +552,7 @@ function identityFields(receipt) {
 
 async function startProductionLez(worker) {
   const password = stableId(`wallet-password/${worker.label}`);
-  const deadline = Date.now() + 5 * 60_000;
+  const deadline = Date.now() + lezStartupTimeoutMs;
   let lastReceipt = "";
   while (Date.now() < deadline) {
     const result = await invoke(
@@ -558,7 +561,7 @@ async function startProductionLez(worker) {
       [password],
       undefined,
       false,
-      120_000,
+      lezStartupTimeoutMs,
     );
     lastReceipt = result.receipt;
     const fields = statusFields(lastReceipt);
@@ -994,7 +997,7 @@ function matchingFixtureAsset(catalog, fixture) {
   if (
     asset
     && (
-      asset.label !== fixture.assetId
+      asset.label !== expectedStageLabel(fixture)
       || asset.width !== fixture.width
       || asset.height !== fixture.height
       || asset.byteLength !== fixture.byteLength
@@ -1005,12 +1008,25 @@ function matchingFixtureAsset(catalog, fixture) {
   return asset;
 }
 
+function selectedFileName(fixture) {
+  const name = basename(String(fixture.file ?? ""));
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(name)) {
+    throw new Error(`asset input file name is invalid: ${fixture.assetId}`);
+  }
+  return name;
+}
+
+function expectedStageLabel(fixture) {
+  const name = selectedFileName(fixture);
+  return name.length > 32 ? "selected-image.png" : name;
+}
+
 function validatePriorStage(prior, fixture) {
   if (
     !prior
     || prior.assetId !== fixture.assetId
-    || prior.label !== fixture.assetId
-    || prior.file !== fixture.file
+    || prior.label !== expectedStageLabel(fixture)
+    || prior.file !== selectedFileName(fixture)
     || prior.handle !== fixture.handle
     || prior.width !== fixture.width
     || prior.height !== fixture.height
@@ -1032,6 +1048,155 @@ function validatePriorStage(prior, fixture) {
   return prior;
 }
 
+function validElapsedStageEvidence(value) {
+  return (
+    exactObjectKeys(value, ["receipt", "elapsedMs"])
+    && typeof value.receipt === "string"
+    && value.receipt.length > 0
+    && Number.isSafeInteger(value.elapsedMs)
+    && value.elapsedMs >= 0
+  );
+}
+
+function approvedAndPublishedAssetEvidence(result, fixture) {
+  if (
+    !exactObjectKeys(result, ["review", "publication", "cid"])
+    || !validElapsedStageEvidence(result.review)
+    || result.review.receipt
+      !== `ok;handle=${fixture.handle};review=approved`
+    || !exactObjectKeys(result.publication, ["dispatched", "completed"])
+    || !validElapsedStageEvidence(result.publication.dispatched)
+    || result.publication.dispatched.receipt !== "ok;asset=publishing"
+    || !validElapsedStageEvidence(result.publication.completed)
+    || typeof result.cid !== "string"
+    || result.publication.completed.receipt !== `published;cid=${result.cid}`
+    || cidSha256(result.cid) !== fixture.handle
+  ) {
+    throw new Error(`moderation publication evidence is invalid: ${fixture.assetId}`);
+  }
+  return result;
+}
+
+function completedPublicationEvidence(result, fixture) {
+  if (
+    !exactObjectKeys(result, ["cid", "completed"])
+    || !validElapsedStageEvidence(result.completed)
+    || typeof result.cid !== "string"
+    || result.completed.receipt !== `published;cid=${result.cid}`
+    || cidSha256(result.cid) !== fixture.handle
+  ) {
+    throw new Error(`moderation completion evidence is invalid: ${fixture.assetId}`);
+  }
+  return result;
+}
+
+function completedAssetImportStage(imported, fixture) {
+  if (
+    !exactObjectKeys(imported, ["assetId", "trace"])
+    || imported.assetId !== fixture.assetId
+    || !exactObjectKeys(imported.trace, [
+      "schema",
+      "version",
+      "generation",
+      "handle",
+      "width",
+      "height",
+      "byteLength",
+      "chunkBytes",
+      "chunkCount",
+      "begin",
+      "appends",
+      "commit",
+    ])
+    || imported.trace.schema !== "logos.palace.user-file-import"
+    || imported.trace.version !== 1
+    || !Number.isSafeInteger(imported.trace.generation)
+    || imported.trace.generation <= 0
+    || imported.trace.handle !== fixture.handle
+    || imported.trace.width !== fixture.width
+    || imported.trace.height !== fixture.height
+    || imported.trace.byteLength !== fixture.byteLength
+    || imported.trace.chunkBytes !== 32 * 1024
+    || !Number.isSafeInteger(imported.trace.chunkCount)
+    || imported.trace.chunkCount <= 0
+    || !validElapsedStageEvidence(imported.trace.begin)
+    || !Array.isArray(imported.trace.appends)
+    || imported.trace.appends.length !== imported.trace.chunkCount
+    || !validElapsedStageEvidence(imported.trace.commit)
+  ) {
+    throw new Error(`asset picker trace is invalid: ${fixture.assetId}`);
+  }
+  const beginFields = statusFields(imported.trace.begin.receipt);
+  if (
+    !imported.trace.begin.receipt.startsWith("ok;")
+    ||
+    !/^[0-9a-f]{32}$/.test(beginFields.session)
+    || beginFields.next !== "0"
+    || beginFields.maxChunkBytes !== String(32 * 1024)
+    || beginFields.maxTotalBytes !== String(10 * 1024 * 1024)
+  ) {
+    throw new Error(`asset picker begin is invalid: ${fixture.assetId}`);
+  }
+
+  let totalBytes = 0;
+  for (
+    let sequence = 0;
+    sequence < imported.trace.appends.length;
+    sequence += 1
+  ) {
+    const append = imported.trace.appends[sequence];
+    totalBytes += append?.byteLength ?? 0;
+    const fields = statusFields(append?.receipt);
+    if (
+      !exactObjectKeys(append, [
+        "sequence",
+        "byteLength",
+        "receipt",
+        "elapsedMs",
+      ])
+      || append.sequence !== sequence
+      || !Number.isSafeInteger(append.byteLength)
+      || append.byteLength <= 0
+      || append.byteLength > imported.trace.chunkBytes
+      || !validElapsedStageEvidence({
+        receipt: append.receipt,
+        elapsedMs: append.elapsedMs,
+      })
+      || append.receipt
+        !== `ok;session=${beginFields.session};next=${sequence + 1};`
+          + `bytes=${totalBytes}`
+    ) {
+      throw new Error(
+        `asset picker append is invalid: ${fixture.assetId}/${sequence}`,
+      );
+    }
+  }
+  if (
+    totalBytes !== fixture.byteLength
+    || imported.trace.commit.receipt
+      !== `ok;handle=${fixture.handle};width=${fixture.width};`
+        + `height=${fixture.height};bytes=${fixture.byteLength}`
+  ) {
+    throw new Error(`asset picker commit is invalid: ${fixture.assetId}`);
+  }
+  return {
+    assetId: fixture.assetId,
+    label: expectedStageLabel(fixture),
+    file: selectedFileName(fixture),
+    handle: fixture.handle,
+    width: fixture.width,
+    height: fixture.height,
+    byteLength: fixture.byteLength,
+    role: fixture.role,
+    target: fixture.assignment,
+    chunkBytes: imported.trace.chunkBytes,
+    chunkCount: imported.trace.chunkCount,
+    begin: imported.trace.begin,
+    appends: imported.trace.appends,
+    commit: imported.trace.commit,
+  };
+}
+
 async function stageAssetFixture(worker, fixture, prior) {
   const existing = matchingFixtureAsset(
     await readAssetAuthoringCatalog(worker),
@@ -1039,94 +1204,26 @@ async function stageAssetFixture(worker, fixture, prior) {
   );
   if (existing) return validatePriorStage(prior, fixture);
 
-  const begin = await invoke(
-    worker,
-    "beginAssetStage",
-    [fixture.assetId],
-    { prefix: "ok;session=" },
-  );
-  const beginFields = statusFields(begin.receipt);
-  if (
-    !/^[0-9a-f]{32}$/.test(beginFields.session)
-    || beginFields.next !== "0"
-    || beginFields.maxChunkBytes !== String(32 * 1024)
-    || beginFields.maxTotalBytes !== String(10 * 1024 * 1024)
-  ) {
-    throw new Error(`asset stage begin is invalid: ${fixture.assetId}`);
-  }
-  const appends = [];
-  let totalBytes = 0;
-  let sequence = 0;
-  try {
-    for (
-      let offset = 0;
-      offset < fixture.bytes.length;
-      offset += 32 * 1024
-    ) {
-      const chunk = fixture.bytes.subarray(offset, offset + 32 * 1024);
-      const appended = await invoke(
-        worker,
-        "appendAssetStageChunk",
-        [beginFields.session, sequence, chunk.toString("base64")],
-        { prefix: `ok;session=${beginFields.session};` },
-      );
-      totalBytes += chunk.length;
-      const fields = statusFields(appended.receipt);
-      if (
-        fields.next !== String(sequence + 1)
-        || fields.bytes !== String(totalBytes)
-      ) {
-        throw new Error(
-          `asset stage append is invalid: ${fixture.assetId}/${sequence}`,
-        );
-      }
-      appends.push({
-        sequence,
-        byteLength: chunk.length,
-        ...appended,
-      });
-      sequence += 1;
-    }
-    const commit = await invoke(
-      worker,
-      "commitAssetStage",
-      [beginFields.session],
-      {
-        exact:
-          `ok;handle=${fixture.handle};width=${fixture.width};`
-          + `height=${fixture.height};bytes=${fixture.byteLength}`,
-      },
-    );
-    matchingFixtureAsset(
-      await readAssetAuthoringCatalog(worker),
-      fixture,
-    );
-    return {
+  const imported = await worker.call(
+    "importSelectedAsset",
+    {
       assetId: fixture.assetId,
-      label: fixture.assetId,
-      file: fixture.file,
-      handle: fixture.handle,
-      width: fixture.width,
-      height: fixture.height,
-      byteLength: fixture.byteLength,
-      role: fixture.role,
-      target: fixture.assignment,
-      chunkBytes: 32 * 1024,
-      chunkCount: appends.length,
-      begin,
-      appends,
-      commit,
-    };
-  } catch (error) {
-    await invoke(
-      worker,
-      "cancelAssetStage",
-      [beginFields.session],
-      undefined,
-      true,
-    ).catch(() => {});
-    throw error;
-  }
+      selectionPath: assetInputs.selectionPathFor(fixture.assetId),
+      expected: {
+        handle: fixture.handle,
+        width: fixture.width,
+        height: fixture.height,
+        byteLength: fixture.byteLength,
+      },
+    },
+    240_000,
+  );
+  const stage = completedAssetImportStage(imported, fixture);
+  matchingFixtureAsset(
+    await readAssetAuthoringCatalog(worker),
+    fixture,
+  );
+  return stage;
 }
 
 function priorAssetEvidence(previousEvidence, fixture) {
@@ -1208,81 +1305,72 @@ async function authorAssetFixtures(
     const assetEvidence = evidence.assets.find(
       ({ assetId }) => assetId === fixture.assetId,
     );
-    if (entry.reviewState === "approved") {
-      if (!assetEvidence.review) {
+    if (entry.publicationState === "published") {
+      if (
+        !assetEvidence.review
+        || !assetEvidence.publication?.dispatched
+        || !assetEvidence.publication?.completed
+        || assetEvidence.cid !== entry.cid
+        || cidSha256(entry.cid) !== fixture.handle
+      ) {
         throw new Error(
-          `approved asset lacks prior review: ${fixture.assetId}`,
+          `published asset lacks prior moderation evidence: ${fixture.assetId}`,
+        );
+      }
+      continue;
+    }
+    if (entry.reviewState === "approved" && !assetEvidence.review) {
+      throw new Error(
+        `approved asset lacks prior review: ${fixture.assetId}`,
+      );
+    }
+    if (entry.publicationState === "publishing") {
+      if (!assetEvidence.publication?.dispatched) {
+        throw new Error(
+          `publishing asset lacks prior dispatch: ${fixture.assetId}`,
+        );
+      }
+      const completed = completedPublicationEvidence(
+        await worker.call(
+          "waitForPublishedAsset",
+          { handle: fixture.handle },
+          240_000,
+        ),
+        fixture,
+      );
+      assetEvidence.publication.completed = completed.completed;
+      assetEvidence.cid = completed.cid;
+      continue;
+    }
+    const published = approvedAndPublishedAssetEvidence(
+      await worker.call(
+        "approveAndPublishAsset",
+        { handle: fixture.handle },
+        240_000,
+      ),
+      fixture,
+    );
+    if (assetEvidence.review) {
+      if (
+        assetEvidence.review.receipt
+          !== published.review.receipt
+      ) {
+        throw new Error(
+          `approved asset review changed: ${fixture.assetId}`,
         );
       }
     } else {
-      assetEvidence.review = await invoke(
-        worker,
-        "reviewAsset",
-        [fixture.handle, "approve"],
-        { exact: `ok;handle=${fixture.handle};review=approved` },
-      );
+      assetEvidence.review = published.review;
     }
+    assetEvidence.publication = published.publication;
+    assetEvidence.cid = published.cid;
+    evidence.phase = "approved";
+    evidence.elapsedMs = Math.round(performance.now() - startedAt);
+    await checkpoint(evidence);
   }
   evidence.phase = "approved";
   evidence.elapsedMs = Math.round(performance.now() - startedAt);
   await checkpoint(evidence);
-
-  for (const fixture of assetFixtures) {
-    let entry = matchingFixtureAsset(
-      await readAssetAuthoringCatalog(worker),
-      fixture,
-    );
-    const assetEvidence = evidence.assets.find(
-      ({ assetId }) => assetId === fixture.assetId,
-    );
-    if (entry.publicationState !== "published") {
-      assetEvidence.publication = {
-        dispatched: await invoke(
-          worker,
-          "publishAsset",
-          [fixture.handle],
-          { exact: "ok;asset=publishing" },
-        ),
-      };
-    } else if (!assetEvidence.publication?.dispatched) {
-      throw new Error(
-        `published asset lacks prior dispatch: ${fixture.assetId}`,
-      );
-    }
-    const deadline = Date.now() + 180_000;
-    const pollStartedAt = performance.now();
-    while (Date.now() < deadline) {
-      await invoke(
-        worker,
-        "refreshAssetAuthoring",
-        [],
-        { prefix: "ok;" },
-      );
-      entry = matchingFixtureAsset(
-        await readAssetAuthoringCatalog(worker),
-        fixture,
-      );
-      if (
-        entry.reviewState !== "approved"
-        || entry.publicationState.startsWith("publish-failed")
-      ) {
-        throw new Error(`asset upload failed: ${fixture.assetId}`);
-      }
-      if (entry.publicationState === "published") break;
-      await sleep(250);
-    }
-    if (
-      entry?.publicationState !== "published"
-      || cidSha256(entry.cid) !== fixture.handle
-    ) {
-      throw new Error(`asset upload timed out: ${fixture.assetId}`);
-    }
-    assetEvidence.publication.completed = {
-      receipt: `published;cid=${entry.cid}`,
-      elapsedMs: Math.round(performance.now() - pollStartedAt),
-    };
-    assetEvidence.cid = entry.cid;
-  }
   evidence.phase = "published";
   evidence.elapsedMs = Math.round(performance.now() - startedAt);
   await checkpoint(evidence);
@@ -1310,33 +1398,25 @@ async function authorAssetFixtures(
         );
       }
     } else if (fixture.assignment.kind === "room-background") {
-      assetEvidence.assignment = await invoke(
-        worker,
-        "assignRoomBackground",
-        [fixture.assignment.roomId, fixture.handle],
+      assetEvidence.assignment = await worker.call(
+        "assignRoomBackgroundFromModeration",
         {
-          exact:
-            `ok;room=${fixture.assignment.roomId};handle=${fixture.handle}`,
+          roomId: fixture.assignment.roomId,
+          handle: fixture.handle,
         },
+        60_000,
       );
     } else {
-      assetEvidence.assignment = await invoke(
-        worker,
-        "assignPropAsset",
-        [
-          fixture.assignment.propId,
-          fixture.handle,
-          fixture.assignment.anchorX,
-          fixture.assignment.anchorY,
-          fixture.assignment.layer,
-        ],
+      assetEvidence.assignment = await worker.call(
+        "assignPropAssetFromModeration",
         {
-          exact:
-            `ok;propId=${fixture.assignment.propId};handle=${fixture.handle};`
-            + `anchorX=${fixture.assignment.anchorX};`
-            + `anchorY=${fixture.assignment.anchorY};`
-            + `layer=${fixture.assignment.layer}`,
+          handle: fixture.handle,
+          propId: fixture.assignment.propId,
+          anchorX: fixture.assignment.anchorX,
+          anchorY: fixture.assignment.anchorY,
+          layer: fixture.assignment.layer,
         },
+        60_000,
       );
     }
   }

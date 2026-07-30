@@ -222,8 +222,10 @@ and technical constraints:
 
 1. Palace Core either binds Storage-fetched bytes to typed catalog metadata or
    derives metadata from an administrator-selected room or prop image streamed
-   through its bounded authoring protocol. Basecamp supplies an opaque
-   per-view selection capability, never a host path. Core checks media type,
+   through its bounded authoring protocol. Basecamp returns an opaque per-view
+   selection request ID, then delivers a selection capability only through the
+   matching asynchronous completion; neither exposes a host path. Core checks
+   media type,
    encoded size,
    dimensions, SHA-256 digest, the 10 MiB encoded limit, 4096-pixel dimension
    limits, 16 MiPixels (16,777,216 pixels), PNG structure, and a full bounded
@@ -278,8 +280,8 @@ owns that program/root pair. The runner:
 - publishes sanitized evidence only after the compiled report and durable run
   completion are reopened and verified;
 - stores persistent user state and reports in one owner-only run directory;
-- refuses a new production run after Gate 3 evidence exists, except for one
-  audited pre-public-write fingerprint rejection with exact source and report
+- refuses a new production run after Gate 3 evidence exists, except for
+  allowlisted audited pre-public-write failures with exact source and report
   digests;
 - resumes only when given that exact run directory and source snapshot.
 

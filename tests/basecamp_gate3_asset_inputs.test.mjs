@@ -93,7 +93,7 @@ async function syntheticInputs({ includeProp = true } = {}) {
   return { root, manifestPath, manifest };
 }
 
-test("loads bounded unique media fixtures without exposing input paths", async () => {
+test("loads bounded unique media fixtures with manifest-derived selection paths", async () => {
   const inputs = await syntheticInputs();
   const result = await loadGate3AssetInputs({
     manifestPath: inputs.manifestPath,
@@ -123,6 +123,16 @@ test("loads bounded unique media fixtures without exposing input paths", async (
       assignment,
     })),
   );
+  assert.equal(Object.hasOwn(result.fixtures[0], "bytes"), false);
+  assert.equal(
+    result.selectionPathFor("asset-a"),
+    join(inputs.root, "asset-a.png"),
+  );
+  assert.throws(
+    () => result.selectionPathFor("unknown-asset"),
+    /asset input selection is unknown/,
+  );
+  assert.equal(Object.keys(result).includes("selectionPathFor"), false);
   assert.equal(JSON.stringify(result).includes(inputs.root), false);
 });
 

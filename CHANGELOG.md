@@ -72,9 +72,9 @@ after its first published release.
 
 ### Changed
 
-- An exact audited pre-public-write Gate 3 fingerprint rejection can retire its
-  claim without discarding predecessor-local state; every other entered claim
-  remains non-roll-forwardable.
+- Exact audited pre-public-write Gate 3 failures can retire their claims
+  without discarding predecessor-local state; every other entered claim remains
+  non-roll-forwardable.
 - Palace program source is maintained under `program/` in this repository. It
   is no longer modeled as an external repository or build input.
 - Palace state moved from the incompatible schema-v2 monolithic account to

@@ -143,9 +143,18 @@ Item {
     property bool backgroundScreenshotFenceRunning: false
     property int backgroundScreenshotFenceFrame: -1
     property bool assetImportRunning: false
+    readonly property int assetImportMaximumBytes: 10 * 1024 * 1024
+    property string assetImportPhase: "idle"
+    property int assetImportGeneration: 0
+    property string assetImportRequestId: ""
     property string assetImportCapability: ""
     property string assetImportSession: ""
     property string assetImportLabel: ""
+    property int assetImportExpectedSequence: 0
+    property int assetImportPendingSequence: -1
+    property double assetImportStartedAtUnixMs: 0
+    property var assetImportTrace: null
+    property string gate3AssetImportEvidence: ""
     property string propDraftId: ""
     property string propDraftAnchorX: ""
     property string propDraftAnchorY: ""
@@ -523,41 +532,6 @@ Item {
             backend.publicationStatus(String(handle)), null)
     }
 
-    function beginAssetStage(label) {
-        if (!ready || !backend)
-            return rejectedNotReady()
-        return watchAction(
-            backend.beginAssetStage(String(label)),
-            null)
-    }
-
-    function appendAssetStageChunk(sessionId, sequence, base64Chunk) {
-        if (!ready || !backend)
-            return rejectedNotReady()
-        return watchAction(
-            backend.appendAssetStageChunk(
-                String(sessionId),
-                Math.round(Number(sequence)),
-                String(base64Chunk)),
-            null)
-    }
-
-    function commitAssetStage(sessionId) {
-        if (!ready || !backend)
-            return rejectedNotReady()
-        return watchAction(
-            backend.commitAssetStage(String(sessionId)),
-            null)
-    }
-
-    function cancelAssetStage(sessionId) {
-        if (!ready || !backend)
-            return rejectedNotReady()
-        return watchAction(
-            backend.cancelAssetStage(String(sessionId)),
-            null)
-    }
-
     function reviewAsset(handle, decision) {
         if (!ready || !backend)
             return rejectedNotReady()
@@ -652,44 +626,256 @@ Item {
         return candidate
     }
 
-    function resetAssetImport() {
-        if (assetImportCapability.length > 0
-                && typeof basecampFiles !== "undefined")
-            basecampFiles.release(assetImportCapability)
-        assetImportRunning = false
+    function assetImportElapsedMs() {
+        return Math.max(
+            0,
+            Math.round(Date.now() - assetImportStartedAtUnixMs))
+    }
+
+    function encodedChunkByteLength(base64) {
+        var encoded = String(base64)
+        if (encoded.length === 0 || encoded.length % 4 !== 0
+                || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded))
+            return -1
+        var padding = encoded.endsWith("==") ? 2
+            : (encoded.endsWith("=") ? 1 : 0)
+        return Math.floor(encoded.length * 3 / 4) - padding
+    }
+
+    function beginAssetImportTrace(generation, byteLength) {
+        assetImportTrace = {
+            "schema": "logos.palace.user-file-import",
+            "version": 1,
+            "generation": generation,
+            "byteLength": byteLength,
+            "chunkBytes": 32 * 1024,
+            "begin": null,
+            "appends": [],
+            "commit": null,
+            "totalBytes": 0
+        }
+    }
+
+    function recordAssetImportBegin(receipt) {
+        if (!assetImportTrace)
+            return false
+        assetImportTrace.begin = {
+            "receipt": String(receipt),
+            "elapsedMs": assetImportElapsedMs()
+        }
+        return true
+    }
+
+    function recordAssetImportAppend(sequence, base64, receipt) {
+        if (!assetImportTrace)
+            return false
+        var byteLength = encodedChunkByteLength(base64)
+        if (byteLength < 0 || byteLength > assetImportTrace.chunkBytes)
+            return false
+        var nextBytes = assetImportTrace.totalBytes + byteLength
+        if (encodedStatusValue(receipt, "next") !== String(sequence + 1)
+                || encodedStatusValue(receipt, "bytes")
+                   !== String(nextBytes))
+            return false
+        assetImportTrace.appends.push({
+            "sequence": sequence,
+            "byteLength": byteLength,
+            "receipt": String(receipt),
+            "elapsedMs": assetImportElapsedMs()
+        })
+        assetImportTrace.totalBytes = nextBytes
+        return true
+    }
+
+    function completeAssetImportTrace(receipt) {
+        if (!assetImportTrace
+                || assetImportTrace.totalBytes !== assetImportTrace.byteLength)
+            return false
+        var handle = encodedStatusValue(receipt, "handle")
+        var width = Number(encodedStatusValue(receipt, "width"))
+        var height = Number(encodedStatusValue(receipt, "height"))
+        var byteLength = Number(encodedStatusValue(receipt, "bytes"))
+        if (!/^[0-9a-f]{64}$/.test(handle)
+                || !Number.isSafeInteger(width) || width <= 0
+                || !Number.isSafeInteger(height) || height <= 0
+                || byteLength !== assetImportTrace.byteLength)
+            return false
+        var completed = {
+            "schema": assetImportTrace.schema,
+            "version": assetImportTrace.version,
+            "generation": assetImportTrace.generation,
+            "handle": handle,
+            "width": width,
+            "height": height,
+            "byteLength": assetImportTrace.byteLength,
+            "chunkBytes": assetImportTrace.chunkBytes,
+            "chunkCount": assetImportTrace.appends.length,
+            "begin": assetImportTrace.begin,
+            "appends": assetImportTrace.appends,
+            "commit": {
+                "receipt": String(receipt),
+                "elapsedMs": assetImportElapsedMs()
+            }
+        }
+        gate3AssetImportEvidence = JSON.stringify(completed)
+        return true
+    }
+
+    function releaseSelectedFileHandle(selection) {
+        if (!selection || typeof userFiles === "undefined")
+            return
+        var handle = String(selection.handle || "")
+        if (handle.length > 0)
+            userFiles.release(handle)
+    }
+
+    function releaseAssetImportCapability() {
+        if (assetImportCapability.length === 0)
+            return true
+        var capability = assetImportCapability
         assetImportCapability = ""
+        if (typeof userFiles === "undefined")
+            return false
+        return userFiles.release(capability) === true
+    }
+
+    function assetImportMatches(generation, requestId, phase) {
+        return assetImportRunning
+            && assetImportGeneration === generation
+            && assetImportRequestId === String(requestId)
+            && (phase.length === 0 || assetImportPhase === phase)
+    }
+
+    function cancelAssetImportStage(session) {
+        if (session.length === 0 || !backend)
+            return
+        logos.watch(
+            backend.cancelAssetStage(session),
+            function () {},
+            function () {})
+    }
+
+    function resetAssetImport() {
+        releaseAssetImportCapability()
+        assetImportRunning = false
+        assetImportPhase = "idle"
+        assetImportRequestId = ""
         assetImportSession = ""
         assetImportLabel = ""
+        assetImportExpectedSequence = 0
+        assetImportPendingSequence = -1
+        assetImportStartedAtUnixMs = 0
+        assetImportTrace = null
+        ++assetImportGeneration
     }
 
     function abandonAssetImport() {
+        if (!assetImportRunning)
+            return
         var session = assetImportSession
         resetAssetImport()
-        if (session.length > 0 && backend)
-            backend.cancelAssetStage(session)
+        cancelAssetImportStage(session)
     }
 
-    function failAssetImport(reason) {
+    function failAssetImport(generation, requestId, reason) {
+        if (!assetImportMatches(generation, requestId, ""))
+            return
         var rejected = String(reason)
         if (rejected.indexOf("rejected=") !== 0)
             rejected = "rejected=asset-import;" + rejected
-        if (assetImportSession.length > 0 && backend) {
-            logos.watch(
-                backend.cancelAssetStage(assetImportSession),
-                function () {},
-                function () {})
-        }
-        invocationError = rejected
+        var session = assetImportSession
         resetAssetImport()
+        cancelAssetImportStage(session)
+        invocationError = rejected
         ++invocationSequence
     }
 
-    function commitSelectedAsset() {
+    function validSelectedFile(selection) {
+        if (!selection || typeof selection !== "object")
+            return false
+        var byteLength = Number(selection.byteLength)
+        return String(selection.handle || "").length > 0
+            && Number.isInteger(byteLength)
+            && byteLength >= 0
+            && byteLength <= assetImportMaximumBytes
+    }
+
+    function beginSelectedAssetStage(generation, requestId, label,
+                                     capability) {
+        if (!assetImportMatches(generation, requestId, "starting-stage")
+                || assetImportCapability !== capability)
+            return
         logos.watch(
-            backend.commitAssetStage(assetImportSession),
+            backend.beginAssetStage(label),
             function (receipt) {
-                if (String(receipt).indexOf("rejected=") === 0) {
-                    failAssetImport(receipt)
+                var receiptString = String(receipt)
+                var session = encodedStatusValue(
+                    receiptString, "session")
+                if (!assetImportMatches(
+                        generation, requestId, "starting-stage")
+                        || assetImportCapability !== capability) {
+                    // A stage may complete after this view abandoned its
+                    // request. Cancel its newly-created Core session rather
+                    // than leaving a stale authoring slot behind.
+                    if (/^[0-9a-f]{32}$/.test(session))
+                        cancelAssetImportStage(session)
+                    return
+                }
+                if (receiptString.indexOf("rejected=") === 0) {
+                    failAssetImport(generation, requestId, receiptString)
+                    return
+                }
+                if (!/^[0-9a-f]{32}$/.test(session)) {
+                    failAssetImport(
+                        generation, requestId, "invalid-session-receipt")
+                    return
+                }
+                if (encodedStatusValue(receiptString, "next") !== "0"
+                        || encodedStatusValue(
+                            receiptString, "maxChunkBytes")
+                           !== String(32 * 1024)
+                        || encodedStatusValue(
+                            receiptString, "maxTotalBytes")
+                           !== String(assetImportMaximumBytes)
+                        || !recordAssetImportBegin(receiptString)) {
+                    failAssetImport(
+                        generation, requestId, "invalid-stage-begin-receipt")
+                    return
+                }
+                assetImportSession = session
+                assetImportExpectedSequence = 0
+                assetImportPendingSequence = -1
+                assetImportPhase = "reading"
+                appendSelectedAssetChunk(
+                    generation, requestId, session, capability)
+            },
+            function (error) {
+                failAssetImport(
+                    generation, requestId, "remote-begin;" + String(error))
+            })
+    }
+
+    function commitSelectedAsset(generation, requestId, session) {
+        if (!assetImportMatches(generation, requestId, "committing")
+                || assetImportSession !== session)
+            return
+        logos.watch(
+            backend.commitAssetStage(session),
+            function (receipt) {
+                if (!assetImportMatches(generation, requestId, "committing")
+                        || assetImportSession !== session) {
+                    cancelAssetImportStage(session)
+                    return
+                }
+                var receiptString = String(receipt)
+                if (receiptString.indexOf("rejected=") === 0) {
+                    failAssetImport(generation, requestId, receiptString)
+                    return
+                }
+                if (!completeAssetImportTrace(receiptString)) {
+                    failAssetImport(
+                        generation, requestId,
+                        "invalid-stage-commit-receipt")
                     return
                 }
                 invocationError = ""
@@ -697,91 +883,140 @@ Item {
                 ++invocationSequence
             },
             function (error) {
-                failAssetImport("remote-commit;" + String(error))
+                failAssetImport(
+                    generation, requestId, "remote-commit;" + String(error))
             })
     }
 
-    function appendSelectedAssetChunk() {
-        var chunk = basecampFiles.readNextChunk(
-            assetImportCapability)
-        if (!chunk || chunk.ok !== true) {
+    function appendSelectedAssetChunk(generation, requestId, session,
+                                      capability) {
+        if (!assetImportMatches(generation, requestId, "reading")
+                || assetImportSession !== session
+                || assetImportCapability !== capability)
+            return
+        var chunk = userFiles.readNextChunk(capability)
+        var sequence = Number(chunk && chunk.sequence)
+        if (!chunk || typeof chunk.base64 !== "string"
+                || !Number.isInteger(sequence)
+                || sequence !== assetImportExpectedSequence
+                || typeof chunk.eof !== "boolean") {
             failAssetImport(
-                "selected-file-read;"
-                + String(chunk && chunk.code
-                         ? chunk.code : "invalid-result"))
+                generation, requestId, "selected-file-read;invalid-result")
             return
         }
-        var terminal = chunk.eof === true
+        var base64 = String(chunk.base64)
+        var terminal = chunk.eof
+        assetImportPendingSequence = sequence
+        assetImportPhase = "appending"
         logos.watch(
             backend.appendAssetStageChunk(
-                assetImportSession,
-                Number(chunk.sequence),
-                String(chunk.base64)),
+                session, sequence, base64),
             function (receipt) {
-                if (String(receipt).indexOf("rejected=") === 0) {
-                    failAssetImport(receipt)
+                if (!assetImportMatches(generation, requestId, "appending")
+                        || assetImportSession !== session
+                        || assetImportCapability !== capability
+                        || assetImportPendingSequence !== sequence) {
+                    cancelAssetImportStage(session)
                     return
                 }
+                var receiptString = String(receipt)
+                if (receiptString.indexOf("rejected=") === 0) {
+                    failAssetImport(generation, requestId, receiptString)
+                    return
+                }
+                if (!recordAssetImportAppend(
+                        sequence, base64, receiptString)) {
+                    failAssetImport(
+                        generation, requestId,
+                        "invalid-stage-append-receipt")
+                    return
+                }
+                assetImportExpectedSequence = sequence + 1
+                assetImportPendingSequence = -1
                 if (terminal) {
-                    // Core already owns the final decoded bytes. Revoke the
-                    // host snapshot before the asynchronous commit round trip.
-                    if (assetImportCapability.length > 0
-                            && typeof basecampFiles !== "undefined")
-                        basecampFiles.release(assetImportCapability)
-                    assetImportCapability = ""
-                    commitSelectedAsset()
-                } else
-                    appendSelectedAssetChunk()
+                    // Core owns the final decoded bytes. Revoke the host
+                    // snapshot before the asynchronous commit round trip.
+                    if (!releaseAssetImportCapability()) {
+                        failAssetImport(
+                            generation, requestId,
+                            "selected-file-release;invalid-result")
+                        return
+                    }
+                    assetImportPhase = "committing"
+                    commitSelectedAsset(generation, requestId, session)
+                } else {
+                    assetImportPhase = "reading"
+                    appendSelectedAssetChunk(
+                        generation, requestId, session, capability)
+                }
             },
             function (error) {
-                failAssetImport("remote-append;" + String(error))
+                failAssetImport(
+                    generation, requestId, "remote-append;" + String(error))
             })
+    }
+
+    function handleAssetFileSelection(requestId, selection) {
+        var generation = assetImportGeneration
+        var selectedRequestId = String(requestId || "")
+        if (!assetImportMatches(generation, selectedRequestId, "selecting")) {
+            releaseSelectedFileHandle(selection)
+            return
+        }
+        if (!selection || String(selection.handle || "").length === 0) {
+            invocationError = ""
+            resetAssetImport()
+            ++invocationSequence
+            return
+        }
+        if (!validSelectedFile(selection)) {
+            releaseSelectedFileHandle(selection)
+            failAssetImport(
+                generation, selectedRequestId,
+                "file-selection;invalid-result")
+            return
+        }
+
+        var capability = String(selection.handle)
+        assetImportCapability = capability
+        assetImportLabel = safeAssetStageLabel(selection.displayName)
+        beginAssetImportTrace(generation, Number(selection.byteLength))
+        assetImportExpectedSequence = 0
+        assetImportPendingSequence = -1
+        assetImportPhase = "starting-stage"
+        beginSelectedAssetStage(
+            generation, selectedRequestId, assetImportLabel, capability)
     }
 
     function selectAssetFile() {
         if (!ready || !backend || assetImportRunning)
             return rejectedNotReady()
-        if (typeof basecampFiles === "undefined") {
+        if (typeof userFiles === "undefined") {
             invocationError = "rejected=selected-file-bridge-unavailable"
             ++invocationSequence
             return invocationError
         }
-        var selected = basecampFiles.openFile(
-            ["PNG images (*.png)"], 10 * 1024 * 1024)
-        if (!selected || selected.ok !== true) {
-            if (selected && (selected.cancelled === true
-                             || selected.code === "CANCELLED"))
-                return "cancelled"
-            invocationError =
-                "rejected=file-selection;"
-                + String(selected && selected.code
-                         ? selected.code : "invalid-result")
+        var requestId = String(userFiles.openFile(
+            ["PNG images (*.png)"], assetImportMaximumBytes) || "")
+        if (requestId.length === 0) {
+            invocationError = "rejected=file-selection;request-rejected"
             ++invocationSequence
             return invocationError
         }
 
+        ++assetImportGeneration
         assetImportRunning = true
-        assetImportCapability = String(selected.handle)
-        assetImportLabel = safeAssetStageLabel(selected.displayName)
+        assetImportPhase = "selecting"
+        assetImportRequestId = requestId
+        assetImportCapability = ""
+        assetImportSession = ""
+        assetImportLabel = ""
+        assetImportExpectedSequence = 0
+        assetImportPendingSequence = -1
+        assetImportStartedAtUnixMs = Date.now()
+        assetImportTrace = null
+        gate3AssetImportEvidence = ""
         invocationError = ""
-        logos.watch(
-            backend.beginAssetStage(assetImportLabel),
-            function (receipt) {
-                if (String(receipt).indexOf("rejected=") === 0) {
-                    failAssetImport(receipt)
-                    return
-                }
-                assetImportSession =
-                    encodedStatusValue(String(receipt), "session")
-                if (assetImportSession.length !== 32) {
-                    failAssetImport("invalid-session-receipt")
-                    return
-                }
-                appendSelectedAssetChunk()
-            },
-            function (error) {
-                failAssetImport("remote-begin;" + String(error))
-            })
         return "pending"
     }
 
@@ -954,6 +1189,13 @@ Item {
         function onViewModuleReadyChanged(moduleName, isReady) {
             if (moduleName === "logos_palace_ui")
                 root.ready = isReady && root.backend !== null
+        }
+    }
+
+    Connections {
+        target: typeof userFiles === "undefined" ? null : userFiles
+        function onFileSelectionCompleted(requestId, selection) {
+            root.handleAssetFileSelection(requestId, selection)
         }
     }
 

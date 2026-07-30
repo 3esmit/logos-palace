@@ -253,6 +253,91 @@ test("FrameAnimation timing matches the exact Basecamp and Qt source pin", async
   assert.match(qml, /gateFrameTimingElapsedTimeUs/);
 });
 
+test("Palace stages user files only after matched async picker completion", async () => {
+  const qml = await readFile(palaceQmlPath, "utf8");
+  assert.match(qml, /property int assetImportGeneration: 0/);
+  assert.match(qml, /property double assetImportStartedAtUnixMs: 0/);
+  assert.match(qml, /property string assetImportRequestId: ""/);
+  assert.match(qml, /property int assetImportExpectedSequence: 0/);
+  assert.match(
+    qml,
+    /target: typeof userFiles === "undefined" \? null : userFiles/,
+  );
+  assert.match(qml, /function onFileSelectionCompleted\(requestId, selection\)/);
+  assert.match(
+    qml,
+    /property string gate3AssetImportEvidence: ""/,
+  );
+  assert.match(qml, /function completeAssetImportTrace\(receipt\)/);
+  assert.match(qml, /"schema": "logos\.palace\.user-file-import"/);
+  assert.match(qml, /"chunkBytes": 32 \* 1024/);
+  assert.match(qml, /"chunkCount": assetImportTrace\.appends\.length/);
+  assert.doesNotMatch(qml, /\bbasecampFiles\b/);
+  assert.doesNotMatch(qml, /\bcancelOpenFile\b/);
+
+  const selectStart = qml.indexOf("function selectAssetFile() {");
+  const selectEnd = qml.indexOf("function gate3PublishBundle()", selectStart);
+  assert.notEqual(selectStart, -1);
+  assert.notEqual(selectEnd, -1);
+  const select = qml.slice(selectStart, selectEnd);
+  assert.match(select, /userFiles\.openFile\(/);
+  assert.match(select, /assetImportRequestId = requestId/);
+  assert.match(select, /assetImportPhase = "selecting"/);
+  assert.doesNotMatch(select, /backend\.beginAssetStage/);
+
+  const completionStart = qml.indexOf(
+    "function handleAssetFileSelection(requestId, selection) {",
+  );
+  const completionEnd = qml.indexOf("function selectAssetFile()", completionStart);
+  assert.notEqual(completionStart, -1);
+  assert.notEqual(completionEnd, -1);
+  const completion = qml.slice(completionStart, completionEnd);
+  const completionMatch = completion.indexOf(
+    'assetImportMatches(generation, selectedRequestId, "selecting")',
+  );
+  const stageStart = completion.indexOf("beginSelectedAssetStage(");
+  assert.notEqual(completionMatch, -1);
+  assert.notEqual(stageStart, -1);
+  assert.ok(completionMatch < stageStart);
+  assert.match(completion, /releaseSelectedFileHandle\(selection\)/);
+  assert.match(completion, /validSelectedFile\(selection\)/);
+
+  const beginStart = qml.indexOf(
+    "function beginSelectedAssetStage(generation, requestId, label,",
+  );
+  const beginEnd = qml.indexOf("function commitSelectedAsset", beginStart);
+  assert.notEqual(beginStart, -1);
+  assert.notEqual(beginEnd, -1);
+  const begin = qml.slice(beginStart, beginEnd);
+  assert.match(begin, /backend\.beginAssetStage\(label\)/);
+  assert.match(begin, /cancelAssetImportStage\(session\)/);
+
+  const appendStart = qml.indexOf(
+    "function appendSelectedAssetChunk(generation, requestId, session,",
+  );
+  const appendEnd = qml.indexOf("function handleAssetFileSelection", appendStart);
+  assert.notEqual(appendStart, -1);
+  assert.notEqual(appendEnd, -1);
+  const append = qml.slice(appendStart, appendEnd);
+  assert.match(append, /userFiles\.readNextChunk\(capability\)/);
+  assert.match(append, /sequence !== assetImportExpectedSequence/);
+  assert.match(append, /assetImportPendingSequence !== sequence/);
+  assert.doesNotMatch(append, /\bchunk\.ok\b/);
+  assert.ok(
+    append.indexOf("if (!releaseAssetImportCapability())")
+      < append.indexOf("commitSelectedAsset(generation, requestId, session)"),
+  );
+
+  assert.match(
+    qml,
+    /function abandonAssetImport\(\) \{[\s\S]*?resetAssetImport\(\)[\s\S]*?cancelAssetImportStage\(session\)/,
+  );
+  assert.match(
+    qml,
+    /function resetAssetImport\(\) \{[\s\S]*?releaseAssetImportCapability\(\)[\s\S]*?\+\+assetImportGeneration/,
+  );
+});
+
 test("runner uses exact close-on-exec kill-coupled lock handoff", async () => {
   const source = await readFile(runnerPath, "utf8");
   ordered(source, [
@@ -544,18 +629,54 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   );
   assert.match(runner, /\.chunkBytes == 32768/);
   assert.match(runner, /maxTotalBytes=10485760/);
+  // The sole direct publication call proves the pre-approval guard. All
+  // successful moderation follows visible objectName controls instead.
+  assert.match(
+    gate3,
+    /"publishAsset",\s*\[guardFixture\.handle\]/,
+  );
+  assert.match(gate3Worker, /"publishAsset"/);
+  for (const directModerationRpc of [
+    "reviewAsset",
+    "assignRoomBackground",
+    "assignPropAsset",
+  ]) {
+    assert.doesNotMatch(gate3, new RegExp(`"${directModerationRpc}"`));
+    assert.doesNotMatch(
+      gate3Worker,
+      new RegExp(`"${directModerationRpc}"`),
+    );
+  }
   for (const marker of [
+    '"approveAndPublishAsset"',
+    '"waitForPublishedAsset"',
+    '"assignRoomBackgroundFromModeration"',
+    '"assignPropAssetFromModeration"',
+    'findByProperty("objectName", objectName)',
+    'inspector.send("click", { objectId })',
+    '"palaceAssetApprove-"',
+    '"palaceBackgroundAssignAtrium-"',
+    '"palaceBackgroundAssignLounge-"',
+    '"palaceAssetAssignProp-"',
+  ]) {
+    assert.match(gate3Worker, new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(gate3Worker, /backgroundModerationOpen\s*=(?!=)/);
+  assert.match(gate3, /"importSelectedAsset"/);
+  assert.match(gate3, /assetInputs\.selectionPathFor\(fixture\.assetId\)/);
+  assert.doesNotMatch(gate3, /fixture\.bytes/);
+  assert.match(gate3Worker, /case "importSelectedAsset":/);
+  assert.match(gate3Worker, /app\.listFileDialogs\(\)/);
+  assert.match(gate3Worker, /app\.fileDialogAction\(objectId, action, selectionPath\)/);
+  assert.match(gate3Worker, /fileDialogAction\(dialogId, "select", request\.selectionPath\)/);
+  assert.match(gate3Worker, /fileDialogAction\(dialogId, "accept"\)/);
+  for (const directStageRpc of [
     "beginAssetStage",
     "appendAssetStageChunk",
     "commitAssetStage",
-    "reviewAsset",
-    "publishAsset",
-    "assignRoomBackground",
-    "assignPropAsset",
-    "refreshAssetAuthoring",
+    "cancelAssetStage",
   ]) {
-    assert.match(gate3, new RegExp(marker));
-    assert.match(gate3Worker, new RegExp(marker));
+    assert.doesNotMatch(gate3Worker, new RegExp(directStageRpc));
   }
   assert.match(gate4, /validateGate3AssetAuthoring\(gate3, byId\)/);
   assert.match(

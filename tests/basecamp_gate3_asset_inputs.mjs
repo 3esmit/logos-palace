@@ -212,6 +212,7 @@ export async function loadGate3AssetInputs({
   }
 
   const fixtures = [];
+  const selectionPaths = new Map();
   for (let index = 0; index < manifest.assets.length; index += 1) {
     const entry = manifest.assets[index];
     validateAssetEntry(entry, index);
@@ -241,8 +242,8 @@ export async function loadGate3AssetInputs({
       height: dimensions[1],
       role: entry.role,
       assignment: entry.assignment,
-      bytes,
     });
+    selectionPaths.set(entry.assetId, assetPath);
   }
   if (
     new Set(fixtures.map(({ assetId }) => assetId)).size !== fixtures.length
@@ -272,7 +273,7 @@ export async function loadGate3AssetInputs({
   if (propAssignments.length > 1) {
     throw new Error("prop-image inputs contain multiple assignments");
   }
-  return {
+  const result = {
     manifest: {
       schema: manifest.schema,
       version: manifest.version,
@@ -281,6 +282,16 @@ export async function loadGate3AssetInputs({
     },
     fixtures,
   };
+  Object.defineProperty(result, "selectionPathFor", {
+    enumerable: false,
+    value(assetId) {
+      if (typeof assetId !== "string" || !selectionPaths.has(assetId)) {
+        throw new Error("asset input selection is unknown");
+      }
+      return selectionPaths.get(assetId);
+    },
+  });
+  return result;
 }
 
 export const gate3AssetInputLimits = Object.freeze({

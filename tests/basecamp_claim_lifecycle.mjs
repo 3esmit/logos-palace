@@ -61,30 +61,52 @@ export const auditedLegacyPreGate3 = Object.freeze({
     "d22d60a15a1b7310d40048735abd3f6850ecf3fd9cddddfec588b8348a9027b3",
 });
 
-// This is a one-shot recovery audit for the immutable run that entered Gate 3
-// before rejecting the LEZ module's equivalent root-origin spelling. The
-// audited report proves that the run stopped before its first public write.
-export const auditedPrePublicWriteGate3Failure = Object.freeze({
-  gitCommit: "6866fe090a9e3b77625869606704bb6398d589a2",
-  snapshotNarHash:
-    "sha256-yVIq0V3ALbozFlZR4uNnYGuWnhXeeZnetsapy0jp9b8=",
-  snapshotNarSize: 7_078_968,
-  snapshotRunnerSha256:
-    "7241b93c58f896958be425736b8918b676b9b6e0f0e68c5c34dbe017a0cd3fa9",
-  runtimeManifestSha256:
-    "debdf168bdb8e0e5de7b1750207eebd990db262d4ac5ad33836745ac235fad1c",
-  compiledReportSha256:
-    "c063493c5e101835a437eae85daa5afb29050fdf2d23a70cbe74d08323b398cb",
-  gate3ReportSha256:
-    "4fac76d54d2a69758b30473fd0fde42287961f4b8103ad964e6d8cef777a14e6",
-});
+// Each entry is an exact recovery audit for one immutable Gate 3 run. Its
+// report must prove the run stopped before its first public write.
+export const auditedPrePublicWriteGate3Failures = Object.freeze([
+  Object.freeze({
+    gitCommit: "6866fe090a9e3b77625869606704bb6398d589a2",
+    snapshotNarHash:
+      "sha256-yVIq0V3ALbozFlZR4uNnYGuWnhXeeZnetsapy0jp9b8=",
+    snapshotNarSize: 7_078_968,
+    snapshotRunnerSha256:
+      "7241b93c58f896958be425736b8918b676b9b6e0f0e68c5c34dbe017a0cd3fa9",
+    runtimeManifestSha256:
+      "debdf168bdb8e0e5de7b1750207eebd990db262d4ac5ad33836745ac235fad1c",
+    compiledReportSha256:
+      "c063493c5e101835a437eae85daa5afb29050fdf2d23a70cbe74d08323b398cb",
+    gate3ReportSha256:
+      "4fac76d54d2a69758b30473fd0fde42287961f4b8103ad964e6d8cef777a14e6",
+    gate3Failure: "production LEZ a: rejected=lez-network-fingerprint",
+    retirementStatus: "audited-fingerprint-rejection",
+  }),
+  Object.freeze({
+    gitCommit: "39aeee81a23cd183d5cb821cdd0e20dcc836e9ba",
+    snapshotNarHash:
+      "sha256-u/3D3yuCmDaKoODNtagwaYC+0FGtX5WsvofWef7ZY8o=",
+    snapshotNarSize: 7_101_152,
+    snapshotRunnerSha256:
+      "7241b93c58f896958be425736b8918b676b9b6e0f0e68c5c34dbe017a0cd3fa9",
+    runtimeManifestSha256:
+      "ecdbf4f480444ca6ced110c197e56c361341f46adef71b054c47c1d3e0b5ea72",
+    compiledReportSha256:
+      "3420ffd04626d0c6c1a709c5dc15882386ebd494e06634a65af7eaa496ab1a63",
+    gate3ReportSha256:
+      "91a3c4e96fba72d4c703ae6484b1cee19479af8e82c969fd645f53f0c06aae88",
+    gate3Failure:
+      "worker a: gate4StartLez receipt timeout: before=\"\" after=\"\" sequence=0->0",
+    retirementStatus: "audited-pre-public-write-failure",
+  }),
+]);
 
 function validPrePublicWriteAudit(audit) {
   return exactKeys(audit, [
-    "compiledReportSha256",
-    "gate3ReportSha256",
-    "gitCommit",
-    "runtimeManifestSha256",
+      "compiledReportSha256",
+      "gate3ReportSha256",
+      "gate3Failure",
+      "gitCommit",
+      "retirementStatus",
+      "runtimeManifestSha256",
     "snapshotNarHash",
     "snapshotNarSize",
     "snapshotRunnerSha256",
@@ -96,7 +118,33 @@ function validPrePublicWriteAudit(audit) {
     && sha256Pattern.test(audit.snapshotRunnerSha256)
     && sha256Pattern.test(audit.runtimeManifestSha256)
     && sha256Pattern.test(audit.compiledReportSha256)
-    && sha256Pattern.test(audit.gate3ReportSha256);
+    && sha256Pattern.test(audit.gate3ReportSha256)
+    && typeof audit.gate3Failure === "string"
+    && audit.gate3Failure.length > 0
+    && audit.gate3Failure.length <= 1024
+    && [
+      "audited-fingerprint-rejection",
+      "audited-pre-public-write-failure",
+    ].includes(audit.retirementStatus);
+}
+
+function validPrePublicWriteAudits(audits) {
+  if (
+    !Array.isArray(audits)
+    || audits.length === 0
+    || audits.length > 8
+    || audits.some((audit) => !validPrePublicWriteAudit(audit))
+  ) {
+    return false;
+  }
+  const identities = audits.map((audit) => [
+    audit.gitCommit,
+    audit.snapshotNarHash,
+    audit.snapshotNarSize,
+    audit.snapshotRunnerSha256,
+    audit.runtimeManifestSha256,
+  ].join(":"));
+  return new Set(identities).size === identities.length;
 }
 
 function exactKeys(value, expected) {
@@ -753,7 +801,11 @@ function matchesAuditedPrePublicWriteFailure(predecessor, audit) {
     && predecessor.runtimeManifestSha256 === audit.runtimeManifestSha256;
 }
 
-function validatesAuditedPrePublicWriteGate3Report(report, predecessor) {
+function validatesAuditedPrePublicWriteGate3Report(
+  report,
+  predecessor,
+  audit,
+) {
   if (
     !exactKeys(report, [
       "basecampBinarySha256",
@@ -795,7 +847,7 @@ function validatesAuditedPrePublicWriteGate3Report(report, predecessor) {
     || report.runtimeOutputManifestSha256
       !== predecessor.runtimeManifestSha256
     || report.productionIdentityMode !== true
-    || report.failure !== "production LEZ a: rejected=lez-network-fingerprint"
+    || report.failure !== audit.gate3Failure
     || !exactKeys(report.cleanup, ["failures", "status"])
     || report.cleanup.status !== "passed"
     || !exactJson(report.cleanup.failures, [])
@@ -825,11 +877,12 @@ function prePublicWriteRetirementRecord({
   predecessor,
   compiledReportSha256,
   gate3ReportSha256,
+  retirementStatus,
 }) {
   return {
     schema: "logos.palace.basecamp-pre-public-write-retirement",
     version: 1,
-    status: "audited-fingerprint-rejection",
+    status: retirementStatus,
     predecessor: {
       gitCommit: predecessor.gitCommit,
       snapshotNarHash: predecessor.snapshotNarHash,
@@ -851,7 +904,7 @@ function validatePrePublicWriteRetirementRecord({
     !exactKeys(record, ["predecessor", "schema", "status", "version"])
     || record.schema !== "logos.palace.basecamp-pre-public-write-retirement"
     || record.version !== 1
-    || record.status !== "audited-fingerprint-rejection"
+    || record.status !== audit.retirementStatus
     || !exactKeys(record.predecessor, [
       "compiledReportSha256",
       "gate3ReportSha256",
@@ -880,9 +933,11 @@ function validatePrePublicWriteRetirementRecord({
 async function validateAuditedPrePublicWriteGate3Artifacts({
   predecessor,
   uid,
-  audit,
+  audits,
 }) {
-  if (!matchesAuditedPrePublicWriteFailure(predecessor, audit)) {
+  const audit = audits.find((candidate) =>
+    matchesAuditedPrePublicWriteFailure(predecessor, candidate));
+  if (!audit) {
     throw new Error("Gate 3 predecessor is not the audited pre-write failure");
   }
   const run = predecessor.runDirectory;
@@ -919,10 +974,15 @@ async function validateAuditedPrePublicWriteGate3Artifacts({
     throw new Error("audited Gate 3 report digest differs");
   }
   validateAuditedGate3FailedReport(compiled.value, predecessor);
-  validatesAuditedPrePublicWriteGate3Report(gate3.value, predecessor);
+  validatesAuditedPrePublicWriteGate3Report(
+    gate3.value,
+    predecessor,
+    audit,
+  );
   return {
     compiledReportSha256: compiled.sha256,
     gate3ReportSha256: gate3.sha256,
+    audit,
   };
 }
 
@@ -981,6 +1041,7 @@ function prePublicWriteRollForwardRecord({
   compiledReportSha256,
   gate3ReportSha256,
   retirementCertificateSha256,
+  retirementStatus,
 }) {
   return {
     schema: rollForwardSchema,
@@ -1011,7 +1072,7 @@ function prePublicWriteRollForwardRecord({
       claimBoundProcessCount: 0,
       compiledFailure: "audited-pre-public-write",
       gate3ClaimState: "entered",
-      gate3Artifacts: "audited-fingerprint-rejection",
+      gate3Artifacts: retirementStatus,
       gate4Artifacts: "absent",
       sharedState: "local-only-retained",
       completion: "absent",
@@ -1119,8 +1180,10 @@ async function validatePrePublicWriteRollForwardRecord({
   archivedClaim,
   archivedClaimSha256,
   uid,
-  audit,
+  audits,
 }) {
+  const audit = audits.find((candidate) =>
+    matchesAuditedPrePublicWriteFailure(archivedClaim, candidate));
   const retirementCertificate = record?.proof?.retirementCertificate;
   if (
     !exactKeys(record, [
@@ -1136,6 +1199,7 @@ async function validatePrePublicWriteRollForwardRecord({
     || record.status !== "retired-pre-public-write"
     || archivedClaim.version !== 2
     || archivedClaim.status !== "gate3-entered"
+    || !audit
     || !matchesAuditedPrePublicWriteFailure(archivedClaim, audit)
     || !exactKeys(record.predecessor, [
       "claimVersion",
@@ -1197,7 +1261,7 @@ async function validatePrePublicWriteRollForwardRecord({
     || record.proof.claimBoundProcessCount !== 0
     || record.proof.compiledFailure !== "audited-pre-public-write"
     || record.proof.gate3ClaimState !== "entered"
-    || record.proof.gate3Artifacts !== "audited-fingerprint-rejection"
+    || record.proof.gate3Artifacts !== audit.retirementStatus
     || record.proof.gate4Artifacts !== "absent"
     || record.proof.sharedState !== "local-only-retained"
     || record.proof.completion !== "absent"
@@ -1239,7 +1303,7 @@ async function validateRollForwardRecord({
   archivedClaim,
   archivedClaimSha256,
   uid,
-  prePublicWriteAudit,
+  prePublicWriteAudits,
 }) {
   if (record?.version === 1) {
     if (
@@ -1261,7 +1325,7 @@ async function validateRollForwardRecord({
     archivedClaim,
     archivedClaimSha256,
     uid,
-    audit: prePublicWriteAudit,
+    audits: prePublicWriteAudits,
   });
 }
 
@@ -1294,7 +1358,7 @@ export function createClaimLifecycle({
   completedReportSha256,
   writeCompletionRecord,
   legacyAudit = auditedLegacyPreGate3,
-  prePublicWriteAudit = auditedPrePublicWriteGate3Failure,
+  prePublicWriteAudits = auditedPrePublicWriteGate3Failures,
 }) {
   validateCommonIdentity(common);
   if (
@@ -1326,7 +1390,7 @@ export function createClaimLifecycle({
     || !sha256Pattern.test(legacyAudit.compiledReportSha256)
     || !sha256Pattern.test(legacyAudit.gate0ReportSha256)
     || !sha256Pattern.test(legacyAudit.gate1ReportSha256)
-    || !validPrePublicWriteAudit(prePublicWriteAudit)
+    || !validPrePublicWriteAudits(prePublicWriteAudits)
   ) {
     throw new Error("claim lifecycle dependencies are invalid");
   }
@@ -1394,7 +1458,7 @@ export function createClaimLifecycle({
       archivedClaim,
       archivedClaimSha256: archive.sha256,
       uid,
-      prePublicWriteAudit,
+      prePublicWriteAudits,
     });
 
     const nextSeen = new Set(seen);
@@ -1466,7 +1530,7 @@ export function createClaimLifecycle({
       ? await validateAuditedPrePublicWriteGate3Artifacts({
           predecessor,
           uid,
-          audit: prePublicWriteAudit,
+          audits: prePublicWriteAudits,
         })
       : await validatePreGate3Artifacts({
           predecessor,
@@ -1492,6 +1556,7 @@ export function createClaimLifecycle({
         predecessor,
         compiledReportSha256: proof.compiledReportSha256,
         gate3ReportSha256: proof.gate3ReportSha256,
+        retirementStatus: proof.audit.retirementStatus,
       });
       const retirementCertificateBytes = Buffer.from(
         `${JSON.stringify(retirementCertificate, null, 2)}\n`,
@@ -1524,6 +1589,7 @@ export function createClaimLifecycle({
           compiledReportSha256: proof.compiledReportSha256,
           gate3ReportSha256: proof.gate3ReportSha256,
           retirementCertificateSha256,
+          retirementStatus: proof.audit.retirementStatus,
         })
       : rollForwardRecord({
           predecessor,

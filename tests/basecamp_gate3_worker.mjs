@@ -16,6 +16,9 @@ import {
   capturePalaceFrameTiming,
   palaceFrameTimingContract,
 } from "./basecamp_frame_timing.mjs";
+import {
+  workerInvocationTimeoutLimit,
+} from "./basecamp_lez_startup.mjs";
 
 const [
   basecampArgument,
@@ -366,7 +369,11 @@ async function setAssetAuthoring(
   ) {
     throw new Error("asset authoring expected count is invalid");
   }
-  await evaluate(`backgroundModerationOpen = ${open ? "true" : "false"}`);
+  if (open) {
+    await ensureModerationPanelOpen();
+  } else {
+    await ensureModerationPanelClosed();
+  }
   if (!open) {
     return parseAssetAuthoringEvidence(
       (await rootProperties()).gate3AssetAuthoringEvidence,
@@ -426,6 +433,782 @@ async function setAssetAuthoring(
   throw new Error("asset authoring frame fence timed out");
 }
 
+function validImportRequest(params) {
+  const selectionPath = params?.selectionPath;
+  const expected = params?.expected;
+  if (
+    typeof params?.assetId !== "string"
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(params.assetId)
+    || typeof selectionPath !== "string"
+    || selectionPath.length === 0
+    || selectionPath.length > 16_384
+    || selectionPath.includes("\u0000")
+    || !expected
+    || typeof expected !== "object"
+    || Array.isArray(expected)
+    || Object.keys(expected).sort().join(",")
+      !== ["byteLength", "handle", "height", "width"].join(",")
+    || typeof expected.handle !== "string"
+    || !/^[0-9a-f]{64}$/.test(expected.handle)
+    || !Number.isSafeInteger(expected.width)
+    || expected.width <= 0
+    || !Number.isSafeInteger(expected.height)
+    || expected.height <= 0
+    || !Number.isSafeInteger(expected.byteLength)
+    || expected.byteLength <= 0
+    || expected.byteLength > 10 * 1024 * 1024
+  ) {
+    throw new Error("asset picker request is invalid");
+  }
+  return {
+    assetId: params.assetId,
+    selectionPath,
+    expected,
+  };
+}
+
+function pathFreeEvidence(value) {
+  if (value === null) return true;
+  if (typeof value === "string") {
+    return (
+      !value.startsWith("/")
+      && !/^[A-Za-z]:[\\/]/.test(value)
+      && !value.includes("\\")
+    );
+  }
+  if (
+    typeof value === "number"
+    || typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(pathFreeEvidence);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).every(([key, nested]) => (
+    !["path", "filepath", "selectionpath", "inputroot"].includes(
+      key.toLowerCase(),
+    ) && pathFreeEvidence(nested)
+  ));
+}
+
+function exactObjectKeys(value, keys) {
+  return (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).sort().join(",")
+      === [...keys].sort().join(",")
+  );
+}
+
+const moderationControlTimeoutMs = 30_000;
+const moderationPublicationTimeoutMs = 180_000;
+
+function validAssetHandle(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function validPublishedCid(value) {
+  return (
+    typeof value === "string"
+    && /^(b[a-z2-7]+|z[1-9A-HJ-NP-Za-km-z]+)$/.test(value)
+  );
+}
+
+function parseModerationCatalog(properties) {
+  const encoded = String(properties.gate3AssetAuthoringState ?? "");
+  if (encoded.length === 0 || encoded.length > 2 * 1024 * 1024) {
+    throw new Error("moderation catalog is unavailable");
+  }
+  let catalog;
+  try {
+    catalog = JSON.parse(encoded);
+  } catch {
+    throw new Error("moderation catalog is not JSON");
+  }
+  if (
+    !catalog
+    || typeof catalog !== "object"
+    || Array.isArray(catalog)
+    || catalog.version !== 1
+    || !Array.isArray(catalog.assets)
+    || !catalog.roomAssignments
+    || typeof catalog.roomAssignments !== "object"
+    || Array.isArray(catalog.roomAssignments)
+    || !pathFreeEvidence(catalog)
+  ) {
+    throw new Error("moderation catalog is invalid");
+  }
+  return catalog;
+}
+
+function moderationCatalogAsset(catalog, handle) {
+  const matches = catalog.assets.filter(
+    (asset) => asset && asset.handle === handle,
+  );
+  if (matches.length !== 1) {
+    throw new Error("moderation asset is unavailable");
+  }
+  const asset = matches[0];
+  if (
+    !validAssetHandle(asset.handle)
+    || typeof asset.reviewState !== "string"
+    || typeof asset.publicationState !== "string"
+    || typeof asset.cid !== "string"
+  ) {
+    throw new Error("moderation asset is invalid");
+  }
+  return asset;
+}
+
+function moderationControlName(prefix, handle) {
+  if (!validAssetHandle(handle)) {
+    throw new Error("moderation asset handle is invalid");
+  }
+  return `${prefix}${handle}`;
+}
+
+function elapsedReceipt(receipt, startedAt) {
+  const evidence = {
+    receipt,
+    elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
+  };
+  if (!pathFreeEvidence(evidence)) {
+    throw new Error("moderation evidence is not path-free");
+  }
+  return evidence;
+}
+
+function pathFreeModerationResult(value) {
+  if (!pathFreeEvidence(value)) {
+    throw new Error("moderation result is not path-free");
+  }
+  return value;
+}
+
+async function waitForModerationControl(
+  objectName,
+  description,
+  timeout = moderationControlTimeoutMs,
+) {
+  if (
+    typeof objectName !== "string"
+    || !/^palace[A-Za-z0-9_-]{1,192}$/.test(objectName)
+  ) {
+    throw new Error("moderation control name is invalid");
+  }
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("moderation interaction interrupted");
+    let found;
+    try {
+      found = await app.findByProperty("objectName", objectName);
+    } catch {
+      throw new Error(`moderation ${description} control discovery failed`);
+    }
+    if (found?.error) {
+      throw new Error(`moderation ${description} control discovery failed`);
+    }
+    const matches = found?.matches;
+    if (!Array.isArray(matches) || matches.length === 0) {
+      await sleep(50);
+      continue;
+    }
+    if (matches.length !== 1) {
+      throw new Error(`moderation ${description} control is ambiguous`);
+    }
+    const objectId = String(matches[0]?.id ?? "");
+    if (objectId.length === 0 || objectId.length > 512) {
+      throw new Error(`moderation ${description} control identity is invalid`);
+    }
+    let properties;
+    try {
+      properties = propertyMap(await app.getProperties(objectId));
+    } catch {
+      throw new Error(`moderation ${description} control properties failed`);
+    }
+    if (properties.visible === false || properties.enabled !== true) {
+      await sleep(50);
+      continue;
+    }
+    return objectId;
+  }
+  throw new Error(`moderation ${description} control is unavailable`);
+}
+
+async function clickModerationControl(objectName, description) {
+  const objectId = await waitForModerationControl(objectName, description);
+  let clicked;
+  try {
+    clicked = await inspector.send("click", { objectId });
+  } catch {
+    throw new Error(`moderation ${description} click failed`);
+  }
+  if (clicked?.error || clicked?.clicked !== true) {
+    throw new Error(`moderation ${description} click failed`);
+  }
+}
+
+async function waitForModerationPanel(open, description) {
+  const deadline = Date.now() + moderationControlTimeoutMs;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("moderation interaction interrupted");
+    if ((await rootProperties()).backgroundModerationOpen === open) return;
+    await sleep(50);
+  }
+  throw new Error(`moderation panel ${description} timed out`);
+}
+
+async function ensureModerationPanelOpen() {
+  if ((await rootProperties()).backgroundModerationOpen === true) return;
+  await clickModerationControl(
+    "palaceBackgroundModerationButton",
+    "panel open",
+  );
+  await waitForModerationPanel(true, "open");
+}
+
+async function ensureModerationPanelClosed() {
+  if ((await rootProperties()).backgroundModerationOpen !== true) return;
+  await clickModerationControl(
+    "palaceBackgroundModerationClose",
+    "panel close",
+  );
+  await waitForModerationPanel(false, "close");
+}
+
+async function moderationSnapshot() {
+  const properties = await rootProperties();
+  const invocationSequence = Number(properties.invocationSequence ?? -1);
+  if (!Number.isSafeInteger(invocationSequence) || invocationSequence < 0) {
+    throw new Error("moderation invocation sequence is unavailable");
+  }
+  return {
+    properties,
+    catalog: parseModerationCatalog(properties),
+    invocationSequence,
+  };
+}
+
+async function waitForModerationCatalog({
+  description,
+  startedAt,
+  beforeSequence,
+  timeout = moderationPublicationTimeoutMs,
+  accept,
+}) {
+  const deadline = Date.now() + timeout;
+  let lastPublicationState = "";
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("moderation interaction interrupted");
+    const snapshot = await moderationSnapshot();
+    const failure = String(snapshot.properties.invocationError ?? "");
+    if (
+      snapshot.invocationSequence > beforeSequence
+      && failure.startsWith("rejected=")
+    ) {
+      throw new Error(`moderation ${description} failed: ${failure}`);
+    }
+    const accepted = accept(snapshot);
+    if (accepted) return { ...snapshot, accepted };
+    lastPublicationState = String(
+      snapshot.catalog.assets.find(
+        (asset) => asset?.publicationState !== undefined,
+      )?.publicationState ?? lastPublicationState,
+    );
+    // The backend refreshes the catalog from its 500 ms delivery poll. Avoid
+    // a synthetic action here: its receipt sequence must remain attributable
+    // to the visible moderation control that started this transition.
+    await sleep(100);
+  }
+  throw new Error(
+    `moderation ${description} timed out: publication=${lastPublicationState}`,
+  );
+}
+
+function validModerationAssetRequest(params) {
+  if (!exactObjectKeys(params, ["handle"]) || !validAssetHandle(params.handle)) {
+    throw new Error("moderation asset request is invalid");
+  }
+  return { handle: params.handle };
+}
+
+async function approveAndPublishAsset(params) {
+  if (!processState) throw new Error("worker is not initialized");
+  if (shuttingDown) throw new Error("moderation interaction interrupted");
+  const { handle } = validModerationAssetRequest(params);
+  await ensureModerationPanelOpen();
+  const before = await moderationSnapshot();
+  const existing = moderationCatalogAsset(before.catalog, handle);
+  if (existing.publicationState === "published") {
+    throw new Error("moderation asset is already published");
+  }
+  if (existing.publicationState === "publishing") {
+    throw new Error("moderation asset publication is already in progress");
+  }
+  const startedAt = performance.now();
+  await clickModerationControl(
+    moderationControlName("palaceAssetApprove-", handle),
+    "approval and upload",
+  );
+
+  let review;
+  let dispatched;
+  const completed = await waitForModerationCatalog({
+    description: "approval and upload",
+    startedAt,
+    beforeSequence: before.invocationSequence,
+    accept(snapshot) {
+      const asset = moderationCatalogAsset(snapshot.catalog, handle);
+      if (asset.publicationState.startsWith("publish-failed")) {
+        throw new Error("moderation asset upload failed");
+      }
+      if (!review && asset.reviewState === "approved") {
+        review = elapsedReceipt(
+          `ok;handle=${handle};review=approved`,
+          startedAt,
+        );
+      }
+      if (
+        !dispatched
+        && ["publishing", "published"].includes(asset.publicationState)
+      ) {
+        dispatched = elapsedReceipt("ok;asset=publishing", startedAt);
+      }
+      if (
+        review
+        && dispatched
+        && asset.publicationState === "published"
+        && validPublishedCid(asset.cid)
+      ) {
+        return asset;
+      }
+      return undefined;
+    },
+  });
+  const result = {
+    review,
+    publication: {
+      dispatched,
+      completed: elapsedReceipt(
+        `published;cid=${completed.accepted.cid}`,
+        startedAt,
+      ),
+    },
+    cid: completed.accepted.cid,
+  };
+  return pathFreeModerationResult(result);
+}
+
+async function waitForPublishedAsset(params) {
+  if (!processState) throw new Error("worker is not initialized");
+  if (shuttingDown) throw new Error("moderation interaction interrupted");
+  const { handle } = validModerationAssetRequest(params);
+  const startedAt = performance.now();
+  const before = await moderationSnapshot();
+  if (moderationCatalogAsset(before.catalog, handle).publicationState !== "publishing") {
+    throw new Error("moderation asset is not publishing");
+  }
+  const completed = await waitForModerationCatalog({
+    description: "publication completion",
+    startedAt,
+    beforeSequence: before.invocationSequence,
+    accept(snapshot) {
+      const asset = moderationCatalogAsset(snapshot.catalog, handle);
+      if (asset.publicationState.startsWith("publish-failed")) {
+        throw new Error("moderation asset upload failed");
+      }
+      return asset.publicationState === "published" && validPublishedCid(asset.cid)
+        ? asset
+        : undefined;
+    },
+  });
+  return pathFreeModerationResult({
+    cid: completed.accepted.cid,
+    completed: elapsedReceipt(
+      `published;cid=${completed.accepted.cid}`,
+      startedAt,
+    ),
+  });
+}
+
+function validRoomAssignmentRequest(params) {
+  if (
+    !exactObjectKeys(params, ["handle", "roomId"])
+    || !validAssetHandle(params.handle)
+    || !["atrium", "lounge"].includes(params.roomId)
+  ) {
+    throw new Error("moderation room assignment request is invalid");
+  }
+  return { handle: params.handle, roomId: params.roomId };
+}
+
+async function assignRoomBackgroundFromModeration(params) {
+  if (!processState) throw new Error("worker is not initialized");
+  if (shuttingDown) throw new Error("moderation interaction interrupted");
+  const { handle, roomId } = validRoomAssignmentRequest(params);
+  await ensureModerationPanelOpen();
+  const before = await moderationSnapshot();
+  const asset = moderationCatalogAsset(before.catalog, handle);
+  if (asset.publicationState !== "published" || !validPublishedCid(asset.cid)) {
+    throw new Error("moderation room assignment asset is not published");
+  }
+  if (before.catalog.roomAssignments[roomId] === handle) {
+    throw new Error("moderation room is already assigned");
+  }
+  const startedAt = performance.now();
+  const prefix = roomId === "atrium"
+    ? "palaceBackgroundAssignAtrium-"
+    : "palaceBackgroundAssignLounge-";
+  await clickModerationControl(
+    moderationControlName(prefix, handle),
+    `${roomId} assignment`,
+  );
+  await waitForModerationCatalog({
+    description: `${roomId} assignment`,
+    startedAt,
+    beforeSequence: before.invocationSequence,
+    accept(snapshot) {
+      const current = moderationCatalogAsset(snapshot.catalog, handle);
+      return (
+        snapshot.catalog.roomAssignments[roomId] === handle
+        && Array.isArray(current.roomAssignments)
+        && current.roomAssignments.includes(roomId)
+      );
+    },
+  });
+  return pathFreeModerationResult(
+    elapsedReceipt(`ok;room=${roomId};handle=${handle}`, startedAt),
+  );
+}
+
+function validPropAssignmentRequest(params) {
+  if (
+    !exactObjectKeys(params, [
+      "anchorX",
+      "anchorY",
+      "handle",
+      "layer",
+      "propId",
+    ])
+    || !validAssetHandle(params.handle)
+    || typeof params.propId !== "string"
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(params.propId)
+    || !Number.isSafeInteger(params.anchorX)
+    || params.anchorX < 0
+    || !Number.isSafeInteger(params.anchorY)
+    || params.anchorY < 0
+    || !["head", "body", "hand", "back"].includes(params.layer)
+  ) {
+    throw new Error("moderation prop assignment request is invalid");
+  }
+  return params;
+}
+
+async function typeModerationField(objectName, rootProperty, value) {
+  const before = await rootProperties();
+  if (String(before[rootProperty] ?? "") === value) return;
+  if (String(before[rootProperty] ?? "").length !== 0) {
+    throw new Error(`moderation ${rootProperty} field is not empty`);
+  }
+  await clickModerationControl(objectName, rootProperty);
+  let sent;
+  try {
+    sent = await inspector.send("sendKeys", { text: value });
+  } catch {
+    throw new Error(`moderation ${rootProperty} input failed`);
+  }
+  if (sent?.error) throw new Error(`moderation ${rootProperty} input failed`);
+  const deadline = Date.now() + moderationControlTimeoutMs;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("moderation interaction interrupted");
+    if (String((await rootProperties())[rootProperty] ?? "") === value) return;
+    await sleep(50);
+  }
+  throw new Error(`moderation ${rootProperty} input timed out`);
+}
+
+async function assignPropAssetFromModeration(params) {
+  if (!processState) throw new Error("worker is not initialized");
+  if (shuttingDown) throw new Error("moderation interaction interrupted");
+  const request = validPropAssignmentRequest(params);
+  await ensureModerationPanelOpen();
+  const before = await moderationSnapshot();
+  const asset = moderationCatalogAsset(before.catalog, request.handle);
+  if (asset.publicationState !== "published" || !validPublishedCid(asset.cid)) {
+    throw new Error("moderation prop assignment asset is not published");
+  }
+  await typeModerationField(
+    "palaceAssetPropId",
+    "propDraftId",
+    request.propId,
+  );
+  await typeModerationField(
+    "palaceAssetPropAnchorX",
+    "propDraftAnchorX",
+    String(request.anchorX),
+  );
+  await typeModerationField(
+    "palaceAssetPropAnchorY",
+    "propDraftAnchorY",
+    String(request.anchorY),
+  );
+  await typeModerationField(
+    "palaceAssetPropLayer",
+    "propDraftLayer",
+    request.layer,
+  );
+  const startedAt = performance.now();
+  await clickModerationControl(
+    moderationControlName("palaceAssetAssignProp-", request.handle),
+    "prop assignment",
+  );
+  await waitForModerationCatalog({
+    description: "prop assignment",
+    startedAt,
+    beforeSequence: before.invocationSequence,
+    accept(snapshot) {
+      const assigned = snapshot.catalog.propAssignment;
+      const current = moderationCatalogAsset(snapshot.catalog, request.handle);
+      return (
+        assigned?.propId === request.propId
+        && assigned?.handle === request.handle
+        && assigned?.anchorX === request.anchorX
+        && assigned?.anchorY === request.anchorY
+        && assigned?.layer === request.layer
+        && Array.isArray(current.propAssignments)
+        && current.propAssignments.includes(request.propId)
+      );
+    },
+  });
+  return pathFreeModerationResult(
+    elapsedReceipt(
+      `ok;propId=${request.propId};handle=${request.handle};`
+      + `anchorX=${request.anchorX};anchorY=${request.anchorY};`
+      + `layer=${request.layer}`,
+      startedAt,
+    ),
+  );
+}
+
+function validElapsedTrace(value) {
+  return (
+    exactObjectKeys(value, ["receipt", "elapsedMs"])
+    && typeof value.receipt === "string"
+    && value.receipt.length > 0
+    && !value.receipt.startsWith("rejected=")
+    && Number.isSafeInteger(value.elapsedMs)
+    && value.elapsedMs >= 0
+  );
+}
+
+function validImportTrace(trace, expected, generation) {
+  if (
+    !exactObjectKeys(trace, [
+      "schema",
+      "version",
+      "generation",
+      "handle",
+      "width",
+      "height",
+      "byteLength",
+      "chunkBytes",
+      "chunkCount",
+      "begin",
+      "appends",
+      "commit",
+    ])
+    || trace.schema !== "logos.palace.user-file-import"
+    || trace.version !== 1
+    || trace.generation !== generation
+    || trace.handle !== expected.handle
+    || trace.width !== expected.width
+    || trace.height !== expected.height
+    || trace.byteLength !== expected.byteLength
+    || trace.chunkBytes !== 32 * 1024
+    || !Number.isSafeInteger(trace.chunkCount)
+    || trace.chunkCount <= 0
+    || !validElapsedTrace(trace.begin)
+    || !Array.isArray(trace.appends)
+    || trace.appends.length !== trace.chunkCount
+    || !validElapsedTrace(trace.commit)
+  ) {
+    return false;
+  }
+  let totalBytes = 0;
+  return trace.appends.every((append, sequence) => {
+    totalBytes += append?.byteLength ?? 0;
+    return (
+      exactObjectKeys(append, [
+        "sequence",
+        "byteLength",
+        "receipt",
+        "elapsedMs",
+      ])
+      && append.sequence === sequence
+      && Number.isSafeInteger(append.byteLength)
+      && append.byteLength > 0
+      && append.byteLength <= trace.chunkBytes
+      && validElapsedTrace({
+        receipt: append.receipt,
+        elapsedMs: append.elapsedMs,
+      })
+      && totalBytes <= trace.byteLength
+    );
+  }) && totalBytes === trace.byteLength;
+}
+
+function parsedImportEvidence(value, expected, generation) {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > 2 * 1024 * 1024
+  ) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (
+      !parsed
+      || typeof parsed !== "object"
+      || Array.isArray(parsed)
+      || !pathFreeEvidence(parsed)
+      || !validImportTrace(parsed, expected, generation)
+    ) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function importedAssetMatches(properties, expected) {
+  let state;
+  try {
+    state = JSON.parse(String(properties.gate3AssetAuthoringState ?? ""));
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(state?.assets)) return false;
+  return state.assets.some((asset) => (
+    asset
+    && asset.handle === expected.handle
+    && asset.width === expected.width
+    && asset.height === expected.height
+    && asset.byteLength === expected.byteLength
+  ));
+}
+
+async function waitForAssetDialog() {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("asset picker interrupted");
+    let listed;
+    try {
+      listed = await app.listFileDialogs();
+    } catch {
+      throw new Error("asset picker dialog discovery failed");
+    }
+    if (listed?.error) {
+      throw new Error("asset picker dialog discovery failed");
+    }
+    const dialogs = listed?.dialogs;
+    if (Array.isArray(dialogs) && dialogs.length === 1) {
+      const objectId = String(dialogs[0]?.id ?? "");
+      if (objectId.length > 0 && objectId.length <= 512) return objectId;
+      throw new Error("asset picker dialog identity is invalid");
+    }
+    if (Array.isArray(dialogs) && dialogs.length > 1) {
+      throw new Error("asset picker opened multiple dialogs");
+    }
+    await sleep(50);
+  }
+  throw new Error("asset picker dialog did not open");
+}
+
+async function fileDialogAction(objectId, action, selectionPath) {
+  let result;
+  try {
+    result = action === "select"
+      ? await app.fileDialogAction(objectId, action, selectionPath)
+      : await app.fileDialogAction(objectId, action);
+  } catch {
+    throw new Error(`asset picker ${action} action failed`);
+  }
+  if (result?.error) {
+    throw new Error(`asset picker ${action} action failed`);
+  }
+}
+
+async function importSelectedAsset(params) {
+  if (!processState) throw new Error("worker is not initialized");
+  if (shuttingDown) throw new Error("asset picker interrupted");
+  const request = validImportRequest(params);
+  const before = await rootProperties();
+  const beforeGeneration = Number(before.assetImportGeneration ?? -1);
+  if (!Number.isSafeInteger(beforeGeneration) || beforeGeneration < 0) {
+    throw new Error("asset picker generation is unavailable");
+  }
+
+  if (before.backgroundModerationOpen !== true) {
+    await ensureModerationPanelOpen();
+  }
+
+  await clickModerationControl("palaceAssetSelectFile", "file picker");
+  const dialogId = await waitForAssetDialog();
+  await fileDialogAction(dialogId, "select", request.selectionPath);
+  await sleep(50);
+  await fileDialogAction(dialogId, "accept");
+
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    if (shuttingDown) throw new Error("asset picker interrupted");
+    const properties = await rootProperties();
+    const generation = Number(properties.assetImportGeneration ?? -1);
+    const trace = parsedImportEvidence(
+      properties.gate3AssetImportEvidence,
+      request.expected,
+      beforeGeneration + 1,
+    );
+    if (
+      generation > beforeGeneration
+      && properties.assetImportRunning === false
+      && importedAssetMatches(properties, request.expected)
+      && trace
+    ) {
+      return {
+        assetId: request.assetId,
+        trace,
+      };
+    }
+    if (
+      generation > beforeGeneration
+      && properties.assetImportRunning === false
+      && String(properties.gate3AssetImportEvidence ?? "").length > 0
+      && !trace
+    ) {
+      throw new Error("asset picker import trace is invalid");
+    }
+    if (
+      generation > beforeGeneration
+      && properties.assetImportRunning === false
+      && String(properties.invocationError ?? "").startsWith("rejected=")
+    ) {
+      throw new Error("asset picker import was rejected");
+    }
+    if (
+      generation > beforeGeneration
+      && properties.assetImportRunning === false
+      && !trace
+    ) {
+      throw new Error("asset picker selection did not complete");
+    }
+    await sleep(50);
+  }
+  throw new Error("asset picker import did not complete");
+}
+
 const allowedFunctions = new Set([
   "gate1EnterRoom",
   "gate2Start",
@@ -439,15 +1222,7 @@ const allowedFunctions = new Set([
   "gate3AssetStatus",
   "gate3PublishPng",
   "gate3PublicationStatus",
-  "beginAssetStage",
-  "appendAssetStageChunk",
-  "commitAssetStage",
-  "cancelAssetStage",
-  "reviewAsset",
   "publishAsset",
-  "assignRoomBackground",
-  "assignPropAsset",
-  "refreshAssetAuthoring",
   "gate3PublishBundle",
   "gate3BundleStatus",
   "gate3FetchBundle",
@@ -517,14 +1292,20 @@ async function invoke(params) {
   const startedAtUnixMs = Date.now();
   const startedAt = performance.now();
   const evaluated = await evaluate(expression);
+  if (shuttingDown) {
+    throw new Error(`${name} interrupted before receipt observation`);
+  }
   const timeout = Math.min(
     Math.max(Number(params.timeout ?? 30_000), 1_000),
-    120_000,
+    workerInvocationTimeoutLimit(name),
   );
   const deadline = Date.now() + timeout;
   let receipt = "";
   let sequence = beforeSequence;
   while (Date.now() < deadline) {
+    if (shuttingDown) {
+      throw new Error(`${name} interrupted while awaiting receipt`);
+    }
     const properties = await rootProperties();
     receipt = String(properties[receiptProperty] ?? "");
     sequence = Number(properties.invocationSequence ?? -1);
@@ -575,6 +1356,16 @@ async function dispatch(command, params) {
       Number(params?.expectedCount ?? 1),
       params?.expectedProp === true,
     );
+  case "importSelectedAsset":
+    return importSelectedAsset(params);
+  case "approveAndPublishAsset":
+    return approveAndPublishAsset(params);
+  case "waitForPublishedAsset":
+    return waitForPublishedAsset(params);
+  case "assignRoomBackgroundFromModeration":
+    return assignRoomBackgroundFromModeration(params);
+  case "assignPropAssetFromModeration":
+    return assignPropAssetFromModeration(params);
   case "shutdown":
     shuttingDown = true;
     await stopBasecamp();

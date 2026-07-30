@@ -79,6 +79,9 @@ import {
 import {
   canonicalStorageCidSha256 as cidSha256,
 } from "./basecamp_storage_cid.mjs";
+import {
+  lezStartupTimeoutMs,
+} from "./basecamp_lez_startup.mjs";
 
 const [
   basecampArgument,
@@ -1333,9 +1336,11 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
       !exactObjectKeys(actual, expectedKeys)
       || typeof actual.assetId !== "string"
       || !/^[a-z][a-z0-9_-]{0,63}$/.test(actual.assetId)
-      || actual.label !== actual.assetId
       || typeof actual.file !== "string"
       || !/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(actual.file)
+      || actual.label !== (
+        actual.file.length > 32 ? "selected-image.png" : actual.file
+      )
       || !isHex64(actual.handle)
       || !Number.isSafeInteger(actual.width)
       || actual.width <= 0
@@ -2433,7 +2438,7 @@ function safeSyncRejection(receipt) {
 
 async function startLez(worker, attempts) {
   const password = stableId(`wallet-password/${worker.label}`);
-  const deadline = Date.now() + 5 * 60_000;
+  const deadline = Date.now() + lezStartupTimeoutMs;
   let lastReceipt = "";
   while (Date.now() < deadline) {
     const result = await invoke(
@@ -2441,7 +2446,7 @@ async function startLez(worker, attempts) {
       "gate4StartLez",
       [password],
       undefined,
-      120_000,
+      lezStartupTimeoutMs,
     );
     lastReceipt = result.receipt;
     attempts.push(result);

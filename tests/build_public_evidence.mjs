@@ -3757,8 +3757,10 @@ function publicAssetAuthoringProjection(gate3, gate4) {
     if (
       !exactKeys(asset, keys)
       || !/^[a-z][a-z0-9_-]{0,63}$/.test(asset.assetId)
-      || asset.label !== asset.assetId
       || !/^[a-z0-9][a-z0-9._-]{0,127}\.png$/.test(asset.file)
+      || asset.label !== (
+        asset.file.length > 32 ? "selected-image.png" : asset.file
+      )
       || !isSha256(asset.handle)
       || !Number.isSafeInteger(asset.width)
       || asset.width <= 0
