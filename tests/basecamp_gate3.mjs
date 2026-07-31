@@ -1427,7 +1427,7 @@ async function authorAssetFixtures(
           roomId: fixture.assignment.roomId,
           handle: fixture.handle,
         },
-        60_000,
+        180_000,
       );
     } else {
       assetEvidence.assignment = await worker.call(

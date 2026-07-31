@@ -708,7 +708,17 @@ async function waitForModerationCatalog({
   while (Date.now() < deadline) {
     if (shuttingDown) throw new Error("moderation interaction interrupted");
     const snapshot = await moderationSnapshot();
-    const failure = String(snapshot.properties.invocationError ?? "");
+    const failure = String(
+      snapshot.properties.invocationError
+        || (
+          String(snapshot.properties.gate3Receipt ?? "").startsWith(
+            "rejected=",
+          )
+            ? snapshot.properties.gate3Receipt
+            : ""
+        )
+        || "",
+    );
     if (
       snapshot.invocationSequence > beforeSequence
       && failure.startsWith("rejected=")

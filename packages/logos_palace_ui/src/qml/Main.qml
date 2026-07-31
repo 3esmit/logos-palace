@@ -390,13 +390,16 @@ Item {
     function watchAction(pendingCall, onAccepted) {
         logos.watch(pendingCall, function (value) {
             var receipt = String(value)
-            // Preserve a local rejection until this asynchronous action has
-            // reached its terminal receipt. Otherwise a new call briefly
-            // exposes a stale backend receipt as if it belonged to the
-            // current action.
-            invocationError = ""
-            if (receipt.indexOf("rejected=") !== 0 && onAccepted)
-                onAccepted(receipt)
+            // Surface terminal rejections through the local sequence so
+            // moderation waits can fail closed. Success clears any prior
+            // local rejection and may run the optional accepted callback.
+            if (receipt.indexOf("rejected=") === 0) {
+                invocationError = receipt
+            } else {
+                invocationError = ""
+                if (onAccepted)
+                    onAccepted(receipt)
+            }
             ++invocationSequence
         }, function (error) {
             invocationError = "rejected=ui-remote-call;" + String(error)
