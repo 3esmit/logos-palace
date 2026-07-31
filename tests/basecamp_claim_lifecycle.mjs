@@ -47,6 +47,10 @@ const identityRegistrationAndIdleStorageProfile =
   "identity-registration-and-idle-storage-before-palace-write";
 const identityRegistrationAndApprovalGuardedAssetsProfile =
   "identity-registration-and-approval-guarded-assets-before-palace-write";
+const identityRegistrationAndPublishedAssetsProfile =
+  "identity-registration-and-published-assets-before-palace-write";
+const storageCidPattern =
+  /^(b[a-z2-7]{50,}|z[1-9A-HJ-NP-Za-km-z]{40,})$/;
 
 export const auditedLegacyPreGate3 = Object.freeze({
   gitCommit: "1a61a457bb13e0c016f838a7fcd9c8820098a68a",
@@ -203,6 +207,24 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndApprovalGuardedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "7d1bddcba5953d5ba730b8a557e2c750484b70ec",
+    snapshotNarHash:
+      "sha256-SRwuAkp3z+7/YLwybqGO4bM/tHcrgzHSQ77re7jrsWQ=",
+    snapshotNarSize: 7_194_840,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "3b49477c76c3905b7116d74d4ac6b92167e6ae7f6641f8e3e2abf4ec3c9ec4a6",
+    compiledReportSha256:
+      "263935bd74c892b6c9d4538f861a138ba7336b5a563ad658774ea2986eba155f",
+    gate3ReportSha256:
+      "3f5e45c533e399e0ad820b7e1775934e1a6472d0c016cf23f24b4bac7008e18a",
+    gate3Failure:
+      "worker a command timed out: assignRoomBackgroundFromModeration",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndPublishedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -236,6 +258,7 @@ function validPrePublicWriteAudit(audit) {
       || [
         identityRegistrationAndIdleStorageProfile,
         identityRegistrationAndApprovalGuardedAssetsProfile,
+        identityRegistrationAndPublishedAssetsProfile,
       ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
@@ -1251,6 +1274,137 @@ function validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(report) {
     && validIdentityRegistrationAndApprovalGuardedAssets(report.assetAuthoring);
 }
 
+function validPublishedAssetInvocation(stage) {
+  return exactKeys(stage, ["elapsedMs", "receipt"])
+    && Number.isSafeInteger(stage.elapsedMs)
+    && stage.elapsedMs >= 0
+    && typeof stage.receipt === "string"
+    && stage.receipt.startsWith("ok;");
+}
+
+function validPublishedAuthoringAsset(asset) {
+  if (
+    !validApprovalGuardedStagedAsset({
+      appends: asset.appends,
+      assetId: asset.assetId,
+      begin: asset.begin,
+      byteLength: asset.byteLength,
+      chunkBytes: asset.chunkBytes,
+      chunkCount: asset.chunkCount,
+      commit: asset.commit,
+      file: asset.file,
+      handle: asset.handle,
+      height: asset.height,
+      label: asset.label,
+      role: asset.role,
+      target: asset.target,
+      width: asset.width,
+    })
+    || !exactKeys(asset, [
+      "appends",
+      "assetId",
+      "assignment",
+      "begin",
+      "byteLength",
+      "chunkBytes",
+      "chunkCount",
+      "cid",
+      "commit",
+      "file",
+      "handle",
+      "height",
+      "label",
+      "publication",
+      "review",
+      "role",
+      "target",
+      "width",
+    ])
+    || !storageCidPattern.test(asset.cid)
+    || !validPublishedAssetInvocation(asset.review)
+    || !asset.review.receipt.startsWith(`ok;handle=${asset.handle};review=approved`)
+    || !exactKeys(asset.publication, ["completed", "dispatched"])
+    || !validPublishedAssetInvocation(asset.publication.dispatched)
+    || asset.publication.dispatched.receipt !== "ok;asset=publishing"
+    || !validPublishedAssetInvocation(asset.publication.completed)
+    || asset.publication.completed.receipt !== `published;cid=${asset.cid}`
+  ) {
+    return false;
+  }
+  if (asset.assignment === null) return true;
+  if (
+    !validPublishedAssetInvocation(asset.assignment)
+    || !/^ok;room=(atrium|lounge);handle=[0-9a-f]{64}$/.test(
+      asset.assignment.receipt,
+    )
+  ) {
+    return false;
+  }
+  const fields = receiptFields(asset.assignment.receipt);
+  return fields.handle === asset.handle
+    && ["atrium", "lounge"].includes(fields.room);
+}
+
+function validIdentityRegistrationAndPublishedAssets(authoring) {
+  if (
+    !exactKeys(authoring, [
+      "assets",
+      "boundary",
+      "elapsedMs",
+      "graphBindings",
+      "guardedBeforeApproval",
+      "inputManifest",
+      "phase",
+      "propStory",
+      "selectedAssetCount",
+      "version",
+    ])
+    || authoring.version !== 1
+    || authoring.phase !== "published"
+    || authoring.propStory !== "not-requested"
+    || typeof authoring.boundary !== "string"
+    || authoring.boundary.length === 0
+    || !Number.isSafeInteger(authoring.elapsedMs)
+    || authoring.elapsedMs < 0
+    || !Number.isSafeInteger(authoring.selectedAssetCount)
+    || authoring.selectedAssetCount <= 0
+    || !Array.isArray(authoring.assets)
+    || authoring.assets.length !== authoring.selectedAssetCount
+    || !exactJson(authoring.graphBindings, [])
+    || !exactKeys(authoring.guardedBeforeApproval, ["elapsedMs", "receipt"])
+    || authoring.guardedBeforeApproval.receipt !== "rejected=asset-not-approved"
+    || !Number.isSafeInteger(authoring.guardedBeforeApproval.elapsedMs)
+    || authoring.guardedBeforeApproval.elapsedMs < 0
+    || !exactKeys(authoring.inputManifest, [
+      "assetCount",
+      "schema",
+      "sha256",
+      "version",
+    ])
+    || authoring.inputManifest.schema !== "logos.palace.e2e-asset-inputs"
+    || authoring.inputManifest.version !== 1
+    || authoring.inputManifest.assetCount !== authoring.selectedAssetCount
+    || !sha256Pattern.test(authoring.inputManifest.sha256)
+    || !authoring.assets.every(validPublishedAuthoringAsset)
+  ) {
+    return false;
+  }
+  const assetIds = authoring.assets.map((asset) => asset.assetId);
+  const files = authoring.assets.map((asset) => asset.file);
+  const handles = authoring.assets.map((asset) => asset.handle);
+  const cids = authoring.assets.map((asset) => asset.cid);
+  return new Set(assetIds).size === assetIds.length
+    && new Set(files).size === files.length
+    && new Set(handles).size === handles.length
+    && new Set(cids).size === cids.length
+    && authoring.assets.some((asset) => asset.assignment !== null);
+}
+
+function validIdentityRegistrationAndPublishedAssetsGate3Report(report) {
+  return validIdentityRegistrationAndIdleStorageBase(report)
+    && validIdentityRegistrationAndPublishedAssets(report.assetAuthoring);
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
@@ -1261,8 +1415,11 @@ function validatesAuditedPrePublicWriteGate3Report(
   const identityRegistrationAndApprovalGuardedAssets =
     audit.reportProfile
       === identityRegistrationAndApprovalGuardedAssetsProfile;
+  const identityRegistrationAndPublishedAssets =
+    audit.reportProfile === identityRegistrationAndPublishedAssetsProfile;
   const hasAssetAuthoring = identityRegistrationAndIdleStorage
-    || identityRegistrationAndApprovalGuardedAssets;
+    || identityRegistrationAndApprovalGuardedAssets
+    || identityRegistrationAndPublishedAssets;
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1315,9 +1472,11 @@ function validatesAuditedPrePublicWriteGate3Report(
         ? !(
           identityRegistrationAndIdleStorage
             ? validIdentityRegistrationAndIdleStorageGate3Report(report)
-            : validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(
-              report,
-            )
+            : identityRegistrationAndApprovalGuardedAssets
+              ? validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(
+                report,
+              )
+              : validIdentityRegistrationAndPublishedAssetsGate3Report(report)
         )
         : (
           !exactKeys(report.identities, [])

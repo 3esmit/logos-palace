@@ -2000,225 +2000,269 @@ Item {
                     }
                 }
 
-                GridView {
+                // Use a Flow/Repeater instead of GridView so every card and its
+                // moderation controls stay instantiated for e2e discovery.
+                // GridView recycling left later "Set Atrium/Lounge" buttons
+                // unfindable after the first visible row was assigned.
+                Flickable {
                     id: backgroundGrid
                     objectName: "palaceBackgroundGrid"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
-                    cellWidth: Math.max(210, Math.floor(width / 4))
-                    cellHeight: 252
-                    model: root.authoringAssets
+                    contentWidth: width
+                    contentHeight: backgroundFlow.implicitHeight
                     boundsBehavior: Flickable.StopAtBounds
+                    flickableDirection: Flickable.VerticalFlick
 
-                    delegate: Rectangle {
-                        id: backgroundCard
-                        required property var modelData
-                        property var asset: modelData || ({})
-                        property string handle:
-                            String(asset.handle || "")
-                        property string publicationState:
-                            String(asset.publicationState
-                                   || "not-uploaded")
-                        property var assignedRooms:
-                            Array.isArray(asset.roomAssignments)
-                            ? asset.roomAssignments : []
-                        property var assignedProps:
-                            Array.isArray(asset.propAssignments)
-                            ? asset.propAssignments : []
-                        property bool previewCounted: false
-                        width: backgroundGrid.cellWidth - 10
-                        height: backgroundGrid.cellHeight - 10
-                        radius: 8
-                        color: "#292018"
-                        border.color: publicationState === "published"
-                            ? "#7ecb78" : "#62513b"
+                    Flow {
+                        id: backgroundFlow
+                        width: backgroundGrid.width
+                        spacing: 10
 
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            spacing: 5
+                        Repeater {
+                            model: root.authoringAssets
 
-                            Image {
-                                id: backgroundPreview
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 112
-                                source: String(backgroundCard.asset.handle
-                                               || "").length === 64
-                                    ? "image://basecamp-verified/"
-                                      + String(backgroundCard.asset.handle)
-                                    : ""
-                                fillMode: Image.PreserveAspectCrop
-                                smooth: true
-                                asynchronous: false
-                                onStatusChanged: {
-                                    if (status === Image.Ready
-                                            && !backgroundCard
-                                                .previewCounted) {
-                                        backgroundCard.previewCounted = true
-                                        ++root.backgroundReadyImageCount
-                                    } else if (status !== Image.Ready
-                                               && backgroundCard
-                                                   .previewCounted) {
-                                        backgroundCard.previewCounted = false
-                                        --root.backgroundReadyImageCount
+                            Rectangle {
+                                id: backgroundCard
+                                required property var modelData
+                                property var asset: modelData || ({})
+                                property string handle:
+                                    String(asset.handle || "")
+                                property string publicationState:
+                                    String(asset.publicationState
+                                           || "not-uploaded")
+                                property var assignedRooms:
+                                    Array.isArray(asset.roomAssignments)
+                                    ? asset.roomAssignments : []
+                                property var assignedProps:
+                                    Array.isArray(asset.propAssignments)
+                                    ? asset.propAssignments : []
+                                property bool previewCounted: false
+                                property int cardWidth: Math.max(
+                                    200,
+                                    Math.floor(
+                                        (backgroundGrid.width - 30) / 4))
+                                width: cardWidth
+                                height: 242
+                                radius: 8
+                                color: "#292018"
+                                border.color: publicationState === "published"
+                                    ? "#7ecb78" : "#62513b"
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 5
+
+                                    Image {
+                                        id: backgroundPreview
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 112
+                                        source: String(
+                                            backgroundCard.asset.handle
+                                            || "").length === 64
+                                            ? "image://basecamp-verified/"
+                                              + String(
+                                                  backgroundCard.asset.handle)
+                                            : ""
+                                        fillMode: Image.PreserveAspectCrop
+                                        smooth: true
+                                        asynchronous: false
+                                        onStatusChanged: {
+                                            if (status === Image.Ready
+                                                    && !backgroundCard
+                                                        .previewCounted) {
+                                                backgroundCard.previewCounted =
+                                                    true
+                                                ++root.backgroundReadyImageCount
+                                            } else if (
+                                                status !== Image.Ready
+                                                && backgroundCard
+                                                    .previewCounted) {
+                                                backgroundCard.previewCounted =
+                                                    false
+                                                --root.backgroundReadyImageCount
+                                            }
+                                            ++root.backgroundPreviewEpoch
+                                        }
                                     }
-                                    ++root.backgroundPreviewEpoch
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: String(
+                                                backgroundCard.asset.label
+                                                || backgroundCard.handle)
+                                            color: "#fff2cf"
+                                            font.bold: true
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 12
+                                        }
+
+                                        Text {
+                                            visible:
+                                                backgroundCard.assignedRooms
+                                                    .length > 0
+                                                || backgroundCard
+                                                    .assignedProps.length > 0
+                                            text: backgroundCard.assignedRooms
+                                                .concat(
+                                                    backgroundCard
+                                                        .assignedProps)
+                                                .join(" · ").toUpperCase()
+                                            color: "#a7e3a0"
+                                            font.bold: true
+                                            font.pixelSize: 9
+                                        }
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: Number(
+                                            backgroundCard.asset.width)
+                                            + "×"
+                                            + Number(
+                                                backgroundCard.asset.height)
+                                            + " · "
+                                            + String(
+                                                backgroundCard.asset
+                                                    .reviewState)
+                                            + " · "
+                                            + backgroundCard.publicationState
+                                        color: "#c9b78e"
+                                        elide: Text.ElideRight
+                                        font.pixelSize: 10
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: backgroundCard.publicationState
+                                               === "published"
+                                               ? "CID "
+                                                 + String(
+                                                     backgroundCard.asset.cid
+                                                     || "").slice(0, 14)
+                                               : "SHA "
+                                                 + backgroundCard.handle
+                                                     .slice(0, 12)
+                                        color: "#8f826a"
+                                        elide: Text.ElideRight
+                                        font.pixelSize: 9
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+
+                                        Button {
+                                            objectName:
+                                                "palaceAssetApprove-"
+                                                + backgroundCard.handle
+                                            Layout.fillWidth: true
+                                            text: backgroundCard
+                                                    .publicationState
+                                                    === "published"
+                                                ? "Uploaded"
+                                                : "Approve & upload"
+                                            enabled: root.ready
+                                                && backgroundCard
+                                                    .publicationState
+                                                    !== "published"
+                                                && backgroundCard.handle
+                                                    .length > 0
+                                            onClicked:
+                                                root.reviewAndPublishAsset(
+                                                    backgroundCard.handle)
+                                        }
+
+                                        Button {
+                                            objectName:
+                                                "palaceAssetReject-"
+                                                + backgroundCard.handle
+                                            text: "Reject"
+                                            enabled: root.ready
+                                                && backgroundCard
+                                                    .publicationState
+                                                    !== "published"
+                                            onClicked:
+                                                root.reviewAsset(
+                                                    backgroundCard.handle,
+                                                    "reject")
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+
+                                        Button {
+                                            objectName:
+                                                "palaceBackgroundAssignAtrium-"
+                                                + backgroundCard.handle
+                                            Layout.fillWidth: true
+                                            text: "Set Atrium"
+                                            enabled: root.ready
+                                                && backgroundCard
+                                                    .publicationState
+                                                    === "published"
+                                                && backgroundCard.handle
+                                                    .length === 64
+                                            onClicked:
+                                                root.assignRoomBackground(
+                                                    "atrium",
+                                                    backgroundCard.handle)
+                                        }
+
+                                        Button {
+                                            objectName:
+                                                "palaceAssetAssignProp-"
+                                                + backgroundCard.handle
+                                            Layout.fillWidth: true
+                                            text: "Set prop"
+                                            enabled: root.ready
+                                                && backgroundCard
+                                                    .publicationState
+                                                    === "published"
+                                                && backgroundCard.handle
+                                                    .length === 64
+                                                && root.propDraftReady()
+                                            onClicked:
+                                                root.assignPropAsset(
+                                                    root.propDraftId.trim(),
+                                                    backgroundCard.handle,
+                                                    root.parsedAssetAnchor(
+                                                        root.propDraftAnchorX),
+                                                    root.parsedAssetAnchor(
+                                                        root.propDraftAnchorY),
+                                                    root.propDraftLayer.trim())
+                                        }
+
+                                        Button {
+                                            objectName:
+                                                "palaceBackgroundAssignLounge-"
+                                                + backgroundCard.handle
+                                            Layout.fillWidth: true
+                                            text: "Set Lounge"
+                                            enabled: root.ready
+                                                && backgroundCard
+                                                    .publicationState
+                                                    === "published"
+                                                && backgroundCard.handle
+                                                    .length === 64
+                                            onClicked:
+                                                root.assignRoomBackground(
+                                                    "lounge",
+                                                    backgroundCard.handle)
+                                        }
+                                    }
+                                }
+
+                                Component.onDestruction: {
+                                    if (previewCounted)
+                                        --root.backgroundReadyImageCount
                                 }
                             }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: String(backgroundCard.asset.label
-                                                 || backgroundCard.handle)
-                                    color: "#fff2cf"
-                                    font.bold: true
-                                    elide: Text.ElideRight
-                                    font.pixelSize: 12
-                                }
-
-                                Text {
-                                    visible:
-                                        backgroundCard.assignedRooms.length > 0
-                                        || backgroundCard.assignedProps.length
-                                           > 0
-                                    text: backgroundCard.assignedRooms
-                                        .concat(backgroundCard.assignedProps)
-                                        .join(" · ").toUpperCase()
-                                    color: "#a7e3a0"
-                                    font.bold: true
-                                    font.pixelSize: 9
-                                }
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: Number(backgroundCard.asset.width)
-                                    + "×" + Number(backgroundCard.asset.height)
-                                    + " · " + String(
-                                        backgroundCard.asset.reviewState)
-                                    + " · "
-                                    + backgroundCard.publicationState
-                                color: "#c9b78e"
-                                elide: Text.ElideRight
-                                font.pixelSize: 10
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: backgroundCard.publicationState
-                                       === "published"
-                                       ? "CID "
-                                         + String(
-                                             backgroundCard.asset.cid
-                                             || "").slice(0, 14)
-                                       : "SHA "
-                                         + backgroundCard.handle.slice(0, 12)
-                                color: "#8f826a"
-                                elide: Text.ElideRight
-                                font.pixelSize: 9
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-
-                                Button {
-                                    objectName:
-                                        "palaceAssetApprove-"
-                                        + backgroundCard.handle
-                                    Layout.fillWidth: true
-                                    text: backgroundCard.publicationState
-                                            === "published"
-                                        ? "Uploaded" : "Approve & upload"
-                                    enabled: root.ready
-                                        && backgroundCard.publicationState
-                                            !== "published"
-                                        && backgroundCard.handle.length
-                                            > 0
-                                    onClicked:
-                                        root.reviewAndPublishAsset(
-                                            backgroundCard.handle)
-                                }
-
-                                Button {
-                                    objectName:
-                                        "palaceAssetReject-"
-                                        + backgroundCard.handle
-                                    text: "Reject"
-                                    enabled: root.ready
-                                        && backgroundCard.publicationState
-                                            !== "published"
-                                    onClicked:
-                                        root.reviewAsset(
-                                            backgroundCard.handle,
-                                            "reject")
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-
-                                Button {
-                                    objectName:
-                                        "palaceBackgroundAssignAtrium-"
-                                        + backgroundCard.handle
-                                    Layout.fillWidth: true
-                                    text: "Set Atrium"
-                                    enabled: root.ready
-                                        && backgroundCard.publicationState
-                                            === "published"
-                                        && backgroundCard.handle.length === 64
-                                    onClicked:
-                                        root.assignRoomBackground(
-                                            "atrium",
-                                            backgroundCard.handle)
-                                }
-
-                                Button {
-                                    objectName:
-                                        "palaceAssetAssignProp-"
-                                        + backgroundCard.handle
-                                    Layout.fillWidth: true
-                                    text: "Set prop"
-                                    enabled: root.ready
-                                        && backgroundCard.publicationState
-                                            === "published"
-                                        && backgroundCard.handle.length === 64
-                                        && root.propDraftReady()
-                                    onClicked:
-                                        root.assignPropAsset(
-                                            root.propDraftId.trim(),
-                                            backgroundCard.handle,
-                                            root.parsedAssetAnchor(
-                                                root.propDraftAnchorX),
-                                            root.parsedAssetAnchor(
-                                                root.propDraftAnchorY),
-                                            root.propDraftLayer.trim())
-                                }
-
-                                Button {
-                                    objectName:
-                                        "palaceBackgroundAssignLounge-"
-                                        + backgroundCard.handle
-                                    Layout.fillWidth: true
-                                    text: "Set Lounge"
-                                    enabled: root.ready
-                                        && backgroundCard.publicationState
-                                            === "published"
-                                        && backgroundCard.handle.length === 64
-                                    onClicked:
-                                        root.assignRoomBackground(
-                                            "lounge",
-                                            backgroundCard.handle)
-                                }
-                            }
-                        }
-                        Component.onDestruction: {
-                            if (previewCounted)
-                                --root.backgroundReadyImageCount
                         }
                     }
                 }
