@@ -1283,6 +1283,9 @@ function validPublishedAssetInvocation(stage) {
 }
 
 function validPublishedAuthoringAsset(asset) {
+  // JSON checkpointing omits `assignment: undefined`, so unpublished
+  // assignments are either absent or explicitly null.
+  const hasAssignmentKey = Object.hasOwn(asset, "assignment");
   if (
     !validApprovalGuardedStagedAsset({
       appends: asset.appends,
@@ -1303,7 +1306,7 @@ function validPublishedAuthoringAsset(asset) {
     || !exactKeys(asset, [
       "appends",
       "assetId",
-      "assignment",
+      ...(hasAssignmentKey ? ["assignment"] : []),
       "begin",
       "byteLength",
       "chunkBytes",
@@ -1331,7 +1334,7 @@ function validPublishedAuthoringAsset(asset) {
   ) {
     return false;
   }
-  if (asset.assignment === null) return true;
+  if (!hasAssignmentKey || asset.assignment === null) return true;
   if (
     !validPublishedAssetInvocation(asset.assignment)
     || !/^ok;room=(atrium|lounge);handle=[0-9a-f]{64}$/.test(
@@ -1343,6 +1346,12 @@ function validPublishedAuthoringAsset(asset) {
   const fields = receiptFields(asset.assignment.receipt);
   return fields.handle === asset.handle
     && ["atrium", "lounge"].includes(fields.room);
+}
+
+function authoringAssetIsAssigned(asset) {
+  return Object.hasOwn(asset, "assignment")
+    && asset.assignment !== null
+    && asset.assignment !== undefined;
 }
 
 function validIdentityRegistrationAndPublishedAssets(authoring) {
@@ -1397,7 +1406,7 @@ function validIdentityRegistrationAndPublishedAssets(authoring) {
     && new Set(files).size === files.length
     && new Set(handles).size === handles.length
     && new Set(cids).size === cids.length
-    && authoring.assets.some((asset) => asset.assignment !== null);
+    && authoring.assets.some((asset) => authoringAssetIsAssigned(asset));
 }
 
 function validIdentityRegistrationAndPublishedAssetsGate3Report(report) {
