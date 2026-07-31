@@ -1556,15 +1556,10 @@ Item {
                     Rectangle {
                         objectName: "palaceRoomBackgroundPlaceholder"
                         anchors.fill: parent
-                        color: "#312a24"
+                        // Classic empty room floor — no large diagnostic overlay
+                        // (diagnostics stay in the compact delivery strip).
+                        color: "#3a342c"
                         visible: roomBackground.status !== Image.Ready
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "Verified room art unavailable"
-                            color: "#f3c36b"
-                            font.pixelSize: 16
-                        }
                     }
 
                     Rectangle {
@@ -1857,20 +1852,20 @@ Item {
             }
                 } // roomCanvas
 
-            // Occupancy strip (PalaceChat: Users: n/max under the room).
+            // Occupancy strip (PalaceChat: room name | Users:n/max | bag | trash).
             Rectangle {
                 id: statusStrip
                 objectName: "palaceStatusStrip"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 20
+                Layout.preferredHeight: 24
                 color: "#d4d0c8"
                 border.color: "#808080"
 
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 6
-                    anchors.rightMargin: 6
-                    spacing: 8
+                    anchors.rightMargin: 4
+                    spacing: 6
 
                     Text {
                         text: root.roomTitle
@@ -1887,15 +1882,44 @@ Item {
                         color: "#000000"
                         font.pixelSize: 11
                     }
+                    // Classic suitcase / trash sit on the status strip.
+                    Button {
+                        objectName: "palacePropBag"
+                        text: "🧳"
+                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 28
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Prop bag"
+                        enabled: root.ready
+                        onClicked: root.propBagOpen = !root.propBagOpen
+                    }
+                    Button {
+                        objectName: "palacePropTrash"
+                        text: "🗑"
+                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 28
+                        ToolTip.visible: hovered
+                        ToolTip.text: root.availablePropId.length > 0
+                            ? "Discard / ban assigned prop"
+                            : "Trash"
+                        enabled: root.ready
+                            && root.availablePropId.length > 0
+                        onClicked: {
+                            if (root.localWornPropId
+                                    === root.availablePropId)
+                                root.gate2Remove(root.availablePropId)
+                            root.gate4BanProp(root.availablePropId)
+                        }
+                    }
                 }
             }
 
-            // Single-line input + suitcase + trash (classic under-room strip).
+            // Single-line chat under the room (classic Speak field).
             Rectangle {
                 id: inputStrip
                 objectName: "palaceInputStrip"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 36
+                Layout.preferredHeight: 32
                 color: "#d4d0c8"
                 border.color: "#808080"
 
@@ -1908,7 +1932,7 @@ Item {
                         id: chatInput
                         objectName: "palaceChatInput"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 26
+                        Layout.preferredHeight: 24
                         placeholderText: ""
                         maximumLength: 280
                         enabled: root.ready
@@ -1922,40 +1946,12 @@ Item {
                     Button {
                         objectName: "palaceSayButton"
                         text: "Say"
-                        Layout.preferredHeight: 26
+                        Layout.preferredHeight: 24
                         Layout.preferredWidth: 44
                         enabled: root.ready && chatInput.text.length > 0
                         onClicked: {
                             root.gate2Say(chatInput.text)
                             chatInput.clear()
-                        }
-                    }
-                    Button {
-                        objectName: "palacePropBag"
-                        text: "🧳"
-                        Layout.preferredHeight: 26
-                        Layout.preferredWidth: 32
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Prop bag"
-                        enabled: root.ready
-                        onClicked: root.propBagOpen = !root.propBagOpen
-                    }
-                    Button {
-                        objectName: "palacePropTrash"
-                        text: "🗑"
-                        Layout.preferredHeight: 26
-                        Layout.preferredWidth: 32
-                        ToolTip.visible: hovered
-                        ToolTip.text: root.availablePropId.length > 0
-                            ? "Discard / ban assigned prop"
-                            : "Trash"
-                        enabled: root.ready
-                            && root.availablePropId.length > 0
-                        onClicked: {
-                            if (root.localWornPropId
-                                    === root.availablePropId)
-                                root.gate2Remove(root.availablePropId)
-                            root.gate4BanProp(root.availablePropId)
                         }
                     }
                 }
@@ -2556,94 +2552,39 @@ Item {
             height: 0
         }
 
+        // Compact diagnostic strip — not a dense panel over the room (classic
+        // client keeps diagnostics out of the View Screen).
         Rectangle {
             objectName: "palaceDeliveryStatus"
-            anchors.right: parent.right
+            anchors.left: parent.left
             anchors.bottom: parent.bottom
-            anchors.margins: 8
-            width: 168
-            height: 108
-            radius: 4
-            color: "#211a14cc"
-            border.color: "#444444"
+            anchors.margins: 2
+            width: Math.min(parent.width - 4, 420)
+            height: 16
+            color: "#d4d0c8"
+            border.color: "#808080"
             z: 15
-            opacity: 0.92
 
-            Column {
-                anchors.centerIn: parent
-                spacing: 3
-
-                Text {
-                    id: deliveryStatusText
-                    text: root.ready
-                        ? "Delivery: " + (root.statusValue("state") || "offline")
-                        : "Connecting"
-                    color: root.statusValue("state") === "online"
-                        ? "#a7e3a0" : "#f3c36b"
-                    font.bold: true
-                    font.pixelSize: 12
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: root.connectedPeerCount + " connected peer"
-                        + (root.connectedPeerCount === 1 ? "" : "s")
-                    color: "#e5d2aa"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "LEZ: "
-                        + (root.encodedStatusValue(
-                            root.lezState, "ready") === "1"
-                           ? "synchronized" : "offline")
-                    color: root.encodedStatusValue(
-                        root.lezState, "ready") === "1"
-                        ? "#a7e3a0" : "#f3c36b"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Palace: "
-                        + (root.encodedStatusValue(
-                            root.palaceState, "palace") || "closed")
-                    color: root.encodedStatusValue(
-                        root.palaceState, "palace") === "open"
-                        ? "#a7e3a0" : "#f3c36b"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Assets: "
-                        + (root.lastActionReceipt.indexOf(
-                               "degraded;reason=") === 0
-                           ? "degraded"
-                           : (root.encodedStatusValue(
-                                  root.storageStatus, "state")
-                              || root.encodedStatusValue(
-                                  root.storageStatus, "storage")
-                              || "offline"))
-                    color: root.lastActionReceipt.indexOf(
-                               "degraded;reason=") === 0
-                           || root.storageStatus.indexOf("degraded") !== -1
-                        ? "#ff9c8f" : "#e5d2aa"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Projection: " + root.syncHealth
-                    color: root.syncHealth === "fully_synchronized"
-                        ? "#a7e3a0" : "#f3c36b"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Door: " + (root.gate5VmPhase || "idle")
-                    color: root.gate5VmPhase === "degraded"
-                        ? "#ff9c8f"
-                        : (root.gate5VmPhase === "promoted"
-                           ? "#a7e3a0" : "#e5d2aa")
-                    font.pixelSize: 10
-                }
+            Text {
+                id: deliveryStatusText
+                anchors.fill: parent
+                anchors.leftMargin: 4
+                anchors.rightMargin: 4
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                font.pixelSize: 9
+                color: "#222222"
+                text: (root.ready
+                       ? "Delivery " + (root.statusValue("state") || "offline")
+                       : "Connecting")
+                    + " · peers " + root.connectedPeerCount
+                    + " · LEZ "
+                    + (root.encodedStatusValue(root.lezState, "ready") === "1"
+                       ? "ok" : "off")
+                    + " · Palace "
+                    + (root.encodedStatusValue(root.palaceState, "palace")
+                       || "closed")
+                    + " · door " + (root.gate5VmPhase || "idle")
             }
         }
     }
