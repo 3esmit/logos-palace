@@ -1750,6 +1750,10 @@ function validatesAuditedPrePublicWriteGate3Report(
   );
   const hasStorageMesh = Object.hasOwn(report, "storageMesh");
   const hasStorageMeshC = Object.hasOwn(report, "storageMeshC");
+  const hasStorageMeshPreFetch = Object.hasOwn(
+    report,
+    "storageMeshPreFetch",
+  );
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1783,6 +1787,7 @@ function validatesAuditedPrePublicWriteGate3Report(
       "storageConfigs",
       ...(hasStorageMesh ? ["storageMesh"] : []),
       ...(hasStorageMeshC ? ["storageMeshC"] : []),
+      ...(hasStorageMeshPreFetch ? ["storageMeshPreFetch"] : []),
       ...(hasStoragePeerEndpoints ? ["storagePeerEndpoints"] : []),
       "storageStartup",
       "version",

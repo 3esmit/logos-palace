@@ -434,6 +434,9 @@ private:
         std::string objectId;
         std::string path;
         std::uint64_t retentionRound = 0U;
+        // Network peer fetches can race DHT provider records and connect()
+        // completion; retry a few times before degrading the MVP bundle.
+        std::uint32_t attempt = 0U;
     };
 
     // Storage returns a canonical dataset/manifest CID for uploaded bytes. That
@@ -665,7 +668,8 @@ private:
     bool startStorageMvpCatalogDownload(
         const palace::StorageCatalogOperation& operation,
         bool localOnly,
-        StorageMvpTransferPurpose purpose);
+        StorageMvpTransferPurpose purpose,
+        std::uint32_t attempt = 0U);
     // Starts at most one outstanding MVP network/cache fetch so
     // fetchMvpStorageBundle can return ok;state=fetching without waiting for
     // every downloadToUrlV2 provider lookup to finish.

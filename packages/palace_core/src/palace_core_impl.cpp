@@ -8510,7 +8510,8 @@ bool PalaceCoreImpl::completeStorageMvpPublicationFromKnownBytes(
 bool PalaceCoreImpl::startStorageMvpCatalogDownload(
     const palace::StorageCatalogOperation& operation,
     bool localOnly,
-    StorageMvpTransferPurpose purpose)
+    StorageMvpTransferPurpose purpose,
+    std::uint32_t attempt)
 {
     const std::string path =
         storageDownloadPath(operation.operationId);
@@ -8549,6 +8550,7 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
             operation.objectId,
             path,
             0U,
+            attempt,
         });
     executeStorageCommands(dispatched.commands);
     return true;
@@ -8694,6 +8696,25 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
         m_storageCatalog.downloadFinished(
             catalogTerminal, succeeded ? bytes : std::string{});
     if (!completed.accepted || !succeeded) {
+        // Co-located peer fetch often loses the race with DHT provider
+        // advertisement and async connect(). Retry network fetches a few
+        // times before sealing the bundle as degraded.
+        if (transfer.purpose
+                == StorageMvpTransferPurpose::NetworkFetch
+            && transfer.attempt < 5U
+            && m_storageMvpMode == "fetching") {
+            const palace::StorageCatalogTransition fetch =
+                m_storageCatalog.beginLocalFetch(
+                    transfer.objectId);
+            if (fetch.accepted && fetch.operation.has_value()
+                && startStorageMvpCatalogDownload(
+                    *fetch.operation,
+                    false,
+                    StorageMvpTransferPurpose::NetworkFetch,
+                    transfer.attempt + 1U)) {
+                return;
+            }
+        }
         m_storageMvpFailures[transfer.objectId] =
             completed.accepted ? terminal.reason
                                : completed.reason;

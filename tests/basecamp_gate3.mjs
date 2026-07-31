@@ -424,11 +424,26 @@ function parseStoragePeerEndpointReceipt(receipt) {
   };
 }
 
-function loopbackStorageDialAddresses(tcpPort) {
+function storageDialAddresses(endpoint, tcpPort) {
   if (!Number.isInteger(tcpPort) || tcpPort < 1024 || tcpPort > 65535) {
     throw new Error(`invalid storage listen-port for dial: ${tcpPort}`);
   }
-  return [`/ip4/127.0.0.1/tcp/${tcpPort}`];
+  const addresses = new Set([
+    `/ip4/127.0.0.1/tcp/${tcpPort}`,
+    `/ip4/127.0.0.1/tcp/${tcpPort}/p2p/${endpoint.peerId}`,
+  ]);
+  for (const source of [endpoint.addrs, endpoint.announceAddresses]) {
+    if (!Array.isArray(source)) continue;
+    for (const address of source) {
+      if (typeof address !== "string" || address.length < 8) continue;
+      if (!address.includes("/tcp/")) continue;
+      addresses.add(address);
+      if (!address.includes("/p2p/")) {
+        addresses.add(`${address}/p2p/${endpoint.peerId}`);
+      }
+    }
+  }
+  return [...addresses].slice(0, 12);
 }
 
 async function readStoragePeerEndpoint(worker) {
@@ -459,14 +474,22 @@ async function connectStoragePeer(worker, peerId, addresses) {
   return observed;
 }
 
-async function meshStoragePeers(workersByLabel, configsByLabel, endpoints) {
+async function meshStoragePeers(
+  workersByLabel,
+  configsByLabel,
+  endpoints,
+  { settleMs = 10_000 } = {},
+) {
   const labels = Object.keys(endpoints).sort();
   const dials = [];
   for (const from of labels) {
     for (const to of labels) {
       if (from === to) continue;
       const toConfig = JSON.parse(configsByLabel[to]);
-      const addresses = loopbackStorageDialAddresses(toConfig["listen-port"]);
+      const addresses = storageDialAddresses(
+        endpoints[to],
+        toConfig["listen-port"],
+      );
       dials.push({
         from,
         to,
@@ -480,10 +503,9 @@ async function meshStoragePeers(workersByLabel, configsByLabel, endpoints) {
       });
     }
   }
-  // Connect is async at the libstorage layer; give the mesh a brief settle
-  // window before publish/fetch traffic depends on the dials.
-  await sleep(2_000);
-  return { labels, dials };
+  // connect() is async at libstorage; wait for dials before fetch traffic.
+  await sleep(settleMs);
+  return { labels, dials, settleMs };
 }
 
 function storageConfig(base, tcpPort, udpPort, label) {
@@ -2681,6 +2703,34 @@ try {
     objects: published.catalog.objects,
   };
   await checkpointReport();
+  // Re-dial after publication so peer B has a live connection to creator A
+  // before network GetProviders/download (connect is async and can idle out).
+  if (productionIdentityMode) {
+    const refreshedA = await readStoragePeerEndpoint(creator);
+    const refreshedB = await readStoragePeerEndpoint(provider);
+    report.storagePeerEndpoints.a = {
+      peerId: refreshedA.peerId,
+      spr: refreshedA.spr,
+      addrs: refreshedA.addrs,
+      announceAddresses: refreshedA.announceAddresses,
+    };
+    report.storagePeerEndpoints.b = {
+      peerId: refreshedB.peerId,
+      spr: refreshedB.spr,
+      addrs: refreshedB.addrs,
+      announceAddresses: refreshedB.announceAddresses,
+    };
+    report.storageMeshPreFetch = await meshStoragePeers(
+      workers,
+      configs,
+      {
+        a: report.storagePeerEndpoints.a,
+        b: report.storagePeerEndpoints.b,
+      },
+      { settleMs: 15_000 },
+    );
+    await checkpointReport();
+  }
   const providerBFetch = await fetchBundle(provider, published.catalog);
   if (providerBFetch.mode === "network") {
     report.providerBFetch = providerBFetch;
