@@ -9,6 +9,9 @@ class LogosPalaceUiBackend : public LogosPalaceUiSimpleSource,
                              public LogosUiPluginContext
 {
 public:
+    LogosPalaceUiBackend() = default;
+    ~LogosPalaceUiBackend() override;
+
     QString applicationRoundTrip(QString payload) override;
     QString enterRoom(QString roomId) override;
     QString previewSpot(QString spotId) override;
@@ -109,6 +112,7 @@ private:
     void applySpotStatus(const QString& status);
     void setSpotDegraded(const QString& reason,
                          const QString& actionId);
+    void stopPollingTimers();
 
     QTimer* m_deliveryPollTimer = nullptr;
     QTimer* m_nodeEvidencePollTimer = nullptr;

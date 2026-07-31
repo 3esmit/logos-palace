@@ -321,6 +321,31 @@ Item {
         return backgroundScreenshotFenceRequest
     }
 
+    // Authoring preview counters — keep transitions bounded so open/close
+    // cycles cannot accumulate readyImageCount (see tests/palace_ui_lifecycle.mjs).
+    function noteAuthoringPreviewReady(wasCounted) {
+        if (wasCounted)
+            return true
+        backgroundReadyImageCount =
+            Math.max(0, backgroundReadyImageCount) + 1
+        return true
+    }
+
+    function noteAuthoringPreviewLost(wasCounted) {
+        if (!wasCounted)
+            return false
+        backgroundReadyImageCount =
+            Math.max(0, backgroundReadyImageCount - 1)
+        return false
+    }
+
+    function resetAuthoringPreviewState() {
+        backgroundReadyImageCount = 0
+        backgroundScreenshotFenceRunning = false
+        backgroundScreenshotFenceFrame = -1
+        ++backgroundPreviewEpoch
+    }
+
     function parseConnectedPeerCount(encoded) {
         try {
             var evidence = JSON.parse(encoded)
@@ -1324,6 +1349,11 @@ Item {
 
     Component.onDestruction: root.abandonAssetImport()
 
+    onBackgroundModerationOpenChanged: {
+        if (!backgroundModerationOpen)
+            resetAuthoringPreviewState()
+    }
+
     FrameAnimation {
         running: root.backgroundScreenshotFenceRunning
         onTriggered: {
@@ -1333,73 +1363,195 @@ Item {
         }
     }
 
+    // Room-first chrome (Palace 3.5 main window pattern):
+    // left toolbox | View Screen (canvas) + status strip + input strip.
     Rectangle {
         anchors.fill: parent
-        color: "#15110d"
+        color: "#3a3a3a"
 
-        Rectangle {
-            id: roomCanvas
-            objectName: "palaceRoomCanvas"
+        RowLayout {
             anchors.fill: parent
-            anchors.margins: 20
-            color: "#312a24"
-            radius: 10
-            border.color: "#d5b77a"
-            border.width: 3
-            clip: true
+            anchors.margins: 4
+            spacing: 4
 
-            Image {
-                id: roomBackground
-                objectName: "palaceRoomBackground"
-                anchors.fill: parent
-                source: root.roomBackgroundHandle.length === 64
-                    ? "image://basecamp-verified/" + root.roomBackgroundHandle
-                    : ""
-                fillMode: Image.PreserveAspectCrop
-                smooth: false
-            }
-
+            // Vertical toolbox (classic left rail).
             Rectangle {
-                objectName: "palaceRoomBackgroundPlaceholder"
-                anchors.fill: parent
-                color: "#312a24"
-                visible: roomBackground.status !== Image.Ready
+                id: toolbox
+                objectName: "palaceToolbox"
+                Layout.preferredWidth: 52
+                Layout.fillHeight: true
+                color: "#2b2b2b"
+                border.color: "#1a1a1a"
+                border.width: 1
 
-                Text {
-                    anchors.centerIn: parent
-                    text: "Verified room art unavailable"
-                    color: "#f3c36b"
-                    font.pixelSize: 16
+                Column {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: 8
+                    spacing: 6
+
+                    Button {
+                        objectName: "palaceToolboxDoor"
+                        width: 40
+                        height: 36
+                        text: "Door"
+                        font.pixelSize: 9
+                        enabled: root.ready
+                            && (root.roomTitle !== "Atrium"
+                                || !root.gate5DoorBlocked)
+                        onClicked: {
+                            if (root.roomTitle === "Atrium")
+                                root.gate5UseDoor()
+                            else
+                                root.watchAction(
+                                    root.backend.enterRoom("atrium"),
+                                    null)
+                        }
+                    }
+
+                    Button {
+                        objectName: "palaceToolboxRooms"
+                        width: 40
+                        height: 36
+                        text: "Rooms"
+                        font.pixelSize: 9
+                        enabled: root.ready
+                        onClicked: {
+                            // Toggle Atrium/Lounge via door path for now.
+                            if (root.roomTitle === "Atrium")
+                                root.gate5UseDoor()
+                            else
+                                root.watchAction(
+                                    root.backend.enterRoom("atrium"),
+                                    null)
+                        }
+                    }
+
+                    Button {
+                        objectName: "palaceMoveUp"
+                        width: 40
+                        height: 28
+                        text: "↑"
+                        enabled: root.ready
+                        onClicked: root.gate2Move(
+                            root.localMotionX, root.localMotionY - 750)
+                    }
+                    Row {
+                        spacing: 2
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        Button {
+                            objectName: "palaceMoveLeft"
+                            width: 19
+                            height: 28
+                            text: "←"
+                            enabled: root.ready
+                            onClicked: root.gate2Move(
+                                root.localMotionX - 750, root.localMotionY)
+                        }
+                        Button {
+                            objectName: "palaceMoveRight"
+                            width: 19
+                            height: 28
+                            text: "→"
+                            enabled: root.ready
+                            onClicked: root.gate2Move(
+                                root.localMotionX + 750, root.localMotionY)
+                        }
+                    }
+                    Button {
+                        objectName: "palaceMoveDown"
+                        width: 40
+                        height: 28
+                        text: "↓"
+                        enabled: root.ready
+                        onClicked: root.gate2Move(
+                            root.localMotionX, root.localMotionY + 750)
+                    }
+
+                    Button {
+                        objectName: "palaceWearAssignedProp"
+                        width: 40
+                        height: 36
+                        text: "Bag"
+                        font.pixelSize: 9
+                        visible: root.availablePropId.length > 0
+                        enabled: root.ready
+                            && root.localWornPropId
+                                !== root.availablePropId
+                        onClicked: root.gate2Wear(root.availablePropId)
+                    }
+                    Button {
+                        objectName: "palaceRemoveAssignedProp"
+                        width: 40
+                        height: 36
+                        text: "Drop"
+                        font.pixelSize: 9
+                        visible: root.availablePropId.length > 0
+                        enabled: root.ready
+                            && root.localWornPropId
+                                === root.availablePropId
+                        onClicked: root.gate2Remove(root.availablePropId)
+                    }
+
+                    Button {
+                        objectName: "palaceBackgroundModerationButton"
+                        width: 40
+                        height: 40
+                        text: "Assets"
+                        font.pixelSize: 8
+                        enabled: root.ready
+                        onClicked: root.backgroundModerationOpen = true
+                    }
                 }
             }
 
-            Rectangle {
-                anchors.fill: parent
-                color: "#1b130d"
-                opacity: roomBackground.status === Image.Ready ? 0.18 : 0
-            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 0
 
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.topMargin: 20
-                text: root.roomTitle
-                font.pixelSize: 30
-                font.bold: true
-                color: "#fff2cf"
-                z: 8
-            }
+                Rectangle {
+                    id: roomCanvas
+                    objectName: "palaceRoomCanvas"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: "#312a24"
+                    border.color: "#1a1a1a"
+                    border.width: 1
+                    clip: true
 
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.topMargin: 58
-                text: root.participants.length + " participant"
-                    + (root.participants.length === 1 ? "" : "s")
-                color: "#e5d2aa"
-                font.pixelSize: 12
-                z: 8
-            }
+                    Image {
+                        id: roomBackground
+                        objectName: "palaceRoomBackground"
+                        anchors.fill: parent
+                        source: root.roomBackgroundHandle.length === 64
+                            ? "image://basecamp-verified/"
+                              + root.roomBackgroundHandle
+                            : ""
+                        fillMode: Image.PreserveAspectCrop
+                        smooth: false
+                    }
+
+                    Rectangle {
+                        objectName: "palaceRoomBackgroundPlaceholder"
+                        anchors.fill: parent
+                        color: "#312a24"
+                        visible: roomBackground.status !== Image.Ready
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Verified room art unavailable"
+                            color: "#f3c36b"
+                            font.pixelSize: 16
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "#1b130d"
+                        opacity: roomBackground.status === Image.Ready
+                            ? 0.12 : 0
+                    }
 
             Item {
                 id: participantLayer
@@ -1627,11 +1779,12 @@ Item {
                 }
             }
 
+            // In-scene door affordance (diegetic navigation).
             Button {
                 objectName: "palaceRoomDoor"
                 anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: actionDock.top
-                anchors.bottomMargin: 12
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 10
                 text: root.roomTitle !== "Atrium"
                     ? "Door to Atrium"
                     : (root.gate5DoorBlocked
@@ -1649,210 +1802,150 @@ Item {
                     }
                 }
             }
+                } // roomCanvas
 
-            Rectangle {
-                id: actionDock
-                objectName: "palaceActionDock"
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: 14
-                width: Math.max(320, Math.min(parent.width - 32, 820))
-                height: 112
-                radius: 14
-                color: "#211a14ed"
-                border.color: "#846b45"
-                z: 10
+                // Status strip under the View Screen (room name + occupancy).
+                Rectangle {
+                    id: statusStrip
+                    objectName: "palaceStatusStrip"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 22
+                    color: "#2b2b2b"
+                    border.color: "#1a1a1a"
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 14
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 160
-                        spacing: 5
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 8
 
                         Text {
-                            text: "Talk in the room"
-                            color: "#fff2cf"
-                            font.bold: true
+                            text: root.roomTitle
+                            color: "#f0f0f0"
                             font.pixelSize: 12
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            TextField {
-                                id: chatInput
-                                objectName: "palaceChatInput"
-                                Layout.fillWidth: true
-                                placeholderText: "Say something"
-                                maximumLength: 280
-                                enabled: root.ready
-                                onAccepted: {
-                                    if (text.length > 0) {
-                                        root.gate2Say(text)
-                                        clear()
-                                    }
-                                }
-                            }
-
-                            Button {
-                                objectName: "palaceSayButton"
-                                text: "Send"
-                                enabled: root.ready && chatInput.text.length > 0
-                                onClicked: {
-                                    root.gate2Say(chatInput.text)
-                                    chatInput.clear()
-                                }
-                            }
-                        }
-
-                        Text {
-                            objectName: "palaceLastActionReceipt"
-                            Layout.fillWidth: true
-                            text: root.lastActionReceipt.length > 0
-                                ? root.lastActionReceipt : "No action yet"
-                            color: root.lastActionReceipt.indexOf("rejected=") === 0
-                                   || root.lastActionReceipt.indexOf(
-                                       "degraded;reason=") === 0
-                                ? "#ff9c8f" : "#b9dcae"
-                            font.pixelSize: 10
+                            font.bold: true
                             elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        Text {
+                            text: "People: " + root.participants.length
+                                + "/" + Math.max(1, root.participants.length)
+                            color: "#d0d0d0"
+                            font.pixelSize: 11
                         }
                     }
+                }
 
-                    GridLayout {
-                        columns: 3
-                        rowSpacing: 2
-                        columnSpacing: 2
+                // Compact input strip (classic single-line chat under room).
+                Rectangle {
+                    id: inputStrip
+                    objectName: "palaceInputStrip"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    color: "#333333"
+                    border.color: "#1a1a1a"
 
-                        Item { Layout.preferredWidth: 30; Layout.preferredHeight: 26 }
-                        Button {
-                            objectName: "palaceMoveUp"
-                            text: "↑"
-                            Layout.preferredWidth: 38
-                            Layout.preferredHeight: 28
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX, root.localMotionY - 750)
-                        }
-                        Item { Layout.preferredWidth: 30; Layout.preferredHeight: 26 }
-                        Button {
-                            objectName: "palaceMoveLeft"
-                            text: "←"
-                            Layout.preferredWidth: 38
-                            Layout.preferredHeight: 28
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX - 750, root.localMotionY)
-                        }
-                        Rectangle {
-                            Layout.preferredWidth: 12
-                            Layout.preferredHeight: 12
-                            radius: 6
-                            color: "#d5b77a"
-                        }
-                        Button {
-                            objectName: "palaceMoveRight"
-                            text: "→"
-                            Layout.preferredWidth: 38
-                            Layout.preferredHeight: 28
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX + 750, root.localMotionY)
-                        }
-                        Item { Layout.preferredWidth: 30; Layout.preferredHeight: 26 }
-                        Button {
-                            objectName: "palaceMoveDown"
-                            text: "↓"
-                            Layout.preferredWidth: 38
-                            Layout.preferredHeight: 28
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX, root.localMotionY + 750)
-                        }
-                        Item { Layout.preferredWidth: 30; Layout.preferredHeight: 26 }
-                    }
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 6
 
-                    ColumnLayout {
-                        spacing: 5
-
-                        Button {
-                            objectName: "palaceWearAssignedProp"
-                            text: "Wear assigned prop"
-                            visible: root.availablePropId.length > 0
+                        TextField {
+                            id: chatInput
+                            objectName: "palaceChatInput"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            placeholderText: "Say something"
+                            maximumLength: 280
                             enabled: root.ready
-                                && root.localWornPropId
-                                    !== root.availablePropId
-                            onClicked: root.gate2Wear(
+                            onAccepted: {
+                                if (text.length > 0) {
+                                    root.gate2Say(text)
+                                    clear()
+                                }
+                            }
+                        }
+                        Button {
+                            objectName: "palaceSayButton"
+                            text: "Send"
+                            Layout.preferredHeight: 28
+                            enabled: root.ready && chatInput.text.length > 0
+                            onClicked: {
+                                root.gate2Say(chatInput.text)
+                                chatInput.clear()
+                            }
+                        }
+                        // Suitcase-style prop bag affordance (classic bag icon slot).
+                        Button {
+                            objectName: "palacePropBag"
+                            text: "Bag"
+                            Layout.preferredHeight: 28
+                            Layout.preferredWidth: 40
+                            enabled: root.ready
+                                && root.availablePropId.length > 0
+                            onClicked: {
+                                if (root.localWornPropId
+                                        === root.availablePropId)
+                                    root.gate2Remove(root.availablePropId)
+                                else
+                                    root.gate2Wear(root.availablePropId)
+                            }
+                        }
+                        // Trash affordance (drop / ban assigned prop for operators).
+                        Button {
+                            objectName: "palacePropTrash"
+                            text: "🗑"
+                            Layout.preferredHeight: 28
+                            Layout.preferredWidth: 36
+                            enabled: root.ready
+                                && root.availablePropId.length > 0
+                            onClicked: root.gate4BanProp(
                                 root.availablePropId)
                         }
-                        Button {
-                            objectName: "palaceRemoveAssignedProp"
-                            text: "Remove assigned prop"
-                            visible: root.availablePropId.length > 0
-                            enabled: root.ready
-                                && root.localWornPropId
-                                    === root.availablePropId
-                            onClicked: root.gate2Remove(
-                                root.availablePropId)
-                        }
                     }
                 }
-            }
-        }
 
-        Rectangle {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: 34
-            width: 132
-            height: 76
-            color: "#211a14dd"
-            radius: 8
-            z: 20
-
-            Column {
-                anchors.centerIn: parent
-                spacing: 5
                 Text {
-                    text: "Rooms"
-                    color: "#fff2cf"
-                    font.bold: true
+                    objectName: "palaceLastActionReceipt"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 16
+                    text: root.lastActionReceipt.length > 0
+                        ? root.lastActionReceipt : ""
+                    color: root.lastActionReceipt.indexOf("rejected=") === 0
+                           || root.lastActionReceipt.indexOf(
+                               "degraded;reason=") === 0
+                        ? "#ff9c8f" : "#b9dcae"
+                    font.pixelSize: 9
+                    elide: Text.ElideRight
+                    visible: root.lastActionReceipt.length > 0
                 }
-                Text {
-                    text: "Atrium\nLounge"
-                    color: "#f0dfba"
-                    font.pixelSize: 12
-                }
-            }
-        }
+            } // center ColumnLayout
+        } // main RowLayout
 
+        // Compact operator user list (classic user-list / Kill surface).
         Rectangle {
             objectName: "palaceModerationPanel"
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.rightMargin: 34
-            anchors.topMargin: 190
-            width: 230
-            height: 250
-            radius: 8
+            anchors.margins: 8
+            width: 168
+            height: Math.min(180, 48 + root.participants.length * 28)
+            radius: 4
             color: "#211a14ee"
-            border.color: "#846b45"
+            border.color: "#555555"
             z: 20
+            visible: root.participants.length > 0
 
             Column {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 5
+                anchors.margins: 6
+                spacing: 3
 
                 Text {
-                    text: "Moderation"
+                    text: "Users"
                     color: "#fff2cf"
                     font.bold: true
-                    font.pixelSize: 13
+                    font.pixelSize: 11
                 }
 
                 Repeater {
@@ -1867,26 +1960,27 @@ Item {
                                    || participant.userId || "Unknown")
                         property string participantUserId:
                             String(participant.userId || "")
-                        width: 210
-                        height: 28
-                        spacing: 6
+                        width: 156
+                        height: 24
+                        spacing: 4
 
                         Text {
-                            width: 126
+                            width: 88
                             anchors.verticalCenter: parent.verticalCenter
                             text: parent.participantName
                             elide: Text.ElideRight
                             color: "#e5d2aa"
-                            font.pixelSize: 11
+                            font.pixelSize: 10
                         }
 
                         Button {
                             objectName: "palaceBanUserButton"
                             property string subjectUserId:
                                 parent.participantUserId
-                            width: 72
-                            height: 26
-                            text: "Ban user"
+                            width: 60
+                            height: 22
+                            text: "Ban"
+                            font.pixelSize: 9
                             enabled: root.ready
                                 && subjectUserId.length === 64
                             onClicked: root.gate4BanUser(subjectUserId)
@@ -1896,60 +1990,56 @@ Item {
 
                 Button {
                     objectName: "palaceBanAssignedPropButton"
-                    width: 148
-                    height: 28
+                    width: 140
+                    height: 24
                     text: "Ban assigned prop"
+                    font.pixelSize: 9
                     visible: root.availablePropId.length > 0
                     enabled: root.ready
                     onClicked: root.gate4BanProp(
                         root.availablePropId)
                 }
 
-                Button {
-                    objectName: "palaceBackgroundModerationButton"
-                    width: 154
-                    height: 28
-                    text: "Palace assets"
-                    enabled: root.ready
-                    onClicked: root.backgroundModerationOpen = true
-                }
-
                 Text {
                     objectName: "palaceModerationStatus"
-                    width: 210
+                    width: 156
                     text: "Status: "
                         + (root.encodedStatusValue(
                             root.moderationState, "state") || "idle")
-                        + (root.encodedStatusValue(
-                            root.moderationState, "action").length > 0
-                           ? " · action "
-                             + root.encodedStatusValue(
-                                 root.moderationState, "action")
-                           : "")
-                    color: root.encodedStatusValue(
-                        root.moderationState, "state") === "finalized"
-                        ? "#a7e3a0"
-                        : (root.encodedStatusValue(
-                               root.moderationState, "state") === "rejected"
-                           ? "#ff9c8f" : "#f3c36b")
+                    color: "#f3c36b"
                     elide: Text.ElideRight
-                    font.pixelSize: 10
+                    font.pixelSize: 9
                 }
             }
         }
 
-        Rectangle {
+        // Authoring modal: Loader unloads cards when closed (preview leak fix).
+        Loader {
+            id: backgroundModerationLoader
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 48, 930)
+            height: Math.min(parent.height - 48, 620)
+            z: 50
+            active: root.backgroundModerationOpen
+            sourceComponent: backgroundModerationComponent
+            onActiveChanged: {
+                if (!active)
+                    root.resetAuthoringPreviewState()
+            }
+        }
+
+        Component {
+            id: backgroundModerationComponent
+
+            Rectangle {
             id: backgroundModeration
             objectName: "palaceBackgroundModeration"
-            anchors.centerIn: parent
-            width: Math.min(parent.width - 80, 930)
-            height: Math.min(parent.height - 80, 620)
-            radius: 12
+            width: backgroundModerationLoader.width
+            height: backgroundModerationLoader.height
+            radius: 8
             color: "#f518130f"
             border.color: "#d5b77a"
             border.width: 2
-            visible: root.backgroundModerationOpen
-            z: 50
 
             ColumnLayout {
                 anchors.fill: parent
@@ -2121,19 +2211,16 @@ Item {
                                         smooth: true
                                         asynchronous: false
                                         onStatusChanged: {
-                                            if (status === Image.Ready
-                                                    && !backgroundCard
-                                                        .previewCounted) {
+                                            if (status === Image.Ready) {
                                                 backgroundCard.previewCounted =
-                                                    true
-                                                ++root.backgroundReadyImageCount
-                                            } else if (
-                                                status !== Image.Ready
-                                                && backgroundCard
-                                                    .previewCounted) {
+                                                    root.noteAuthoringPreviewReady(
+                                                        backgroundCard
+                                                            .previewCounted)
+                                            } else {
                                                 backgroundCard.previewCounted =
-                                                    false
-                                                --root.backgroundReadyImageCount
+                                                    root.noteAuthoringPreviewLost(
+                                                        backgroundCard
+                                                            .previewCounted)
                                             }
                                             ++root.backgroundPreviewEpoch
                                         }
@@ -2310,8 +2397,9 @@ Item {
                                 }
 
                                 Component.onDestruction: {
-                                    if (previewCounted)
-                                        --root.backgroundReadyImageCount
+                                    previewCounted =
+                                        root.noteAuthoringPreviewLost(
+                                            previewCounted)
                                 }
                             }
                         }
@@ -2330,17 +2418,28 @@ Item {
                 }
             }
         }
+        } // backgroundModerationComponent
+
+        // Stable inspector alias for pre-layout action dock (now input strip).
+        Item {
+            objectName: "palaceActionDock"
+            visible: false
+            width: 0
+            height: 0
+        }
 
         Rectangle {
             objectName: "palaceDeliveryStatus"
             anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 34
-            width: 196
-            height: 140
-            radius: 8
-            color: "#211a14dd"
-            z: 20
+            anchors.bottom: parent.bottom
+            anchors.margins: 8
+            width: 168
+            height: 108
+            radius: 4
+            color: "#211a14cc"
+            border.color: "#444444"
+            z: 15
+            opacity: 0.92
 
             Column {
                 anchors.centerIn: parent

@@ -87,6 +87,23 @@ QString LogosPalaceUiBackend::applicationRoundTrip(
     return modules().palace_core.applicationRoundTrip(payload);
 }
 
+LogosPalaceUiBackend::~LogosPalaceUiBackend()
+{
+    stopPollingTimers();
+}
+
+void LogosPalaceUiBackend::stopPollingTimers()
+{
+    if (m_deliveryPollTimer) {
+        m_deliveryPollTimer->stop();
+    }
+    if (m_nodeEvidencePollTimer) {
+        m_nodeEvidencePollTimer->stop();
+    }
+    m_spotTracking = false;
+    m_spotDriveActive = false;
+}
+
 void LogosPalaceUiBackend::onContextReady()
 {
     refreshRoomProjection();
