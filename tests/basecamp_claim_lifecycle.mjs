@@ -270,7 +270,7 @@ function validPrePublicWriteAudits(audits) {
   if (
     !Array.isArray(audits)
     || audits.length === 0
-    || audits.length > 8
+    || audits.length > 16
     || audits.some((audit) => !validPrePublicWriteAudit(audit))
   ) {
     return false;
