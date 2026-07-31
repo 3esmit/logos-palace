@@ -87,6 +87,11 @@ test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /objectName:\s*"palaceToolbox"/);
   assert.match(mainQml, /objectName:\s*"palaceStatusStrip"/);
   assert.match(mainQml, /objectName:\s*"palaceInputStrip"/);
+  assert.match(mainQml, /objectName:\s*"palacePropBag"/);
+  assert.match(mainQml, /objectName:\s*"palacePropTrash"/);
+  assert.match(mainQml, /objectName:\s*"palacePropBagPanel"/);
+  assert.match(mainQml, /objectName:\s*"palaceUserListToggle"/);
+  assert.match(mainQml, /Users:\s*"\s*\+\s*root\.participants\.length/);
 });
 
 test("backend stops poll timers on teardown", () => {

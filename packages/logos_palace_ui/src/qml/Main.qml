@@ -162,6 +162,9 @@ Item {
     property int localMotionX: 5000
     property int localMotionY: 6200
     property string localWornPropId: ""
+    // PalaceChat-style prop bag / operator list visibility.
+    property bool propBagOpen: false
+    property bool userListOpen: true
 
     function gateFrameTimingStart(sampleCount) {
         if (sampleCount !== gateFrameTimingSampleTarget
@@ -1363,39 +1366,40 @@ Item {
         }
     }
 
-    // Room-first chrome (Palace 3.5 main window pattern):
-    // left toolbox | View Screen (canvas) + status strip + input strip.
+    // Palace Chat Official / classic main window:
+    // top utility toolbar → View Screen → Users strip → input + bag/trash.
     Rectangle {
         anchors.fill: parent
-        color: "#3a3a3a"
+        color: "#c0c0c0"
 
-        RowLayout {
+        ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 4
-            spacing: 4
+            anchors.margins: 2
+            spacing: 0
 
-            // Vertical toolbox (classic left rail).
+            // Horizontal toolbar (PalaceChat Official arrangement).
             Rectangle {
                 id: toolbox
                 objectName: "palaceToolbox"
-                Layout.preferredWidth: 52
-                Layout.fillHeight: true
-                color: "#2b2b2b"
-                border.color: "#1a1a1a"
-                border.width: 1
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                color: "#d4d0c8"
+                border.color: "#808080"
 
-                Column {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 8
-                    spacing: 6
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 4
+                    spacing: 3
 
                     Button {
                         objectName: "palaceToolboxDoor"
-                        width: 40
-                        height: 36
-                        text: "Door"
-                        font.pixelSize: 9
+                        width: 32
+                        height: 28
+                        text: "🚪"
+                        font.pixelSize: 12
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Door / room exit"
                         enabled: root.ready
                             && (root.roomTitle !== "Atrium"
                                 || !root.gate5DoorBlocked)
@@ -1408,16 +1412,16 @@ Item {
                                     null)
                         }
                     }
-
                     Button {
                         objectName: "palaceToolboxRooms"
-                        width: 40
-                        height: 36
-                        text: "Rooms"
-                        font.pixelSize: 9
+                        width: 32
+                        height: 28
+                        text: "⌂"
+                        font.pixelSize: 14
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Rooms"
                         enabled: root.ready
                         onClicked: {
-                            // Toggle Atrium/Lounge via door path for now.
                             if (root.roomTitle === "Atrium")
                                 root.gate5UseDoor()
                             else
@@ -1426,99 +1430,116 @@ Item {
                                     null)
                         }
                     }
-
                     Button {
                         objectName: "palaceMoveUp"
-                        width: 40
+                        width: 28
                         height: 28
                         text: "↑"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX, root.localMotionY - 750)
                     }
-                    Row {
-                        spacing: 2
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        Button {
-                            objectName: "palaceMoveLeft"
-                            width: 19
-                            height: 28
-                            text: "←"
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX - 750, root.localMotionY)
-                        }
-                        Button {
-                            objectName: "palaceMoveRight"
-                            width: 19
-                            height: 28
-                            text: "→"
-                            enabled: root.ready
-                            onClicked: root.gate2Move(
-                                root.localMotionX + 750, root.localMotionY)
-                        }
+                    Button {
+                        objectName: "palaceMoveLeft"
+                        width: 28
+                        height: 28
+                        text: "←"
+                        enabled: root.ready
+                        onClicked: root.gate2Move(
+                            root.localMotionX - 750, root.localMotionY)
+                    }
+                    Button {
+                        objectName: "palaceMoveRight"
+                        width: 28
+                        height: 28
+                        text: "→"
+                        enabled: root.ready
+                        onClicked: root.gate2Move(
+                            root.localMotionX + 750, root.localMotionY)
                     }
                     Button {
                         objectName: "palaceMoveDown"
-                        width: 40
+                        width: 28
                         height: 28
                         text: "↓"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX, root.localMotionY + 750)
                     }
-
+                    Rectangle {
+                        width: 1
+                        height: 22
+                        color: "#808080"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                     Button {
                         objectName: "palaceWearAssignedProp"
-                        width: 40
-                        height: 36
-                        text: "Bag"
-                        font.pixelSize: 9
-                        visible: root.availablePropId.length > 0
+                        width: 32
+                        height: 28
+                        text: "☺+"
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Wear assigned prop"
                         enabled: root.ready
+                            && root.availablePropId.length > 0
                             && root.localWornPropId
                                 !== root.availablePropId
                         onClicked: root.gate2Wear(root.availablePropId)
                     }
                     Button {
                         objectName: "palaceRemoveAssignedProp"
-                        width: 40
-                        height: 36
-                        text: "Drop"
-                        font.pixelSize: 9
-                        visible: root.availablePropId.length > 0
+                        width: 32
+                        height: 28
+                        text: "☺−"
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Remove worn prop"
                         enabled: root.ready
+                            && root.availablePropId.length > 0
                             && root.localWornPropId
                                 === root.availablePropId
                         onClicked: root.gate2Remove(root.availablePropId)
                     }
-
                     Button {
                         objectName: "palaceBackgroundModerationButton"
-                        width: 40
-                        height: 40
+                        width: 56
+                        height: 28
                         text: "Assets"
-                        font.pixelSize: 8
+                        font.pixelSize: 10
                         enabled: root.ready
                         onClicked: root.backgroundModerationOpen = true
                     }
+                    Button {
+                        objectName: "palaceUserListToggle"
+                        width: 56
+                        height: 28
+                        text: "Users"
+                        font.pixelSize: 10
+                        enabled: root.ready
+                        onClicked: root.userListOpen = !root.userListOpen
+                    }
+                }
+
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.roomTitle
+                    color: "#000080"
+                    font.bold: true
+                    font.pixelSize: 12
                 }
             }
 
-            ColumnLayout {
+            Rectangle {
+                id: roomCanvas
+                objectName: "palaceRoomCanvas"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 0
-
-                Rectangle {
-                    id: roomCanvas
-                    objectName: "palaceRoomCanvas"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "#312a24"
-                    border.color: "#1a1a1a"
-                    border.width: 1
-                    clip: true
+                color: "#312a24"
+                border.color: "#404040"
+                border.width: 1
+                clip: true
 
                     Image {
                         id: roomBackground
@@ -1640,25 +1661,57 @@ Item {
                             }
                         }
 
+                        // Classic "roundhead" presence disc (Palace default face).
                         Rectangle {
                             id: remoteAvatar
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 66
-                            height: 66
+                            width: 54
+                            height: 54
                             radius: width / 2
-                            color: "#68a3a0"
-                            border.color: "#d9ffef"
-                            border.width: 3
+                            color: "#ffe566"
+                            border.color: "#222222"
+                            border.width: 2
 
+                            // Eyes
+                            Row {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.top: parent.top
+                                anchors.topMargin: 14
+                                spacing: 10
+                                Rectangle {
+                                    width: 7
+                                    height: 9
+                                    radius: 3
+                                    color: "#111111"
+                                }
+                                Rectangle {
+                                    width: 7
+                                    height: 9
+                                    radius: 3
+                                    color: "#111111"
+                                }
+                            }
+                            // Smile
+                            Rectangle {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 12
+                                width: 18
+                                height: 9
+                                radius: 9
+                                color: "transparent"
+                                border.color: "#111111"
+                                border.width: 2
+                                // lower half only: clip via parent disc
+                            }
                             Text {
-                                anchors.centerIn: parent
-                                text: participantDelegate.participantDisplayName.length > 0
-                                    ? participantDelegate.participantDisplayName
-                                          .charAt(0).toUpperCase()
-                                    : "?"
-                                color: "#102322"
-                                font.pixelSize: 24
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 6
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "ᴗ"
+                                color: "#111111"
+                                font.pixelSize: 16
                                 font.bold: true
                             }
                         }
@@ -1804,137 +1857,212 @@ Item {
             }
                 } // roomCanvas
 
-                // Status strip under the View Screen (room name + occupancy).
-                Rectangle {
-                    id: statusStrip
-                    objectName: "palaceStatusStrip"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 22
-                    color: "#2b2b2b"
-                    border.color: "#1a1a1a"
+            // Occupancy strip (PalaceChat: Users: n/max under the room).
+            Rectangle {
+                id: statusStrip
+                objectName: "palaceStatusStrip"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 20
+                color: "#d4d0c8"
+                border.color: "#808080"
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        anchors.rightMargin: 8
-                        spacing: 8
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    spacing: 8
 
-                        Text {
-                            text: root.roomTitle
-                            color: "#f0f0f0"
-                            font.pixelSize: 12
-                            font.bold: true
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
+                    Text {
+                        text: root.roomTitle
+                        color: "#000000"
+                        font.pixelSize: 11
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: "Users: " + root.participants.length
+                            + "/" + Math.max(
+                                32, root.participants.length)
+                        color: "#000000"
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            // Single-line input + suitcase + trash (classic under-room strip).
+            Rectangle {
+                id: inputStrip
+                objectName: "palaceInputStrip"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                color: "#d4d0c8"
+                border.color: "#808080"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    spacing: 4
+
+                    TextField {
+                        id: chatInput
+                        objectName: "palaceChatInput"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 26
+                        placeholderText: ""
+                        maximumLength: 280
+                        enabled: root.ready
+                        onAccepted: {
+                            if (text.length > 0) {
+                                root.gate2Say(text)
+                                clear()
+                            }
                         }
-                        Text {
-                            text: "People: " + root.participants.length
-                                + "/" + Math.max(1, root.participants.length)
-                            color: "#d0d0d0"
-                            font.pixelSize: 11
+                    }
+                    Button {
+                        objectName: "palaceSayButton"
+                        text: "Say"
+                        Layout.preferredHeight: 26
+                        Layout.preferredWidth: 44
+                        enabled: root.ready && chatInput.text.length > 0
+                        onClicked: {
+                            root.gate2Say(chatInput.text)
+                            chatInput.clear()
+                        }
+                    }
+                    Button {
+                        objectName: "palacePropBag"
+                        text: "🧳"
+                        Layout.preferredHeight: 26
+                        Layout.preferredWidth: 32
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Prop bag"
+                        enabled: root.ready
+                        onClicked: root.propBagOpen = !root.propBagOpen
+                    }
+                    Button {
+                        objectName: "palacePropTrash"
+                        text: "🗑"
+                        Layout.preferredHeight: 26
+                        Layout.preferredWidth: 32
+                        ToolTip.visible: hovered
+                        ToolTip.text: root.availablePropId.length > 0
+                            ? "Discard / ban assigned prop"
+                            : "Trash"
+                        enabled: root.ready
+                            && root.availablePropId.length > 0
+                        onClicked: {
+                            if (root.localWornPropId
+                                    === root.availablePropId)
+                                root.gate2Remove(root.availablePropId)
+                            root.gate4BanProp(root.availablePropId)
                         }
                     }
                 }
+            }
 
-                // Compact input strip (classic single-line chat under room).
-                Rectangle {
-                    id: inputStrip
-                    objectName: "palaceInputStrip"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 40
-                    color: "#333333"
-                    border.color: "#1a1a1a"
+            Text {
+                objectName: "palaceLastActionReceipt"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 14
+                text: root.lastActionReceipt.length > 0
+                    ? root.lastActionReceipt : ""
+                color: root.lastActionReceipt.indexOf("rejected=") === 0
+                       || root.lastActionReceipt.indexOf(
+                           "degraded;reason=") === 0
+                    ? "#800000" : "#006400"
+                font.pixelSize: 9
+                elide: Text.ElideRight
+                visible: root.lastActionReceipt.length > 0
+            }
+        } // main ColumnLayout
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 4
-                        spacing: 6
+        // Prop bag panel (compositional identity: wear/drop assigned prop).
+        Rectangle {
+            objectName: "palacePropBagPanel"
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 8
+            anchors.bottomMargin: 48
+            width: 200
+            height: 132
+            radius: 4
+            color: "#f0f0f0"
+            border.color: "#404040"
+            z: 25
+            visible: root.propBagOpen
 
-                        TextField {
-                            id: chatInput
-                            objectName: "palaceChatInput"
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 28
-                            placeholderText: "Say something"
-                            maximumLength: 280
-                            enabled: root.ready
-                            onAccepted: {
-                                if (text.length > 0) {
-                                    root.gate2Say(text)
-                                    clear()
-                                }
-                            }
-                        }
-                        Button {
-                            objectName: "palaceSayButton"
-                            text: "Send"
-                            Layout.preferredHeight: 28
-                            enabled: root.ready && chatInput.text.length > 0
-                            onClicked: {
-                                root.gate2Say(chatInput.text)
-                                chatInput.clear()
-                            }
-                        }
-                        // Suitcase-style prop bag affordance (classic bag icon slot).
-                        Button {
-                            objectName: "palacePropBag"
-                            text: "Bag"
-                            Layout.preferredHeight: 28
-                            Layout.preferredWidth: 40
-                            enabled: root.ready
-                                && root.availablePropId.length > 0
-                            onClicked: {
-                                if (root.localWornPropId
-                                        === root.availablePropId)
-                                    root.gate2Remove(root.availablePropId)
-                                else
-                                    root.gate2Wear(root.availablePropId)
-                            }
-                        }
-                        // Trash affordance (drop / ban assigned prop for operators).
-                        Button {
-                            objectName: "palacePropTrash"
-                            text: "🗑"
-                            Layout.preferredHeight: 28
-                            Layout.preferredWidth: 36
-                            enabled: root.ready
-                                && root.availablePropId.length > 0
-                            onClicked: root.gate4BanProp(
-                                root.availablePropId)
-                        }
-                    }
-                }
+            Column {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
 
                 Text {
-                    objectName: "palaceLastActionReceipt"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 16
-                    text: root.lastActionReceipt.length > 0
-                        ? root.lastActionReceipt : ""
-                    color: root.lastActionReceipt.indexOf("rejected=") === 0
-                           || root.lastActionReceipt.indexOf(
-                               "degraded;reason=") === 0
-                        ? "#ff9c8f" : "#b9dcae"
-                    font.pixelSize: 9
-                    elide: Text.ElideRight
-                    visible: root.lastActionReceipt.length > 0
+                    text: "Prop bag"
+                    font.bold: true
+                    font.pixelSize: 12
+                    color: "#000000"
                 }
-            } // center ColumnLayout
-        } // main RowLayout
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 10
+                    color: "#222222"
+                    text: root.availablePropId.length > 0
+                        ? ("Assigned prop: " + root.availablePropId
+                           + (root.localWornPropId
+                              === root.availablePropId
+                              ? " (worn)" : " (in bag)"))
+                        : "No assigned prop yet. Operator can set one in Assets."
+                }
+                Row {
+                    spacing: 6
+                    Button {
+                        text: "Wear"
+                        width: 72
+                        height: 26
+                        enabled: root.ready
+                            && root.availablePropId.length > 0
+                            && root.localWornPropId
+                                !== root.availablePropId
+                        onClicked: root.gate2Wear(root.availablePropId)
+                    }
+                    Button {
+                        text: "Remove"
+                        width: 72
+                        height: 26
+                        enabled: root.ready
+                            && root.availablePropId.length > 0
+                            && root.localWornPropId
+                                === root.availablePropId
+                        onClicked: root.gate2Remove(root.availablePropId)
+                    }
+                }
+                Button {
+                    text: "Close bag"
+                    width: 100
+                    height: 24
+                    onClicked: root.propBagOpen = false
+                }
+            }
+        }
 
-        // Compact operator user list (classic user-list / Kill surface).
+        // Operator User List (classic compact list with Ban ≈ Kill).
         Rectangle {
             objectName: "palaceModerationPanel"
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 8
-            width: 168
-            height: Math.min(180, 48 + root.participants.length * 28)
-            radius: 4
-            color: "#211a14ee"
-            border.color: "#555555"
+            anchors.topMargin: 42
+            width: 176
+            height: Math.min(
+                200, 56 + root.participants.length * 28
+                + (root.availablePropId.length > 0 ? 28 : 0))
+            radius: 2
+            color: "#f5f5f5"
+            border.color: "#404040"
             z: 20
-            visible: root.participants.length > 0
+            visible: root.userListOpen
 
             Column {
                 anchors.fill: parent
@@ -1942,8 +2070,8 @@ Item {
                 spacing: 3
 
                 Text {
-                    text: "Users"
-                    color: "#fff2cf"
+                    text: "User List"
+                    color: "#000000"
                     font.bold: true
                     font.pixelSize: 11
                 }
@@ -1960,16 +2088,16 @@ Item {
                                    || participant.userId || "Unknown")
                         property string participantUserId:
                             String(participant.userId || "")
-                        width: 156
+                        width: 164
                         height: 24
                         spacing: 4
 
                         Text {
-                            width: 88
+                            width: 96
                             anchors.verticalCenter: parent.verticalCenter
                             text: parent.participantName
                             elide: Text.ElideRight
-                            color: "#e5d2aa"
+                            color: "#000000"
                             font.pixelSize: 10
                         }
 
@@ -1977,7 +2105,7 @@ Item {
                             objectName: "palaceBanUserButton"
                             property string subjectUserId:
                                 parent.participantUserId
-                            width: 60
+                            width: 56
                             height: 22
                             text: "Ban"
                             font.pixelSize: 9
@@ -1990,7 +2118,7 @@ Item {
 
                 Button {
                     objectName: "palaceBanAssignedPropButton"
-                    width: 140
+                    width: 148
                     height: 24
                     text: "Ban assigned prop"
                     font.pixelSize: 9
@@ -2002,11 +2130,11 @@ Item {
 
                 Text {
                     objectName: "palaceModerationStatus"
-                    width: 156
-                    text: "Status: "
+                    width: 164
+                    text: "Moderation: "
                         + (root.encodedStatusValue(
                             root.moderationState, "state") || "idle")
-                    color: "#f3c36b"
+                    color: "#333333"
                     elide: Text.ElideRight
                     font.pixelSize: 9
                 }
