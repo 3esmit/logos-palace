@@ -7811,13 +7811,39 @@ bool PalaceCoreImpl::beginStorageMvpFetch(std::string& reason)
         return false;
     }
     m_storageMvpFetchSource = *selectedSource;
+    m_storageMvpMode = "fetching";
+    // Pipeline one fetch at a time. Starting every downloadToUrlV2 inside the
+    // initial gate3FetchBundle call blocks the UI receipt for minutes when
+    // provider discovery is slow or empty (peer Gate 3 hang).
+    if (!scheduleNextStorageMvpFetch()) {
+        reason = "storage-catalog-fetch";
+        return false;
+    }
+    return true;
+}
+
+bool PalaceCoreImpl::scheduleNextStorageMvpFetch()
+{
+    if (m_storageMvpMode != "fetching"
+        || !m_storageMvpFetchSource.has_value()
+        || !m_storageMvpTransfers.empty()) {
+        return m_storageMvpMode == "fetching"
+            || m_storageMvpMode == "verified"
+            || m_storageMvpMode == "retained";
+    }
     const bool localOnly =
         *m_storageMvpFetchSource
         == palace::PalaceStorageMvpFetchSource::Cache;
-
-    m_storageMvpMode = "fetching";
+    const std::vector<palace::PalaceStorageMvpArtifactV1>
+        artifacts = m_storageMvpBundle.artifacts();
     for (const palace::PalaceStorageMvpArtifactV1& artifact
          : artifacts) {
+        if (m_storageMvpFetchedObjects.find(artifact.objectId)
+                != m_storageMvpFetchedObjects.end()
+            || m_storageMvpFailures.find(artifact.objectId)
+                != m_storageMvpFailures.end()) {
+            continue;
+        }
         const palace::StorageCatalogTransition fetch =
             m_storageCatalog.beginLocalFetch(artifact.objectId);
         if (!fetch.accepted || !fetch.operation.has_value()
@@ -7829,11 +7855,12 @@ bool PalaceCoreImpl::beginStorageMvpFetch(std::string& reason)
                 fetch.accepted ? "network-fetch-dispatch"
                                : fetch.reason;
             m_storageMvpMode = "degraded";
-            reason = "storage-catalog-fetch";
             return false;
         }
+        return true;
     }
-    return true;
+    return m_storageMvpFetchedObjects.size()
+        == m_storageMvpBundle.artifactCount();
 }
 
 void PalaceCoreImpl::startRestoredStorageMvpFetchIfReady()
@@ -8583,6 +8610,11 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
         std::string recoveryReason;
         recoverFinalizedPalaceVmTurn(
             recoveryReason);
+        return;
+    }
+    if (transfer.purpose
+        == StorageMvpTransferPurpose::NetworkFetch) {
+        scheduleNextStorageMvpFetch();
     }
 }
 

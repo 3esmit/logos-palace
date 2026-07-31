@@ -658,6 +658,10 @@ private:
         const palace::StorageCatalogOperation& operation,
         bool localOnly,
         StorageMvpTransferPurpose purpose);
+    // Starts at most one outstanding MVP network/cache fetch so
+    // fetchMvpStorageBundle can return ok;state=fetching without waiting for
+    // every downloadToUrlV2 provider lookup to finish.
+    bool scheduleNextStorageMvpFetch();
     // Completes PublicationVerification from bytes already held in the MVP
     // artifact after a successful local upload. Avoids blocking the publish
     // dispatch on storage_module.downloadToUrlV2 (localOnly), which can hang
