@@ -1712,11 +1712,16 @@ async function fetchBundle(worker, catalog) {
     if (missing + verifiedCount !== catalog.objects.length) {
       throw new Error(`${worker.label} catalog state count mismatch`);
     }
+    // Fetch dispatch starts network (or cache) downloads for every catalog
+    // object. downloadToUrlV2 acknowledgements can take multi-second provider
+    // lookups per object; keep this under the ordinary worker cap.
     dispatched = await invoke(
       worker,
       "gate3FetchBundle",
       [catalog.encoded],
       { prefix: "ok;" },
+      false,
+      120_000,
     );
     if (
       !dispatched.receipt.includes("state=fetching")

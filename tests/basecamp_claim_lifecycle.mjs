@@ -49,6 +49,10 @@ const identityRegistrationAndApprovalGuardedAssetsProfile =
   "identity-registration-and-approval-guarded-assets-before-palace-write";
 const identityRegistrationAndPublishedAssetsProfile =
   "identity-registration-and-published-assets-before-palace-write";
+// Creator sealed the MVP storage catalog and bound authored CIDs, then failed
+// on peer fetch/retention before any LEZ palace write (root still uninitialized).
+const identityRegistrationAndSealedMvpBundleProfile =
+  "identity-registration-and-sealed-mvp-bundle-before-palace-write";
 const storageCidPattern =
   /^(b[a-z2-7]{50,}|z[1-9A-HJ-NP-Za-km-z]{40,})$/;
 
@@ -332,6 +336,24 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndPublishedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "f84d18ab433ffbce7a30eb7ff64af1b4fff0aed1",
+    snapshotNarHash:
+      "sha256-V65x+QQMw6q8HRA2rnjJKyelVWmzCFNEaHeJ09548Fc=",
+    snapshotNarSize: 7_240_496,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "52a938a8ff4394070e9ea5be10058827763ec0ebcbe936cee5fe413e327b2a6b",
+    compiledReportSha256:
+      "b73285fbde700b3d5b1fa04f2dc48bca0d4edce467324b5059eb519f3a9bbc6d",
+    gate3ReportSha256:
+      "af9e7ae4d8507d0ca9b2f84cdf3f3069f1f6d46fb5e1796782b59a766fc78e52",
+    gate3Failure:
+      "worker b: gate3FetchBundle receipt timeout: before=\"state=missing\" after=\"\" state=\"wallet=created;ready=1;compatible=1;running=1;tracked=0;sync=current;current_height=45024;synced_height=45024;authority=missing;vm=idle;vm_action=none;program=e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61\" sequence=90->91",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -366,6 +388,7 @@ function validPrePublicWriteAudit(audit) {
         identityRegistrationAndIdleStorageProfile,
         identityRegistrationAndApprovalGuardedAssetsProfile,
         identityRegistrationAndPublishedAssetsProfile,
+        identityRegistrationAndSealedMvpBundleProfile,
       ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
@@ -1554,6 +1577,110 @@ function validIdentityRegistrationAndPublishedAssetsGate3Report(report) {
     && validIdentityRegistrationAndPublishedAssets(report.assetAuthoring);
 }
 
+function validSealedMvpBundlePublication(publication) {
+  if (
+    !exactKeys(publication, ["checksum", "completed", "dispatched", "objects"])
+    || !validPublishedAssetInvocation(publication.dispatched)
+    || !String(publication.dispatched.receipt).startsWith("ok;")
+    || !exactKeys(publication.completed, ["elapsedMs", "receipt"])
+    || !Number.isSafeInteger(publication.completed.elapsedMs)
+    || publication.completed.elapsedMs < 0
+    || typeof publication.completed.receipt !== "string"
+    || !publication.completed.receipt.includes("state=verified")
+    || !publication.completed.receipt.includes("catalog=")
+    || typeof publication.checksum !== "string"
+    || !sha256Pattern.test(publication.checksum)
+    || !Array.isArray(publication.objects)
+    || publication.objects.length < 5
+  ) {
+    return false;
+  }
+  return publication.objects.every((object) =>
+    exactKeys(object, [
+      "byteLength",
+      "cid",
+      "contentSha256",
+      "mediaType",
+      "objectId",
+      "type",
+    ])
+      && typeof object.objectId === "string"
+      && object.objectId.length > 0
+      && storageCidPattern.test(object.cid)
+      && sha256Pattern.test(object.contentSha256)
+      && Number.isSafeInteger(object.byteLength)
+      && object.byteLength > 0
+  );
+}
+
+function validSealedMvpBundleGraphBindings(authoring, publication) {
+  if (
+    !Array.isArray(authoring.graphBindings)
+    || authoring.graphBindings.length < 2
+    || !Array.isArray(publication.objects)
+  ) {
+    return false;
+  }
+  const objectsById = new Map(
+    publication.objects.map((object) => [object.objectId, object]),
+  );
+  return authoring.graphBindings.every((binding) => {
+    const expectedKeys = binding?.kind === "room-background"
+      ? [
+          "kind",
+          "targetId",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ]
+      : [
+          "kind",
+          "objectId",
+          "assetId",
+          "assignment",
+          "cid",
+          "contentSha256",
+        ];
+    if (!exactKeys(binding, expectedKeys) || !storageCidPattern.test(binding.cid)) {
+      return false;
+    }
+    const object = objectsById.get(binding.objectId);
+    const asset = authoring.assets.find(
+      (candidate) => candidate.assetId === binding.assetId,
+    );
+    return object !== undefined
+      && asset !== undefined
+      && object.cid === binding.cid
+      && object.contentSha256 === binding.contentSha256
+      && asset.cid === binding.cid
+      && asset.handle === binding.contentSha256;
+  });
+}
+
+function validIdentityRegistrationAndSealedMvpBundle(authoring, publication) {
+  if (
+    !validIdentityRegistrationAndPublishedAssets({
+      ...authoring,
+      graphBindings: [],
+    })
+    || !validSealedMvpBundlePublication(publication)
+    || !validSealedMvpBundleGraphBindings(authoring, publication)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function validIdentityRegistrationAndSealedMvpBundleGate3Report(report) {
+  return validIdentityRegistrationAndIdleStorageBase(report)
+    && validIdentityRegistrationAndSealedMvpBundle(
+      report.assetAuthoring,
+      report.publication,
+    );
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
@@ -1566,15 +1693,19 @@ function validatesAuditedPrePublicWriteGate3Report(
       === identityRegistrationAndApprovalGuardedAssetsProfile;
   const identityRegistrationAndPublishedAssets =
     audit.reportProfile === identityRegistrationAndPublishedAssetsProfile;
+  const identityRegistrationAndSealedMvpBundle =
+    audit.reportProfile === identityRegistrationAndSealedMvpBundleProfile;
   const hasAssetAuthoring = identityRegistrationAndIdleStorage
     || identityRegistrationAndApprovalGuardedAssets
-    || identityRegistrationAndPublishedAssets;
+    || identityRegistrationAndPublishedAssets
+    || identityRegistrationAndSealedMvpBundle;
   // Gate 3 may attach a path-free screenshot evidence object after authoring
   // completes and still fail later (e.g. MVP bundle publish timeout).
   const hasAssetAuthoringScreenshot = Object.hasOwn(
     report,
     "assetAuthoringScreenshot",
   );
+  const hasPublication = Object.hasOwn(report, "publication");
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1597,6 +1728,7 @@ function validatesAuditedPrePublicWriteGate3Report(
       "productSnapshotNarSize",
       "productionIdentityMode",
       "providerBRetentionProofs",
+      ...(hasPublication ? ["publication"] : []),
       "releasePreflight",
       "runtimeOutputManifestSha256",
       "schema",
@@ -1634,6 +1766,10 @@ function validatesAuditedPrePublicWriteGate3Report(
               ? validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(
                 report,
               )
+              : identityRegistrationAndSealedMvpBundle
+                ? validIdentityRegistrationAndSealedMvpBundleGate3Report(
+                  report,
+                )
               : validIdentityRegistrationAndPublishedAssetsGate3Report(report)
         )
         : (
@@ -1647,6 +1783,7 @@ function validatesAuditedPrePublicWriteGate3Report(
           || report.startup.a.startupMs < 0
         )
     )
+    || (identityRegistrationAndSealedMvpBundle !== hasPublication)
     || !Array.isArray(report.providerBRetentionProofs)
     || report.providerBRetentionProofs.length !== 0
     || report.creatorOffline !== false
