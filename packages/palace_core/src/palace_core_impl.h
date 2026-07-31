@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -437,6 +438,9 @@ private:
         // Network peer fetches can race DHT provider records and connect()
         // completion; retry a few times before degrading the MVP bundle.
         std::uint32_t attempt = 0U;
+        std::string moduleOperationId;
+        std::chrono::steady_clock::time_point startedAt =
+            std::chrono::steady_clock::now();
     };
 
     // Storage returns a canonical dataset/manifest CID for uploaded bytes. That

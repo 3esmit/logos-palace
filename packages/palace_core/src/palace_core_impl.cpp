@@ -4920,23 +4920,30 @@ std::string PalaceCoreImpl::storagePeerEndpoint()
         }
         // DHT routing table peer IDs (for multi-node mesh readiness checks).
         QJsonArray tablePeers;
-        const auto appendPeerId = [&tablePeers](const auto& node) {
-            if (!node.is_object())
-                return;
-            if (!node.contains("peerId") || !node["peerId"].is_string())
-                return;
-            const std::string id = node["peerId"].get<std::string>();
-            if (id.empty() || id.size() > 1024U)
-                return;
-            tablePeers.append(QString::fromStdString(id));
-        };
         if (debug.contains("table") && debug["table"].is_object()) {
             const auto& table = debug["table"];
-            if (table.contains("localNode"))
-                appendPeerId(table["localNode"]);
+            if (table.contains("localNode")
+                && table["localNode"].is_object()
+                && table["localNode"].contains("peerId")
+                && table["localNode"]["peerId"].is_string()) {
+                const std::string id =
+                    table["localNode"]["peerId"].get<std::string>();
+                if (!id.empty() && id.size() <= 1024U)
+                    tablePeers.append(QString::fromStdString(id));
+            }
             if (table.contains("nodes") && table["nodes"].is_array()) {
-                for (const auto& node : table["nodes"])
-                    appendPeerId(node);
+                for (const auto& node : table["nodes"]) {
+                    if (!node.is_object()
+                        || !node.contains("peerId")
+                        || !node["peerId"].is_string()) {
+                        continue;
+                    }
+                    const std::string id =
+                        node["peerId"].get<std::string>();
+                    if (id.empty() || id.size() > 1024U)
+                        continue;
+                    tablePeers.append(QString::fromStdString(id));
+                }
             }
         }
         if (!tablePeers.isEmpty())
@@ -5427,6 +5434,55 @@ std::string PalaceCoreImpl::mvpStorageBundleStatus()
     // Drain (and kick deferred peer-fetch dispatch) on status polls — never
     // from the initial fetchMvpStorageBundle return path (see below).
     drainStorageCallbacks();
+    // Peer network downloads can hang forever after accept (GetProviders finds
+    // a record but never delivers bytes). Cancel and retry stuck transfers so
+    // the bundle can progress or degrade closed instead of spinning.
+    if (m_storageMvpMode == "fetching"
+        && m_storageMvpFetchSource.has_value()
+        && *m_storageMvpFetchSource
+            == palace::PalaceStorageMvpFetchSource::Network
+        && !m_storageMvpTransfers.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        std::vector<std::string> timedOut;
+        for (const auto& entry : m_storageMvpTransfers) {
+            if (entry.second.purpose
+                    != StorageMvpTransferPurpose::NetworkFetch
+                || entry.second.moduleOperationId.empty()) {
+                continue;
+            }
+            if (now - entry.second.startedAt
+                < std::chrono::seconds(45)) {
+                continue;
+            }
+            timedOut.push_back(entry.first);
+        }
+        for (const std::string& domainOperationId : timedOut) {
+            const auto found =
+                m_storageMvpTransfers.find(domainOperationId);
+            if (found == m_storageMvpTransfers.end())
+                continue;
+            StorageMvpTransfer transfer = found->second;
+            m_storageMvpTransfers.erase(found);
+            (void)modules().storage_module.downloadCancelV2(
+                transfer.moduleOperationId);
+            // Re-open the catalog object for another fetch attempt.
+            const palace::StorageCatalogTransition fetch =
+                m_storageCatalog.beginLocalFetch(transfer.objectId);
+            if (transfer.attempt < 5U
+                && fetch.accepted
+                && fetch.operation.has_value()
+                && startStorageMvpCatalogDownload(
+                    *fetch.operation,
+                    false,
+                    StorageMvpTransferPurpose::NetworkFetch,
+                    transfer.attempt + 1U)) {
+                continue;
+            }
+            m_storageMvpFailures[transfer.objectId] =
+                "network-fetch-timeout";
+            m_storageMvpMode = "degraded";
+        }
+    }
     if (!m_storageMvpFailures.empty()) {
         return "state=degraded;published="
             + std::to_string(m_storageMvpBundle.publishedCount())
@@ -8588,6 +8644,17 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
     if (!dispatched.accepted || !catalogAcknowledged.accepted)
         return false;
 
+    std::string moduleOperationId = operation.operationId;
+    for (const palace::StorageModuleCommand& command
+         : dispatched.commands) {
+        if (command.kind
+                == palace::StorageModuleCommandKind::DownloadToUrlV2
+            && !command.moduleOperationId.empty()) {
+            moduleOperationId = command.moduleOperationId;
+            break;
+        }
+    }
+
     m_storageMvpTransfers.emplace(
         operation.operationId,
         StorageMvpTransfer{
@@ -8596,6 +8663,8 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
             path,
             0U,
             attempt,
+            moduleOperationId,
+            std::chrono::steady_clock::now(),
         });
     executeStorageCommands(dispatched.commands);
     return true;

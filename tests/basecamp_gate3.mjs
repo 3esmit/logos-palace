@@ -2571,9 +2571,8 @@ try {
       }
     }
   }
-  // Start creator Storage first. Peers bootstrap from its SPR and dial its
-  // loopback multiaddr so gate3FetchBundle does not hang on logos.test
-  // GetProviders against private announce addresses.
+  // Start creator Storage first. Peer B/C join after publication so provider
+  // records already exist when they bootstrap from the creator SPR.
   report.storageStartup.a = await startStorage(
     workers.get("a"),
     configs.a,
@@ -2589,46 +2588,12 @@ try {
       spr: creatorEndpoint.spr,
       addrs: creatorEndpoint.addrs,
       announceAddresses: creatorEndpoint.announceAddresses,
+      tablePeers: creatorEndpoint.tablePeers,
     };
-    for (const label of ["b", "c"]) {
-      const parsed = JSON.parse(configs[label]);
-      delete parsed.network;
-      delete parsed["no-bootstrap-node"];
-      parsed.nat = "extip:127.0.0.1";
-      parsed["bootstrap-node"] = [creatorEndpoint.spr];
-      if (!exactProductionStorageConfig(parsed)) {
-        throw new Error(`storage config ${label} unsafe after bootstrap inject`);
-      }
-      configs[label] = JSON.stringify(parsed);
-    }
     // Creator was already started as the private-mesh entry; do not mutate it.
     if (!exactProductionStorageConfig(JSON.parse(configs.a))) {
       throw new Error("storage config a is not a private-mesh entry");
     }
-    report.storageConfigs = configs;
-    await checkpointReport();
-  }
-  report.storageStartup.b = await startStorage(
-    workers.get("b"),
-    configs.b,
-  );
-  await checkpointReport();
-  if (productionIdentityMode) {
-    const providerEndpoint = await readStoragePeerEndpoint(workers.get("b"));
-    report.storagePeerEndpoints.b = {
-      peerId: providerEndpoint.peerId,
-      spr: providerEndpoint.spr,
-      addrs: providerEndpoint.addrs,
-      announceAddresses: providerEndpoint.announceAddresses,
-    };
-    report.storageMesh = await meshStoragePeers(
-      workers,
-      configs,
-      {
-        a: report.storagePeerEndpoints.a,
-        b: report.storagePeerEndpoints.b,
-      },
-    );
     await checkpointReport();
   }
 
@@ -2770,24 +2735,45 @@ try {
     objects: published.catalog.objects,
   };
   await checkpointReport();
-  // Re-dial after publication so peer B has a live connection to creator A
-  // before network GetProviders/download (connect is async and can idle out).
+  // After creator publication, bring provider B onto the private mesh so it
+  // bootstraps against a node that already holds provider records.
   if (productionIdentityMode) {
-    const refreshedA = await readStoragePeerEndpoint(creator);
-    const refreshedB = await readStoragePeerEndpoint(provider);
+    const creatorEndpoint = await readStoragePeerEndpoint(creator);
     report.storagePeerEndpoints.a = {
-      peerId: refreshedA.peerId,
-      spr: refreshedA.spr,
-      addrs: refreshedA.addrs,
-      announceAddresses: refreshedA.announceAddresses,
+      peerId: creatorEndpoint.peerId,
+      spr: creatorEndpoint.spr,
+      addrs: creatorEndpoint.addrs,
+      announceAddresses: creatorEndpoint.announceAddresses,
+      tablePeers: creatorEndpoint.tablePeers,
     };
+    for (const label of ["b", "c"]) {
+      const parsed = JSON.parse(configs[label]);
+      delete parsed.network;
+      delete parsed["no-bootstrap-node"];
+      parsed.nat = "extip:127.0.0.1";
+      parsed["bootstrap-node"] = [creatorEndpoint.spr];
+      if (!exactProductionStorageConfig(parsed)) {
+        throw new Error(`storage config ${label} unsafe after bootstrap inject`);
+      }
+      configs[label] = JSON.stringify(parsed);
+    }
+    report.storageConfigs = configs;
+    await checkpointReport();
+  }
+  if (!report.storageStartup.b) {
+    report.storageStartup.b = await startStorage(provider, configs.b);
+    await checkpointReport();
+  }
+  if (productionIdentityMode) {
+    const providerEndpoint = await readStoragePeerEndpoint(provider);
     report.storagePeerEndpoints.b = {
-      peerId: refreshedB.peerId,
-      spr: refreshedB.spr,
-      addrs: refreshedB.addrs,
-      announceAddresses: refreshedB.announceAddresses,
+      peerId: providerEndpoint.peerId,
+      spr: providerEndpoint.spr,
+      addrs: providerEndpoint.addrs,
+      announceAddresses: providerEndpoint.announceAddresses,
+      tablePeers: providerEndpoint.tablePeers,
     };
-    report.storageMeshPreFetch = await meshStoragePeers(
+    report.storageMesh = await meshStoragePeers(
       workers,
       configs,
       {
@@ -2796,8 +2782,7 @@ try {
       },
       { settleMs: 15_000 },
     );
-    // Re-dial until DHT tables see each other so GetProviders can resolve
-    // co-located providers after publication.
+    report.storageMeshPreFetch = report.storageMesh;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const visibility = await waitForStorageMeshVisibility(
         workers,
