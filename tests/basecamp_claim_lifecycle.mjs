@@ -1660,15 +1660,31 @@ function validSealedMvpBundleGraphBindings(authoring, publication) {
 }
 
 function validIdentityRegistrationAndSealedMvpBundle(authoring, publication) {
+  // Sealed-bundle reports add graphBindings, optional activePropProjection, and
+  // a top-level publication object after creator publish succeeds.
+  const {
+    activePropProjection,
+    graphBindings,
+    ...publishedShape
+  } = authoring;
   if (
     !validIdentityRegistrationAndPublishedAssets({
-      ...authoring,
+      ...publishedShape,
       graphBindings: [],
     })
     || !validSealedMvpBundlePublication(publication)
     || !validSealedMvpBundleGraphBindings(authoring, publication)
   ) {
     return false;
+  }
+  if (activePropProjection !== undefined) {
+    if (
+      !exactKeys(activePropProjection, ["available", "version"])
+      || activePropProjection.version !== 1
+      || activePropProjection.available !== false
+    ) {
+      return false;
+    }
   }
   return true;
 }
