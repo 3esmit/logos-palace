@@ -1515,9 +1515,18 @@ function validatesAuditedPrePublicWriteGate3Report(
   const hasAssetAuthoring = identityRegistrationAndIdleStorage
     || identityRegistrationAndApprovalGuardedAssets
     || identityRegistrationAndPublishedAssets;
+  // Gate 3 may attach a path-free screenshot evidence object after authoring
+  // completes and still fail later (e.g. MVP bundle publish timeout).
+  const hasAssetAuthoringScreenshot = Object.hasOwn(
+    report,
+    "assetAuthoringScreenshot",
+  );
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
+      ...(hasAssetAuthoringScreenshot
+        ? ["assetAuthoringScreenshot"]
+        : []),
       "basecampBinarySha256",
       "basecampRevision",
       "blockers",
