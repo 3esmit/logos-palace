@@ -1592,11 +1592,17 @@ function parseMvpCatalog(receipt, propId) {
 
 async function publishBundle(worker, propId) {
   const expectedObjectCount = graphObjectOrder(propId).length;
+  // Bundle dispatch may stage multiple leaves and complete local publication
+  // verification before returning ok;…. Keep this under the ordinary worker
+  // cap (120s) but well above the default 15s invoke budget used for lighter
+  // Gate 3 actions.
   const dispatched = await invoke(
     worker,
     "gate3PublishBundle",
     [],
     { prefix: "ok;" },
+    false,
+    120_000,
   );
   const completed = await pollReceipt({
     worker,

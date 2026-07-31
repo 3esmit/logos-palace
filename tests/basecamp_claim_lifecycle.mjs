@@ -296,6 +296,24 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndPublishedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "7bc6de1cc0020673f61548df1f8a324c8182410f",
+    snapshotNarHash:
+      "sha256-RmLMTmM+KqVWKQjmT3D8+zyEhOzPF13UolrtVDHGO14=",
+    snapshotNarSize: 7_226_984,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "4b799a5e0362e9c41a78d5549c04811ba323024eec0f7adeab30ce07ed052bf5",
+    compiledReportSha256:
+      "0a66ddad541bd08b6b7e45ede0432a00b01bcea2ed26ca05ebd6498172d8306c",
+    gate3ReportSha256:
+      "3b2081778c446777a06823775b7bc62d8d1d6b30aa241fc62ecd1b037d3b40c7",
+    gate3Failure:
+      "worker a: gate3PublishBundle receipt timeout: before=\"state=missing;published=0;verified=0;total=0;retention=missing;retention_round=0;source=none;native_available=0;native_total=0\" after=\"\" state=\"wallet=created;ready=1;compatible=1;running=1;tracked=0;sync=current;current_height=44899;synced_height=44899;authority=missing;vm=idle;vm_action=none;program=e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61\" sequence=100->101",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndPublishedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {

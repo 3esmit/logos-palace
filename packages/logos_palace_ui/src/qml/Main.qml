@@ -44,6 +44,10 @@ Item {
         ? backend.deliveryNodeEvidence
         : "{\"success\":false,\"reason\":\"node-not-created\"}"
     property string invocationError: ""
+    // Local copy of the latest successful watchAction value. Prefer this over
+    // backend.lastActionReceipt alone so Gate harnesses observe the returned
+    // receipt even if remote-object property propagation lags the sequence bump.
+    property string watchedActionReceipt: ""
     property int invocationSequence: 0
     property string acceptanceRoundTripResponse: ""
     readonly property int gateFrameTimingSampleTarget: 120
@@ -80,7 +84,10 @@ Item {
         "failure": gateFrameTimingFailure
     })
     readonly property string lastActionReceipt: invocationError.length > 0
-        ? invocationError : (backend ? backend.lastActionReceipt : "")
+        ? invocationError
+        : (watchedActionReceipt.length > 0
+           ? watchedActionReceipt
+           : (backend ? backend.lastActionReceipt : ""))
 
     // Stable inspector contract used by the compiled Gate 2 harness.
     readonly property string gate2Status: deliveryStatus
@@ -414,6 +421,7 @@ Item {
 
     function rejectedNotReady() {
         invocationError = "rejected=ui-not-ready"
+        watchedActionReceipt = ""
         ++invocationSequence
         return invocationError
     }
@@ -426,14 +434,17 @@ Item {
             // local rejection and may run the optional accepted callback.
             if (receipt.indexOf("rejected=") === 0) {
                 invocationError = receipt
+                watchedActionReceipt = ""
             } else {
                 invocationError = ""
+                watchedActionReceipt = receipt
                 if (onAccepted)
                     onAccepted(receipt)
             }
             ++invocationSequence
         }, function (error) {
             invocationError = "rejected=ui-remote-call;" + String(error)
+            watchedActionReceipt = ""
             ++invocationSequence
         })
         return "pending"

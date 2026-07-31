@@ -636,6 +636,33 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   );
   assert.match(runner, /\.chunkBytes == 32768/);
   assert.match(runner, /maxTotalBytes=10485760/);
+  // After uploadUrl, publication verification must complete from known staged
+  // bytes so gate3PublishBundle returns ok;… without downloadToUrlV2 hangs.
+  assert.match(coreImpl, /completeStorageMvpPublicationFromKnownBytes/);
+  assert.match(
+    coreImpl,
+    /completeStorageMvpPublicationFromKnownBytes\(\s*transfer\.objectId,\s*terminal\.cid\)/,
+  );
+  const uploadTerminalStart = coreImpl.indexOf(
+    "if (transfer.purpose\n"
+      + "        == StorageMvpTransferPurpose::PublicationUpload)",
+  );
+  assert.notEqual(uploadTerminalStart, -1);
+  const uploadTerminalEnd = coreImpl.indexOf(
+    "std::string bytes;",
+    uploadTerminalStart,
+  );
+  assert.notEqual(uploadTerminalEnd, -1);
+  const uploadTerminal = coreImpl.slice(
+    uploadTerminalStart,
+    uploadTerminalEnd,
+  );
+  assert.match(uploadTerminal, /completeStorageMvpPublicationFromKnownBytes/);
+  assert.doesNotMatch(uploadTerminal, /startStorageMvpCatalogDownload/);
+  assert.match(
+    gate3,
+    /gate3PublishBundle[\s\S]*?120_000/,
+  );
   // The sole direct publication call proves the pre-approval guard. All
   // successful moderation follows visible objectName controls instead.
   assert.match(

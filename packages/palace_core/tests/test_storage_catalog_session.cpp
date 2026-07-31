@@ -1519,3 +1519,53 @@ LOGOS_TEST(storage_catalog_schema_v3_preserves_overflow_without_wrap)
     LOGOS_ASSERT_EQ(restored.lastChallengeSequence(), 0U);
     LOGOS_ASSERT_TRUE(restored.beginLocalFetch("asset").accepted);
 }
+
+// Publication verification after a successful uploadUrl is completed from the
+// exact staged bytes (no storage_module.downloadToUrlV2). Gate 3's MVP bundle
+// publish relies on this path so gate3PublishBundle can return a real receipt
+// without hanging on provider discovery.
+LOGOS_TEST(
+    storage_catalog_publication_verification_completes_from_known_bytes)
+{
+    palace::PalaceStorageCatalogSession session;
+    LOGOS_ASSERT_TRUE(session.configure(config()));
+
+    const std::string atrium = "atrium-background-png-bytes";
+    const std::string lounge = "lounge-background-png-bytes";
+    const std::string script = "script-door-bundle-bytes";
+    LOGOS_ASSERT_TRUE(session.stagePublicationObject(
+        blob("background-atrium", atrium), atrium).accepted);
+    LOGOS_ASSERT_TRUE(session.stagePublicationObject(
+        blob("background-lounge", lounge), lounge).accepted);
+    LOGOS_ASSERT_TRUE(session.stagePublicationObject(
+        blob("script-door", script), script).accepted);
+
+    LOGOS_ASSERT_TRUE(publish(
+        session, "background-atrium", atrium, cid('a')));
+    LOGOS_ASSERT_TRUE(publish(
+        session, "background-lounge", lounge, cid('b')));
+    LOGOS_ASSERT_TRUE(publish(
+        session, "script-door", script, cid('c')));
+
+    for (const auto& [objectId, objectCid] : {
+             std::pair<std::string, std::string>{
+                 "background-atrium", cid('a')},
+             std::pair<std::string, std::string>{
+                 "background-lounge", cid('b')},
+             std::pair<std::string, std::string>{
+                 "script-door", cid('c')},
+         }) {
+        const palace::StorageCatalogObjectStatus status =
+            session.status(objectId, kNow);
+        LOGOS_ASSERT_TRUE(status.found);
+        LOGOS_ASSERT_EQ(status.cid, objectCid);
+        LOGOS_ASSERT_EQ(
+            static_cast<int>(status.publicationStage),
+            static_cast<int>(
+                palace::StorageCatalogPublicationStage::Published));
+        LOGOS_ASSERT_EQ(
+            static_cast<int>(status.localPhase),
+            static_cast<int>(
+                palace::StorageCatalogLocalPhase::Verified));
+    }
+}

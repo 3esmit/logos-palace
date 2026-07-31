@@ -8174,6 +8174,128 @@ bool PalaceCoreImpl::startStorageMvpPublication(
     return true;
 }
 
+bool PalaceCoreImpl::completeStorageMvpPublicationFromKnownBytes(
+    const std::string& objectId,
+    const std::string& cid)
+{
+    const auto* artifact = m_storageMvpBundle.artifact(objectId);
+    if (artifact == nullptr
+        || artifact->bytes.empty()
+        || !palace::isCanonicalStorageCid(cid)) {
+        m_storageMvpFailures[objectId] = "publication-known-bytes";
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    const palace::StorageCatalogTransition verify =
+        m_storageCatalog.beginPublicationVerification(objectId);
+    if (!verify.accepted || !verify.operation.has_value()) {
+        m_storageMvpFailures[objectId] = verify.reason.empty()
+            ? "publication-verification-begin"
+            : verify.reason;
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+    if (verify.operation->cid != cid) {
+        m_storageMvpFailures[objectId] = "publication-cid-mismatch";
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    palace::StorageCatalogDownloadAcknowledgementV2 acknowledgement;
+    acknowledgement.protocol = "logos.storage.download";
+    acknowledgement.version = 2U;
+    acknowledgement.accepted = true;
+    acknowledgement.operationId = verify.operation->operationId;
+    acknowledgement.cid = cid;
+    const palace::StorageCatalogTransition acknowledged =
+        m_storageCatalog.downloadAcknowledged(acknowledgement);
+    if (!acknowledged.accepted) {
+        m_storageMvpFailures[objectId] = acknowledged.reason.empty()
+            ? "publication-verification-ack"
+            : acknowledged.reason;
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    // Re-validate the exact bytes that were staged for uploadUrl. This is the
+    // same check downloadFinished would apply after a successful local fetch.
+    if (palace::crypto::sha256Hex(artifact->bytes)
+            != artifact->specification.contentSha256
+        || artifact->bytes.size()
+            != artifact->specification.byteLength) {
+        m_storageMvpFailures[objectId] = "publication-byte-digest";
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    palace::StorageCatalogDownloadTerminalV2 catalogTerminal;
+    catalogTerminal.protocol = "logos.storage.download";
+    catalogTerminal.version = 2U;
+    catalogTerminal.operationId = verify.operation->operationId;
+    catalogTerminal.cid = cid;
+    catalogTerminal.outcome =
+        palace::StorageCatalogDownloadOutcome::Succeeded;
+    const palace::StorageCatalogTransition completed =
+        m_storageCatalog.downloadFinished(
+            catalogTerminal, artifact->bytes);
+    if (!completed.accepted) {
+        m_storageMvpFailures[objectId] = completed.reason.empty()
+            ? "publication-verification-finish"
+            : completed.reason;
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    const bool pngAsset =
+        artifact->type
+            == palace::PalaceStorageMvpArtifactType::BackgroundPng
+        || artifact->type
+            == palace::PalaceStorageMvpArtifactType::PropPng;
+    if (pngAsset) {
+        const palace::VerifiedAsset verified =
+            m_verifiedAssetStore
+            ? m_verifiedAssetStore->stagePngBytes(artifact->bytes)
+            : palace::VerifiedAsset{};
+        const std::string roomId =
+            objectId == "background-atrium"
+            ? "atrium"
+            : objectId == "background-lounge"
+                ? "lounge" : std::string{};
+        if (!verified.accepted
+            || verified.handle
+                != artifact->specification.contentSha256) {
+            m_storageMvpFailures[objectId] =
+                "publication-png-restage";
+            m_storageMvpMode = "degraded";
+            return false;
+        }
+        if (!roomId.empty()) {
+            m_storageMvpPendingRoomBackgrounds[roomId] =
+                verified.handle;
+        }
+    }
+
+    const palace::StorageCatalogObjectStatus status =
+        m_storageCatalog.status(
+            objectId,
+            static_cast<std::uint64_t>(
+                std::max<std::int64_t>(0, deliveryNowSeconds())));
+    if (!status.found
+        || status.publicationStage
+            != palace::StorageCatalogPublicationStage::Published
+        || !m_storageMvpBundle.assignPublicationCid(
+            objectId, status.cid)) {
+        m_storageMvpFailures[objectId] = "publication-cid-commit";
+        m_storageMvpMode = "degraded";
+        return false;
+    }
+
+    m_storageMvpFetchedObjects.insert(objectId);
+    scheduleStorageMvpPublications();
+    return true;
+}
+
 bool PalaceCoreImpl::startStorageMvpCatalogDownload(
     const palace::StorageCatalogOperation& operation,
     bool localOnly,
@@ -8256,20 +8378,13 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
             m_storageMvpMode = "degraded";
             return;
         }
-        const palace::StorageCatalogTransition verify =
-            m_storageCatalog.beginPublicationVerification(
-                transfer.objectId);
-        if (!verify.accepted || !verify.operation.has_value()
-            || !startStorageMvpCatalogDownload(
-                *verify.operation,
-                true,
-                StorageMvpTransferPurpose::
-                    PublicationVerification)) {
-            m_storageMvpFailures[transfer.objectId] =
-                verify.accepted
-                    ? "publication-verification-dispatch"
-                    : verify.reason;
-            m_storageMvpMode = "degraded";
+        // The upload just stored these exact artifact bytes. Complete the
+        // catalog VerifyingLocal→Published transition from those bytes rather
+        // than re-entering storage_module.downloadToUrlV2, which has been
+        // observed to hang on GetProviders during gate3PublishBundle.
+        if (!completeStorageMvpPublicationFromKnownBytes(
+                transfer.objectId, terminal.cid)) {
+            return;
         }
         return;
     }

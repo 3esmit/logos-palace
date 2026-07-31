@@ -658,6 +658,13 @@ private:
         const palace::StorageCatalogOperation& operation,
         bool localOnly,
         StorageMvpTransferPurpose purpose);
+    // Completes PublicationVerification from bytes already held in the MVP
+    // artifact after a successful local upload. Avoids blocking the publish
+    // dispatch on storage_module.downloadToUrlV2 (localOnly), which can hang
+    // on provider discovery even immediately after uploadUrl succeeds.
+    bool completeStorageMvpPublicationFromKnownBytes(
+        const std::string& objectId,
+        const std::string& cid);
     void applyStorageMvpTerminal(
         const palace::StorageTransferTerminal& terminal);
     // Observer and Delivery callbacks use these internally. They remain hidden
