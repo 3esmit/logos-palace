@@ -428,13 +428,13 @@ private:
         std::uint64_t retentionRound = 0U;
     };
 
-    // Storage returns a canonical manifest CID for uploaded bytes. The CID's
-    // multihash is not assumed to be the PNG digest: Core retrieves it again
-    // and verifies the bounded content before publishing the authoring record.
+    // Storage returns a canonical dataset/manifest CID for uploaded bytes. That
+    // CID's multihash is the manifest digest, not the PNG content digest. Core
+    // therefore re-reads the already-verified local PNG for the authoring
+    // handle and only then binds the returned Storage CID.
     struct AssetPublicationVerification {
         std::string handle;
         std::string cid;
-        std::string path;
     };
 
     struct PalaceLezPendingFinality {
@@ -731,8 +731,6 @@ private:
     std::map<std::string, std::string> m_storageMvpFailures;
     std::map<std::string, std::string> m_assetStatus;
     std::map<std::string, std::string> m_storagePublicationByOperation;
-    std::map<std::string, AssetPublicationVerification>
-        m_assetPublicationVerificationByOperation;
     std::map<std::string, std::string> m_publicationStatus;
     std::map<std::string, std::vector<PendingDeliveryModuleEvent>>
         m_earlyDeliveryModuleEvents;

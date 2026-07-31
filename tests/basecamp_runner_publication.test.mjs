@@ -716,11 +716,19 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   assert.match(coreImpl, /verifyAssetPublication\(/);
   assert.match(
     coreImpl,
+    /verifiedPngPath\(verification\.handle\)/,
+  );
+  assert.match(
+    coreImpl,
     /palace::crypto::sha256Hex\(bytes\) != verification\.handle/,
   );
   assert.match(
     coreImpl,
     /recordPublishedCid\(\s*verification\.handle, verification\.cid\)/,
+  );
+  assert.match(
+    coreImpl,
+    /publish-failed;reason=content-verification/,
   );
 
   const publicSources = [

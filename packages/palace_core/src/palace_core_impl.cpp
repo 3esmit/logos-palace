@@ -8062,13 +8062,29 @@ bool PalaceCoreImpl::verifyAssetPublication(
         return false;
     }
 
-    std::string bytes;
-    if (!readStorageDownload(
-            verification.path, asset->byteLength, bytes)
-        || bytes.size() != asset->byteLength
-        || palace::crypto::sha256Hex(bytes) != verification.handle) {
+    // verifiedPngPath re-opens the immutable staged PNG and rejects the path
+    // unless the file still hashes to the authoring handle.
+    const auto path =
+        m_verifiedAssetStore->verifiedPngPath(verification.handle);
+    if (!path.has_value())
+        return false;
+
+    QFile input(QString::fromStdString(*path));
+    if (!input.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray encoded = input.read(
+        static_cast<qint64>(asset->byteLength) + 1);
+    if (!input.atEnd()
+        || static_cast<std::uint64_t>(encoded.size())
+            != asset->byteLength) {
         return false;
     }
+    const std::string bytes(
+        encoded.constData(),
+        static_cast<std::size_t>(encoded.size()));
+    if (palace::crypto::sha256Hex(bytes) != verification.handle)
+        return false;
+
     const palace::VerifiedAsset verified =
         m_verifiedAssetStore->stagePngBytes(bytes);
     if (!verified.accepted || verified.handle != verification.handle
@@ -8605,26 +8621,6 @@ void PalaceCoreImpl::applyStorageTerminal(
         return;
     }
 
-    const auto verification =
-        m_assetPublicationVerificationByOperation.find(
-            terminal.domainOperationId);
-    if (verification
-        != m_assetPublicationVerificationByOperation.end()) {
-        const AssetPublicationVerification pending =
-            verification->second;
-        m_assetPublicationVerificationByOperation.erase(
-            verification);
-        const bool verified = terminal.outcome
-                == palace::StorageTransferOutcome::Succeeded
-            && terminal.cid == pending.cid
-            && verifyAssetPublication(pending);
-        QFile::remove(QString::fromStdString(pending.path));
-        m_publicationStatus[pending.handle] = verified
-            ? "published;cid=" + pending.cid
-            : "publish-failed;reason=content-verification";
-        return;
-    }
-
     if (terminal.kind == palace::StorageTransferKind::Upload) {
         const auto publication =
             m_storagePublicationByOperation.find(
@@ -8642,33 +8638,16 @@ void PalaceCoreImpl::applyStorageTerminal(
             || !palace::isCanonicalStorageCid(terminal.cid)) {
             m_publicationStatus[handle] =
                 "publish-failed;reason=upload-cid";
+        } else if (!verifyAssetPublication(
+                       AssetPublicationVerification{
+                           handle,
+                           terminal.cid,
+                       })) {
+            m_publicationStatus[handle] =
+                "publish-failed;reason=content-verification";
         } else {
-            const std::string verificationOperationId =
-                terminal.domainOperationId + "-verify";
-            const std::string verificationPath =
-                storageDownloadPath(verificationOperationId);
-            const palace::StorageModuleSessionTransition verified =
-                verificationPath.empty()
-                ? palace::StorageModuleSessionTransition{}
-                : m_storageSession.beginLocalVerification(
-                      verificationOperationId,
-                      terminal.cid,
-                      verificationPath,
-                      asset->byteLength,
-                      65536U);
-            if (!verified.accepted) {
-                m_publicationStatus[handle] =
-                    "publish-failed;reason=verification-dispatch";
-                return;
-            }
-            m_assetPublicationVerificationByOperation.emplace(
-                verificationOperationId,
-                AssetPublicationVerification{
-                    handle,
-                    terminal.cid,
-                    verificationPath,
-                });
-            executeStorageCommands(verified.commands);
+            m_publicationStatus[handle] =
+                "published;cid=" + terminal.cid;
         }
         return;
     }
