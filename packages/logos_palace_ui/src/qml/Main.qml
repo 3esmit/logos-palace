@@ -286,11 +286,14 @@ Item {
                                       === 64)
         } catch (error) {
         }
+        // cardCount must track the authoring model, not GridView.count.
+        // palaceBackgroundGrid is a Flickable+Flow+Repeater so that every
+        // Set Atrium/Lounge control stays mounted; Flickable has no count.
         return JSON.stringify({
             "schema": "logos.palace.asset-authoring-render",
             "version": 1,
             "open": backgroundModerationOpen,
-            "cardCount": backgroundGrid.count,
+            "cardCount": authoringAssets.length,
             "readyImageCount": backgroundReadyImageCount,
             "publishedCount": published,
             "atriumAssigned":

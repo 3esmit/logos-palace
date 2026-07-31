@@ -243,6 +243,23 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndPublishedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "0613088c9ba4bdde9d8ec468ab4461f0b3c94b4c",
+    snapshotNarHash:
+      "sha256-q4ig/DmV8nt5Mnp3RVl6PBvZhnuG8NgFkw+EsFiQpzs=",
+    snapshotNarSize: 7_209_128,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "6a45b3f0f5b31ccb14ff9da412c7d04f5ebf517a1c4a3839c9aaa111d31cd765",
+    compiledReportSha256:
+      "87068dc4e747d90ceeb5b8f571268c0a87c928c6b192062891a2e3e9ccd4c13d",
+    gate3ReportSha256:
+      "84e366a4bf60dc7983ec83a442bb493e349d9c2a2bd123b75d0ea7df7cfe9c3a",
+    gate3Failure: "worker a: asset authoring evidence is invalid",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndPublishedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -1382,10 +1399,17 @@ function authoringAssetIsAssigned(asset) {
 }
 
 function validIdentityRegistrationAndPublishedAssets(authoring) {
+  // Phase may advance to "complete" after final room assignment receipts are
+  // checkpointed, then still fail closed before the admin screenshot / graph
+  // publish path (still pre-public-write when graphBindings stay empty).
+  const hasCatalogCount = Object.hasOwn(authoring, "catalogCount");
+  const hasAssignments = Object.hasOwn(authoring, "assignments");
   if (
     !exactKeys(authoring, [
       "assets",
+      ...(hasAssignments ? ["assignments"] : []),
       "boundary",
+      ...(hasCatalogCount ? ["catalogCount"] : []),
       "elapsedMs",
       "graphBindings",
       "guardedBeforeApproval",
@@ -1396,7 +1420,7 @@ function validIdentityRegistrationAndPublishedAssets(authoring) {
       "version",
     ])
     || authoring.version !== 1
-    || authoring.phase !== "published"
+    || !["published", "complete"].includes(authoring.phase)
     || authoring.propStory !== "not-requested"
     || typeof authoring.boundary !== "string"
     || authoring.boundary.length === 0
@@ -1422,6 +1446,23 @@ function validIdentityRegistrationAndPublishedAssets(authoring) {
     || authoring.inputManifest.assetCount !== authoring.selectedAssetCount
     || !sha256Pattern.test(authoring.inputManifest.sha256)
     || !authoring.assets.every(validPublishedAuthoringAsset)
+    || (
+      hasCatalogCount
+      && (
+        !Number.isSafeInteger(authoring.catalogCount)
+        || authoring.catalogCount !== authoring.selectedAssetCount
+      )
+    )
+    || (
+      hasAssignments
+      && (
+        !exactKeys(authoring.assignments, ["prop", "rooms"])
+        || authoring.assignments.prop !== null
+        || !exactKeys(authoring.assignments.rooms, ["atrium", "lounge"])
+        || !sha256Pattern.test(authoring.assignments.rooms.atrium)
+        || !sha256Pattern.test(authoring.assignments.rooms.lounge)
+      )
+    )
   ) {
     return false;
   }
