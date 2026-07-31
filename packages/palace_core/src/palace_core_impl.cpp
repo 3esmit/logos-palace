@@ -8134,6 +8134,62 @@ void PalaceCoreImpl::scheduleStorageMvpPublications()
 bool PalaceCoreImpl::startStorageMvpPublication(
     const palace::PalaceStorageMvpArtifactV1& artifact)
 {
+    // Room/prop PNG leaves are uploaded once during admin authoring. Reuse that
+    // Storage CID so the sealed MVP catalog matches authored.cid (Gate 3 graph
+    // bindings). Re-uploadUrl of the same bytes as a different filename yields a
+    // distinct manifest CID and fails "active graph leaf" checks.
+    const bool pngLeaf =
+        artifact.type
+            == palace::PalaceStorageMvpArtifactType::BackgroundPng
+        || artifact.type
+            == palace::PalaceStorageMvpArtifactType::PropPng;
+    if (pngLeaf) {
+        const palace::AssetAuthoringAssetV1* authored =
+            m_assetAuthoring.asset(
+                artifact.specification.contentSha256);
+        if (authored != nullptr
+            && !authored->publishedCid.empty()
+            && authored->byteLength
+                == artifact.specification.byteLength
+            && palace::isCanonicalStorageCid(
+                authored->publishedCid)) {
+            const StdLogosResult exists =
+                modules().storage_module.exists(
+                    authored->publishedCid);
+            if (exists.success
+                && exists.value.is_boolean()
+                && exists.value.get<bool>()) {
+                const palace::StorageCatalogTransition staged =
+                    m_storageCatalog.stagePublicationObject(
+                        artifact.specification, artifact.bytes);
+                if (!staged.accepted)
+                    return false;
+                const palace::StorageCatalogTransition upload =
+                    m_storageCatalog.beginUpload(artifact.objectId);
+                if (!upload.accepted
+                    || !upload.operation.has_value()) {
+                    return false;
+                }
+                const palace::StorageCatalogTransition acknowledged =
+                    m_storageCatalog.operationAcknowledged(
+                        upload.operation->operationId, true);
+                if (!acknowledged.accepted)
+                    return false;
+                const palace::StorageCatalogTransition uploaded =
+                    m_storageCatalog.uploadFinished(
+                        upload.operation->operationId,
+                        true,
+                        authored->publishedCid);
+                if (!uploaded.accepted)
+                    return false;
+                m_storageMvpScheduledPublications.insert(
+                    artifact.objectId);
+                return completeStorageMvpPublicationFromKnownBytes(
+                    artifact.objectId, authored->publishedCid);
+            }
+        }
+    }
+
     std::string sourcePath;
     if (!writeStorageMvpArtifact(artifact, sourcePath))
         return false;

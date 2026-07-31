@@ -638,7 +638,9 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   assert.match(runner, /maxTotalBytes=10485760/);
   // After uploadUrl, publication verification must complete from known staged
   // bytes so gate3PublishBundle returns ok;… without downloadToUrlV2 hangs.
+  // PNG leaves reuse authoring publishedCid so graph bindings match authored.cid.
   assert.match(coreImpl, /completeStorageMvpPublicationFromKnownBytes/);
+  assert.match(coreImpl, /authored->publishedCid/);
   assert.match(
     coreImpl,
     /completeStorageMvpPublicationFromKnownBytes\(\s*transfer\.objectId,\s*terminal\.cid\)/,

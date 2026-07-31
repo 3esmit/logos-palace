@@ -314,6 +314,24 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndPublishedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "3ef866e981372e5d5d1f069ab18010170876da50",
+    snapshotNarHash:
+      "sha256-nH8FWRBJr8ZkJ0pwxrZwU5xtQ/R2OGp3iX+gDiLmbNk=",
+    snapshotNarSize: 7_236_960,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "3261aa5901143bfae5b52a24f6c46e0db335806d6805d6376750f61e1d5b1e7c",
+    compiledReportSha256:
+      "281f1c7d66a71b3284b108f0cb5440a98a543bce190cb94e29a824e274b86d7e",
+    gate3ReportSha256:
+      "47b9d45fdab138fe09c5aac9ef0cd67d76f57a17e6743a3fc89ecaaf0348d269",
+    gate3Failure:
+      "authored asset is not active graph leaf: room-background",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndPublishedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
