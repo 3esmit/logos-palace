@@ -580,6 +580,54 @@ Item {
         return watchAction(backend.refreshAssetAuthoring(), null)
     }
 
+    // Walk the live QML tree for an objectName. Used by e2e to bring
+    // moderation controls inside the clipped authoring Flickable before
+    // synthetic mouse clicks (row-2 "Set Atrium/Lounge" bottoms otherwise
+    // land on the panel chrome and the catalog never updates).
+    function findNamedDescendant(item, name) {
+        if (!item)
+            return null
+        if (item.objectName === name)
+            return item
+        var children = item.children
+        if (!children)
+            return null
+        for (var index = 0; index < children.length; ++index) {
+            var found = findNamedDescendant(children[index], name)
+            if (found)
+                return found
+        }
+        return null
+    }
+
+    function ensureModerationControlVisible(objectName) {
+        var name = String(objectName || "")
+        if (name.length === 0 || name.indexOf("palace") !== 0)
+            return "invalid"
+        var grid = findNamedDescendant(root, "palaceBackgroundGrid")
+        var control = findNamedDescendant(root, name)
+        if (!grid || !control)
+            return "missing"
+        var content = grid.contentItem
+        if (!content)
+            return "no-content"
+        var point = control.mapToItem(
+            content, control.width / 2, control.height / 2)
+        var margin = 16
+        var top = point.y - (control.height / 2) - margin
+        var bottom = point.y + (control.height / 2) + margin
+        var viewTop = grid.contentY
+        var viewBottom = grid.contentY + grid.height
+        if (top < viewTop) {
+            grid.contentY = Math.max(0, top)
+        } else if (bottom > viewBottom) {
+            grid.contentY = Math.min(
+                Math.max(0, grid.contentHeight - grid.height),
+                bottom - grid.height)
+        }
+        return "ok"
+    }
+
     function reviewAndPublishAsset(handle) {
         if (!ready || !backend)
             return rejectedNotReady()

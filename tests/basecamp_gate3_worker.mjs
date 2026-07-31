@@ -643,6 +643,27 @@ async function waitForModerationControl(
 
 async function clickModerationControl(objectName, description) {
   const objectId = await waitForModerationControl(objectName, description);
+  // Clipped authoring cards keep objectName-findable controls whose scene
+  // centers sit outside the Flickable viewport. Inspector click then hits
+  // panel chrome and never fires onClicked — scroll first for assign rows.
+  if (
+    objectName.startsWith("palaceBackgroundAssign")
+    || objectName.startsWith("palaceAssetAssignProp-")
+    || objectName.startsWith("palaceAssetApprove-")
+  ) {
+    try {
+      const scrolled = await evaluate(
+        `ensureModerationControlVisible(${JSON.stringify(objectName)})`,
+      );
+      if (scrolled?.result !== "ok" && scrolled?.result !== undefined) {
+        // Best-effort: still attempt the click so missing helpers fail closed
+        // via the existing control/timeout paths rather than a soft miss.
+      }
+      await sleep(50);
+    } catch {
+      // Visibility assist is optional; the click path remains authoritative.
+    }
+  }
   let clicked;
   try {
     clicked = await inspector.send("click", { objectId });

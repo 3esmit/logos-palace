@@ -225,6 +225,24 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndPublishedAssetsProfile,
   }),
+  Object.freeze({
+    gitCommit: "2364d1f2775336e5d9b7fda2df582787659772cd",
+    snapshotNarHash:
+      "sha256-4j+xJKY/EA1jj2fhE672g8xsqZpBUgPNCteor9meXJE=",
+    snapshotNarSize: 7_205_088,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "1e3fcc734a47c1ec96e97c4acb4d070b3b0f03663259dba2fa6e72d6a0f4ff92",
+    compiledReportSha256:
+      "d8a038531f54baaf811ae492c4eb2142183a18d7a6030c43924e7ff5a49289f3",
+    gate3ReportSha256:
+      "b8c9d13351f723f343b201daf52e058be37e7768bc0bf754ef45e9d3cfd16ad6",
+    gate3Failure:
+      "worker a: moderation atrium assignment timed out: publication=published",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndPublishedAssetsProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {

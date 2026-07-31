@@ -665,6 +665,7 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
     '"palaceBackgroundAssignAtrium-"',
     '"palaceBackgroundAssignLounge-"',
     '"palaceAssetAssignProp-"',
+    "ensureModerationControlVisible",
   ]) {
     assert.match(gate3Worker, new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }

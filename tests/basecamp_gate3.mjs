@@ -1398,9 +1398,25 @@ async function authorAssetFixtures(
   evidence.elapsedMs = Math.round(performance.now() - startedAt);
   await checkpoint(evidence);
 
+  // Final catalog validation uses last-wins room ownership. Drive the admin
+  // Set Atrium/Lounge controls only for those final owners so intermediate
+  // reassignment thrash is not required for a complete Gate 3 authoring pass.
+  const finalRoomHandles = {};
+  for (const fixture of assetFixtures) {
+    if (fixture.assignment?.kind === "room-background") {
+      finalRoomHandles[fixture.assignment.roomId] = fixture.handle;
+    }
+  }
+
   for (const fixture of assetFixtures.filter(
     ({ assignment }) => assignment !== undefined,
   )) {
+    if (
+      fixture.assignment.kind === "room-background"
+      && finalRoomHandles[fixture.assignment.roomId] !== fixture.handle
+    ) {
+      continue;
+    }
     const assetEvidence = evidence.assets.find(
       ({ assetId }) => assetId === fixture.assetId,
     );
@@ -1448,12 +1464,7 @@ async function authorAssetFixtures(
   await checkpoint(evidence);
 
   const completed = await readAssetAuthoringCatalog(worker);
-  const finalRoomHandles = {};
-  for (const fixture of assetFixtures) {
-    if (fixture.assignment?.kind === "room-background") {
-      finalRoomHandles[fixture.assignment.roomId] = fixture.handle;
-    }
-  }
+  // finalRoomHandles already computed above for the assignment pass.
   for (const fixture of assetFixtures) {
     const entry = matchingFixtureAsset(completed, fixture);
     const assignmentMatches = fixture.assignment === undefined
