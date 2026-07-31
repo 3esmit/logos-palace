@@ -914,8 +914,11 @@ async function pollReceipt({
     }
     await sleep(250);
   }
+  // Keep timeout messages under the audited gate3Failure length bound; the
+  // full sealed-catalog status is already on the report receipt fields.
+  const clipped = String(lastReceipt).slice(0, 400);
   throw new Error(
-    `${description} timed out after ${timeout} ms: ${lastReceipt}`,
+    `${description} timed out after ${timeout} ms: ${clipped}`,
   );
 }
 

@@ -480,7 +480,8 @@ function validPrePublicWriteAudit(audit) {
     && sha256Pattern.test(audit.gate3ReportSha256)
     && typeof audit.gate3Failure === "string"
     && audit.gate3Failure.length > 0
-    && audit.gate3Failure.length <= 1024
+    // Peer-fetch timeouts can embed the sealed catalog status string.
+    && audit.gate3Failure.length <= 4096
     && (!hasProfile
       || [
         identityRegistrationAndIdleStorageProfile,
