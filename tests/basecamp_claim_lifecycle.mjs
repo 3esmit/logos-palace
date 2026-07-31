@@ -939,7 +939,7 @@ function validIdentityRegistration(record, display) {
       "registrationTransaction",
     ])
     || record.display !== display
-    || record.existing !== false
+    || typeof record.existing !== "boolean"
     || record.keyEpoch !== "1"
     || !sha256Pattern.test(record.accountId)
     || !sha256Pattern.test(record.deliveryKey)
@@ -957,23 +957,7 @@ function validIdentityRegistration(record, display) {
     && fields.registration_tx === record.registrationTransaction;
 }
 
-function validCurrentNoAuthorityLez(startup) {
-  if (
-    !exactKeys(startup, ["basecampPid", "lez", "startupMs"])
-    || !Number.isSafeInteger(startup.basecampPid)
-    || startup.basecampPid <= 1
-    || !Number.isSafeInteger(startup.startupMs)
-    || startup.startupMs < 0
-    || !exactKeys(startup.lez, ["elapsedMs", "lezStateObservation", "receipt"])
-    || startup.lez.receipt !== ""
-    || !Number.isSafeInteger(startup.lez.elapsedMs)
-    || startup.lez.elapsedMs < 0
-    || !exactKeys(startup.lez.lezStateObservation, ["receipt", "source"])
-    || startup.lez.lezStateObservation.source !== "gate4LezState"
-  ) {
-    return false;
-  }
-  const fields = receiptFields(startup.lez.lezStateObservation.receipt);
+function validCurrentLezAuthorityFields(fields) {
   return fields.ready === "1"
     && fields.compatible === "1"
     && fields.running === "1"
@@ -985,6 +969,41 @@ function validCurrentNoAuthorityLez(startup) {
     && fields.vm === "idle"
     && fields.vm_action === "none"
     && fields.program === releaseProgramId;
+}
+
+function validCurrentNoAuthorityLez(startup) {
+  if (
+    !exactKeys(startup, ["basecampPid", "lez", "startupMs"])
+    || !Number.isSafeInteger(startup.basecampPid)
+    || startup.basecampPid <= 1
+    || !Number.isSafeInteger(startup.startupMs)
+    || startup.startupMs < 0
+    || !Number.isSafeInteger(startup.lez?.elapsedMs)
+    || startup.lez.elapsedMs < 0
+  ) {
+    return false;
+  }
+
+  // Observed through gate4LezState when gate4StartLez returns an empty action
+  // receipt and the durable UI state is already current.
+  if (
+    exactKeys(startup.lez, ["elapsedMs", "lezStateObservation", "receipt"])
+    && startup.lez.receipt === ""
+    && exactKeys(startup.lez.lezStateObservation, ["receipt", "source"])
+    && startup.lez.lezStateObservation.source === "gate4LezState"
+  ) {
+    return validCurrentLezAuthorityFields(
+      receiptFields(startup.lez.lezStateObservation.receipt),
+    );
+  }
+
+  // Direct terminal receipt when gate4StartLez returns ok;... with current state.
+  if (exactKeys(startup.lez, ["elapsedMs", "receipt"])) {
+    return String(startup.lez.receipt).startsWith("ok;")
+      && validCurrentLezAuthorityFields(receiptFields(startup.lez.receipt));
+  }
+
+  return false;
 }
 
 function validIdleStorageStatus(status, expectedState) {
