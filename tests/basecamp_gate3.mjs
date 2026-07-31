@@ -430,6 +430,43 @@ function parseStoragePeerEndpointReceipt(receipt) {
     announceAddresses: Array.isArray(parsed.announceAddresses)
       ? parsed.announceAddresses
       : [],
+    tablePeers: Array.isArray(parsed.tablePeers) ? parsed.tablePeers : [],
+  };
+}
+
+async function waitForStorageMeshVisibility(
+  workersByLabel,
+  endpoints,
+  { timeoutMs = 120_000, intervalMs = 2_000 } = {},
+) {
+  const labels = Object.keys(endpoints).sort();
+  const startedAt = performance.now();
+  const deadline = Date.now() + timeoutMs;
+  let last = {};
+  while (Date.now() < deadline) {
+    last = {};
+    for (const label of labels) {
+      last[label] = await readStoragePeerEndpoint(workersByLabel.get(label));
+    }
+    const ready = labels.every((label) => {
+      const peers = new Set(last[label]?.tablePeers || []);
+      return labels.every(
+        (other) => other === label || peers.has(endpoints[other].peerId),
+      );
+    });
+    if (ready) {
+      return {
+        ready: true,
+        endpoints: last,
+        waitedMs: Math.round(performance.now() - startedAt),
+      };
+    }
+    await sleep(intervalMs);
+  }
+  return {
+    ready: false,
+    endpoints: last,
+    waitedMs: Math.round(performance.now() - startedAt),
   };
 }
 
@@ -1913,6 +1950,11 @@ async function fetchBundle(worker, catalog) {
     timeout: 600_000,
     accept: (receipt) => {
       const fields = statusFields(receipt);
+      if (fields.state === "degraded") {
+        throw new Error(
+          `fetch exact MVP bundle on ${worker.label} degraded: ${receipt}`,
+        );
+      }
       return (
         fields.state === "verified" &&
         fields.published === String(catalog.objects.length) &&
@@ -2754,6 +2796,29 @@ try {
       },
       { settleMs: 15_000 },
     );
+    // Re-dial until DHT tables see each other so GetProviders can resolve
+    // co-located providers after publication.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const visibility = await waitForStorageMeshVisibility(
+        workers,
+        {
+          a: report.storagePeerEndpoints.a,
+          b: report.storagePeerEndpoints.b,
+        },
+        { timeoutMs: 60_000 },
+      );
+      report.storageMeshVisibility = visibility;
+      if (visibility.ready) break;
+      await meshStoragePeers(
+        workers,
+        configs,
+        {
+          a: report.storagePeerEndpoints.a,
+          b: report.storagePeerEndpoints.b,
+        },
+        { settleMs: 10_000 },
+      );
+    }
     await checkpointReport();
   }
   const providerBFetch = await fetchBundle(provider, published.catalog);

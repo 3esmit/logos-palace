@@ -432,6 +432,26 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.nlw8ONqt @ 13a8f76: deferred fetch returned fetching but verified stayed 0
+  // for 10m (network download never completed) before Palace write.
+  Object.freeze({
+    gitCommit: "13a8f766c46b4e3bb052372d2bcf41ecb820c71c",
+    snapshotNarHash:
+      "sha256-ol4rJQi9UWelF6Pxn7r+nVmQb/l/kRb3lQbzaJeIF8M=",
+    snapshotNarSize: 7272640,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "aed99597654e53649f861fac365131c963173bd47de152e52ad03b8ff617365f",
+    compiledReportSha256:
+      "9a66aff4eb7a58f0dbf9bf32b4668932bf7a715247c2dfd057f6cb1300358340",
+    gate3ReportSha256:
+      "a4112f57fca3f80155710b723002975d75dd3792012db6e1fcbf54b5828a18e7",
+    gate3Failure:
+      "fetch exact MVP bundle on b timed out after 600000 ms: state=fetching;published=8;verified=0;total=8;retention=missing;retention_round=0;source=network;native_available=0;native_total=8;catalog=bG9nb3MtcGFsYWNlLW12cC1zdG9yYWdlLWNhdGFsb2ctdjEKdmVyc2lvbj0xCnJvb3Q9cGFsYWNlLTEKb2JqZWN0cz04Cm9iamVjdD1iYWNrZ3JvdW5kLWF0cml1bTtiYWNrZ3JvdW5kX3BuZztpbWFnZS9wbmc7ekR2WlJ3emt3UDNVdzRxd2RNNHJ6RXZOVFU4b0ExQlF1SndjTndxeE1LZ3JVdWJBU3k4ZDsxMTc2OTE2O2Y4MjdiNjVlZmVjZDVhNjIxMjU0ZGM4YjZjMmY0MTU0MWI2ZmI2MzI2Njc2YjVmYTFlZDNhODkyYjllN2JjMzcKb2JqZWN0PWJhY2tncm91bmQtbG91bmdlO2JhY2tncm91bmRfcG5nO2ltYWdlL3BuZzt6RHZaUnd6bTFRdFQyb0o2WTltZUp6YlNud3JpOWNLellUelVjd3RqWlJ6NDIyR2Via29ROzE2NzEzNjk7MDA1ZWRiYzY1NzA2Mjk3Y2VmYzZhYzZkZWVkZDc3ZTI5Zjc1NTE1OTI3MWIyZWM1YmI5OWI4YzlhODRjNjZmOApvYmplY3Q9cm9vbS1hdHJpdW0tbWV0YWRhdGE7cm9vbV9tZXRhZGF0YTthcHBsaWNhdGlvbi92bmQubG9nb3MtcGFsYWNlLnJvb20tdjE7ekR2WlJ3em0zZk12R1NyZDF3S0xDenZ6aG1FOHhzdU5OeGFxbnBQQXg1WkFpc2g4dEsxaTsxOTU7MDlmMmI5MWE2MzE0NzBiNGRjNWI1ZDVkYzM4MTIwOTcwZjM5ZGQ4MDljMDQzYWFlYzhlN2IyNzBhZjA3NGMyYgpvYmplY3Q9cm9vbS1sb3VuZ2UtbWV0YWRhdGE7cm9vbV9tZXRhZGF0YTthcHBsaWNhdGlvbi92bmQubG9nb3MtcGFsYWNlLnJvb20tdjE7ekR2WlJ3em1EOHN6M0xSRzhBMkVMVWplWjhkUVVLa21zeWJFcHEyajNkZFVQQnBIMjNKNzsxOTU7M2Q4MmJkNDRhYmNjZTAzMzg4ZjgyZTExMzA2OGM5N2E4ZjY5ZDE0Y2RhNDllOTQ4Zjg1ZjAzYWQ4ODcyM2RhNwpvYmplY3Q9c2NyaXB0LWRvb3I7c2NyaXB0X2J1bmRsZTthcHBsaWNhdGlvbi92bmQubG9nb3MtcGFsYWNlLnNjcmlwdC12MTt6RHZaUnd6a3huTThtSm1KTVF4bjJjUXpZeTlrQ1B3clNtSnpIeHhXSENvSGFUcFUyV3VGOzQ3Ozk5YTRkMmQxNjIxYTUwMTRlYTk2Yzk2OTgxYzc4MzNkNGYwYTI4NTU5ZDU5YzBmNTdiN2UyMmYwMDdmNjUyNDUKb2JqZWN0PXJvb20tYXRyaXVtO3Jvb21fbWFuaWZlc3Q7YXBwbGljYXRpb24vdm5kLmxvZ29zLXBhbGFjZS5jYXRhbG9nLW1hbmlmZXN0LXYxO3pEdlpSd3ptQjF0WHQ0SHpBRVRHczEyY2hUZnpvWmU1ZVZYMkpMck1aS252YWJ1UFo2WFU7NTIwOzUyNGQzZmUzZTQ2MmI5ODMwZmI0NmU3MWY0MWEwOGZjNTVmMTVjNGE0N2ZmMDQwZWU5OGMwMGQ0MDdkNGQ0YTYKb2JqZWN0PXJvb20tbG91bmdlO3Jvb21fbWFuaWZlc3Q7YXBwbGljYXRpb24vdm5kLmxvZ29zLXBhbGFjZS5jYXRhbG9nLW1hbmlmZXN0LXYxO3pEdlpSd3preHBna0hvUUxBck5raG16aWZ2WmY5RlVHTUc5QmlQamhpcVhGVW80VlR4ZGI7NTIwO2ZjZjMzYThkOTNlYzI3MWM2MGE3MDUxNmZhYTlkYzAzYmFhYjhiOWM5MTJiNzNkNjljOWNiZmYyMDNmNWVkY2MKb2JqZWN0PXBhbGFjZS0xO3BhbGFjZV9tYW5pZmVzdDthcHBsaWNhdGlvbi92bmQubG9nb3MtcGFsYWNlLmNhdGFsb2ctbWFuaWZlc3QtdjE7ekR2WlJ3em03TE5ZQUM3WkxxUFVaQ05zQ0pTb0VHc1ZwU2hkRlJURWhLTWdadFE1eVZnUzszNjE7ZjE1MzUzZmFkOTZmYjEyYWY1MTRlMGYxN2U2ZDAyYTIxYjM4ZTE2YzQ1MWNjYzlhMWI3MDk4OTNjMDVjMTY2NgpjaGVja3N1bT1lYTJjMWNiODNjMThjNDg5MzBlMDcyODcxMTc4ZDk2YzUyZTY1NmU3NzFkMTRjZGMzMGY1NGVmNzhiYTJmNTU1Cg",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -1814,6 +1834,10 @@ function validatesAuditedPrePublicWriteGate3Report(
     report,
     "storageMeshPreFetch",
   );
+  const hasStorageMeshVisibility = Object.hasOwn(
+    report,
+    "storageMeshVisibility",
+  );
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1848,6 +1872,7 @@ function validatesAuditedPrePublicWriteGate3Report(
       ...(hasStorageMesh ? ["storageMesh"] : []),
       ...(hasStorageMeshC ? ["storageMeshC"] : []),
       ...(hasStorageMeshPreFetch ? ["storageMeshPreFetch"] : []),
+      ...(hasStorageMeshVisibility ? ["storageMeshVisibility"] : []),
       ...(hasStoragePeerEndpoints ? ["storagePeerEndpoints"] : []),
       "storageStartup",
       "version",

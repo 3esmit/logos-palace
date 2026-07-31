@@ -4918,6 +4918,29 @@ std::string PalaceCoreImpl::storagePeerEndpoint()
                     QStringLiteral("announceAddresses"), announce);
             }
         }
+        // DHT routing table peer IDs (for multi-node mesh readiness checks).
+        QJsonArray tablePeers;
+        const auto appendPeerId = [&tablePeers](const auto& node) {
+            if (!node.is_object())
+                return;
+            if (!node.contains("peerId") || !node["peerId"].is_string())
+                return;
+            const std::string id = node["peerId"].get<std::string>();
+            if (id.empty() || id.size() > 1024U)
+                return;
+            tablePeers.append(QString::fromStdString(id));
+        };
+        if (debug.contains("table") && debug["table"].is_object()) {
+            const auto& table = debug["table"];
+            if (table.contains("localNode"))
+                appendPeerId(table["localNode"]);
+            if (table.contains("nodes") && table["nodes"].is_array()) {
+                for (const auto& node : table["nodes"])
+                    appendPeerId(node);
+            }
+        }
+        if (!tablePeers.isEmpty())
+            endpoint.insert(QStringLiteral("tablePeers"), tablePeers);
     }
 
     const QByteArray encoded =
