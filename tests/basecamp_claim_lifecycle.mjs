@@ -1274,12 +1274,18 @@ function validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(report) {
     && validIdentityRegistrationAndApprovalGuardedAssets(report.assetAuthoring);
 }
 
-function validPublishedAssetInvocation(stage) {
+function validPublishedAssetInvocation(stage, { allowPublishedPrefix = false } = {}) {
   return exactKeys(stage, ["elapsedMs", "receipt"])
     && Number.isSafeInteger(stage.elapsedMs)
     && stage.elapsedMs >= 0
     && typeof stage.receipt === "string"
-    && stage.receipt.startsWith("ok;");
+    && (
+      stage.receipt.startsWith("ok;")
+      || (
+        allowPublishedPrefix
+        && stage.receipt.startsWith("published;cid=")
+      )
+    );
 }
 
 function validPublishedAuthoringAsset(asset) {
@@ -1329,7 +1335,10 @@ function validPublishedAuthoringAsset(asset) {
     || !exactKeys(asset.publication, ["completed", "dispatched"])
     || !validPublishedAssetInvocation(asset.publication.dispatched)
     || asset.publication.dispatched.receipt !== "ok;asset=publishing"
-    || !validPublishedAssetInvocation(asset.publication.completed)
+    || !validPublishedAssetInvocation(
+      asset.publication.completed,
+      { allowPublishedPrefix: true },
+    )
     || asset.publication.completed.receipt !== `published;cid=${asset.cid}`
   ) {
     return false;
