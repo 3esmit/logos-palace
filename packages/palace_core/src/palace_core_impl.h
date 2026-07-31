@@ -807,6 +807,10 @@ private:
     // A valid catalog from a different finalized authority snapshot must not
     // revive local authoring previews while recovery waits for a new graph.
     bool m_storageMvpCatalogStale = false;
+    // When true, network/cache MVP fetch dispatch is deferred so the
+    // gate3FetchBundle receipt can return before downloadToUrlV2 blocks on
+    // storage_download_manifest / GetProviders.
+    bool m_storageMvpFetchDispatchPending = false;
     bool m_storageCallbacksRegistered = false;
     bool m_storageCallbackRegistrationAttempted = false;
 };

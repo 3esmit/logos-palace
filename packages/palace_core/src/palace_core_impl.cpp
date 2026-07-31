@@ -5401,6 +5401,8 @@ std::string PalaceCoreImpl::publishMvpStorageBundle()
 
 std::string PalaceCoreImpl::mvpStorageBundleStatus()
 {
+    // Drain (and kick deferred peer-fetch dispatch) on status polls — never
+    // from the initial fetchMvpStorageBundle return path (see below).
     drainStorageCallbacks();
     if (!m_storageMvpFailures.empty()) {
         return "state=degraded;published="
@@ -5483,7 +5485,27 @@ std::string PalaceCoreImpl::fetchMvpStorageBundle(
     std::string reason;
     if (!beginStorageMvpFetch(reason))
         return "rejected=" + reason;
-    return "ok;" + mvpStorageBundleStatus();
+    // Do not call mvpStorageBundleStatus() here: it drains and would run the
+    // deferred downloadToUrlV2 on this same invoke, defeating the deferral.
+    return "ok;state=fetching;published="
+        + std::to_string(m_storageMvpBundle.publishedCount())
+        + ";verified="
+        + std::to_string(m_storageMvpFetchedObjects.size())
+        + ";total="
+        + std::to_string(m_storageMvpBundle.artifactCount())
+        + ";retention=missing"
+        + ";retention_round="
+        + std::to_string(m_storageRetentionRound)
+        + ";source="
+        + (m_storageMvpFetchSource.has_value()
+               ? std::string(
+                     palace::palaceStorageMvpFetchSourceName(
+                         *m_storageMvpFetchSource))
+               : std::string("none"))
+        + ";native_available="
+        + std::to_string(m_storageMvpNativeAvailableCount)
+        + ";native_total="
+        + std::to_string(m_storageMvpNativeTotalCount);
 }
 
 std::string PalaceCoreImpl::verifyMvpStorageRetention()
@@ -7804,6 +7826,7 @@ void PalaceCoreImpl::clearStorageMvpRuntimeState()
     m_storageMvpNativeTotalCount = 0U;
     m_storageRetentionRound = 0U;
     m_storageRetentionInProgress = false;
+    m_storageMvpFetchDispatchPending = false;
 }
 
 bool PalaceCoreImpl::restoreStorageMvpCatalog()
@@ -7940,13 +7963,12 @@ bool PalaceCoreImpl::beginStorageMvpFetch(std::string& reason)
     }
     m_storageMvpFetchSource = *selectedSource;
     m_storageMvpMode = "fetching";
-    // Pipeline one fetch at a time. Starting every downloadToUrlV2 inside the
-    // initial gate3FetchBundle call blocks the UI receipt for minutes when
-    // provider discovery is slow or empty (peer Gate 3 hang).
-    if (!scheduleNextStorageMvpFetch()) {
-        reason = "storage-catalog-fetch";
-        return false;
-    }
+    // Defer the first downloadToUrlV2 until after the gate3FetchBundle receipt
+    // returns. storage_download_manifest blocks the native call for up to
+    // several seconds (and has hung peer invoke receipts at the 120s cap when
+    // GetProviders cannot resolve co-located providers during the same call).
+    // Status polls / drainStorageCallbacks kick the deferred pipeline.
+    m_storageMvpFetchDispatchPending = true;
     return true;
 }
 
@@ -8801,6 +8823,12 @@ void PalaceCoreImpl::drainStorageCallbacks()
     if (drained.commands.empty() && drained.terminals.empty()
         && drained.processedCallbacks == 0U
         && drained.rejectedCallbacks == 0U) {
+        if (m_storageMvpFetchDispatchPending
+            && m_storageMvpMode == "fetching"
+            && m_storageMvpTransfers.empty()) {
+            m_storageMvpFetchDispatchPending = false;
+            scheduleNextStorageMvpFetch();
+        }
         startRestoredStorageMvpFetchIfReady();
         return;
     }
@@ -8810,6 +8838,12 @@ void PalaceCoreImpl::drainStorageCallbacks()
         std::vector<palace::StorageModuleCommand>(
             std::make_move_iterator(commands.begin()),
             std::make_move_iterator(commands.end())));
+    if (m_storageMvpFetchDispatchPending
+        && m_storageMvpMode == "fetching"
+        && m_storageMvpTransfers.empty()) {
+        m_storageMvpFetchDispatchPending = false;
+        scheduleNextStorageMvpFetch();
+    }
     startRestoredStorageMvpFetchIfReady();
 }
 

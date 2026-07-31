@@ -1910,6 +1910,7 @@ async function fetchBundle(worker, catalog) {
     name: "gate3BundleStatus",
     args: [],
     description: `fetch exact MVP bundle on ${worker.label}`,
+    timeout: 600_000,
     accept: (receipt) => {
       const fields = statusFields(receipt);
       return (
