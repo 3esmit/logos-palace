@@ -392,6 +392,26 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.FgHCICxI @ 70744a5: remesh pre-fetch still hung gate3FetchBundle on
+  // logos.test GetProviders (empty after= timeout) before Palace write.
+  Object.freeze({
+    gitCommit: "70744a51ed16efed9ec17d3bafe8bd0d08b83bcc",
+    snapshotNarHash:
+      "sha256-3UYH0BFuqYj2u70qWpXqy3T8SIERdw6KkGK1f5xIn4Y=",
+    snapshotNarSize: 7_267_256,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "7cbf21e47dc170d13bfd7b2fb82263c26265abeb914402364f800d020c90ea80",
+    compiledReportSha256:
+      "d29cc2caa238cb7ae6131fdfecd2b1ebc174f8c838d2bf4c3f0b0a36701d0f85",
+    gate3ReportSha256:
+      "0cace6291d714cd0aacbc0600a3aca517050d44488878f39ae1f8f3acc530e86",
+    gate3Failure:
+      "worker b: gate3FetchBundle receipt timeout: before=\"state=missing\" after=\"\" state=\"wallet=created;ready=1;compatible=1;running=1;tracked=0;sync=current;current_height=45139;synced_height=45139;authority=missing;vm=idle;vm_action=none;program=e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61\" sequence=94->95",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {

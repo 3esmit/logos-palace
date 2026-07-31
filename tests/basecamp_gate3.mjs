@@ -302,11 +302,14 @@ function parseStorageBaseConfig() {
     );
   }
   if (!raw) {
+    // Co-located production multi-node: announce loopback so peers can dial.
+    // Creator uses no-bootstrap-node; peers inject bootstrap-node=[creator SPR]
+    // after A starts (private mesh — public logos.test DHT filters private
+    // multiaddrs and hangs gate3FetchBundle on GetProviders).
     return {
       "log-level": "INFO",
       "listen-ip": "0.0.0.0",
-      "nat": "any",
-      "network": "logos.test",
+      "nat": "extip:127.0.0.1",
     };
   }
   if (Buffer.byteLength(raw, "utf8") > 64 * 1024) {
@@ -328,54 +331,18 @@ function parseStorageBaseConfig() {
   return parsed;
 }
 
-function exactProductionStorageConfig(config) {
-  if (
-    !config
-    || Array.isArray(config)
-    || typeof config !== "object"
-    || config["log-level"] !== "INFO"
-    || config["listen-ip"] !== "0.0.0.0"
-    || config.nat !== "any"
-    || config.network !== "logos.test"
-    || !Number.isInteger(config["listen-port"])
-    || config["listen-port"] < 1024
-    || config["listen-port"] > 65535
-    || !Number.isInteger(config["disc-port"])
-    || config["disc-port"] < 1024
-    || config["disc-port"] > 65535
-  ) {
-    return false;
-  }
-  const keys = Object.keys(config).sort().join(",");
-  // Creator A uses the exact logos.test production shape. Peer B/C may also
-  // carry bootstrap-node=[creator SPR] so multi-node discovery works on a
-  // co-located host where public DHT provider multiaddrs are private.
-  if (
-    keys === [
-      "disc-port",
-      "listen-ip",
-      "listen-port",
-      "log-level",
-      "nat",
-      "network",
-    ].join(",")
-  ) {
-    return true;
-  }
-  if (
-    keys !== [
-      "bootstrap-node",
-      "disc-port",
-      "listen-ip",
-      "listen-port",
-      "log-level",
-      "nat",
-      "network",
-    ].join(",")
-  ) {
-    return false;
-  }
-  const bootstrap = config["bootstrap-node"];
+function exactProductionStoragePorts(config) {
+  return (
+    Number.isInteger(config["listen-port"])
+    && config["listen-port"] >= 1024
+    && config["listen-port"] <= 65535
+    && Number.isInteger(config["disc-port"])
+    && config["disc-port"] >= 1024
+    && config["disc-port"] <= 65535
+  );
+}
+
+function exactProductionBootstrapNodes(bootstrap) {
   return (
     Array.isArray(bootstrap)
     && bootstrap.length >= 1
@@ -388,6 +355,48 @@ function exactProductionStorageConfig(config) {
         && !entry.includes("\0"),
     )
   );
+}
+
+function exactProductionStorageConfig(config) {
+  if (
+    !config
+    || Array.isArray(config)
+    || typeof config !== "object"
+    || config["log-level"] !== "INFO"
+    || config["listen-ip"] !== "0.0.0.0"
+    || config.nat !== "extip:127.0.0.1"
+    || !exactProductionStoragePorts(config)
+  ) {
+    return false;
+  }
+  const keys = Object.keys(config).sort().join(",");
+  // Creator A: private mesh entry (no public logos.test DHT).
+  if (
+    keys === [
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+      "no-bootstrap-node",
+    ].join(",")
+  ) {
+    return config["no-bootstrap-node"] === true;
+  }
+  // Peer B/C: bootstrap from creator SPR only.
+  if (
+    keys === [
+      "bootstrap-node",
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+    ].join(",")
+  ) {
+    return exactProductionBootstrapNodes(config["bootstrap-node"]);
+  }
+  return false;
 }
 
 function parseStoragePeerEndpointReceipt(receipt) {
@@ -520,6 +529,17 @@ function storageConfig(base, tcpPort, udpPort, label) {
     config.palaceAcceptanceHolderProfile = holderProfiles[label];
   } else {
     delete config.palaceAcceptanceHolderProfile;
+    // Production multi-node private mesh: A is the bootstrap entry; B/C
+    // receive bootstrap-node after A is running (see storage start sequence).
+    delete config.network;
+    delete config["bootstrap-node"];
+    if (label === "a") {
+      config["no-bootstrap-node"] = true;
+    } else {
+      delete config["no-bootstrap-node"];
+      // Placeholder until creator SPR is known; start path injects bootstrap.
+      config["bootstrap-node"] = ["spr:pending-creator-bootstrap"];
+    }
   }
   return JSON.stringify(config);
 }
@@ -2529,14 +2549,18 @@ try {
     };
     for (const label of ["b", "c"]) {
       const parsed = JSON.parse(configs[label]);
-      if (!exactProductionStorageConfig(parsed) && !parsed["bootstrap-node"]) {
-        throw new Error(`storage config ${label} unsafe before bootstrap inject`);
-      }
+      delete parsed.network;
+      delete parsed["no-bootstrap-node"];
+      parsed.nat = "extip:127.0.0.1";
       parsed["bootstrap-node"] = [creatorEndpoint.spr];
       if (!exactProductionStorageConfig(parsed)) {
         throw new Error(`storage config ${label} unsafe after bootstrap inject`);
       }
       configs[label] = JSON.stringify(parsed);
+    }
+    // Creator was already started as the private-mesh entry; do not mutate it.
+    if (!exactProductionStorageConfig(JSON.parse(configs.a))) {
+      throw new Error("storage config a is not a private-mesh entry");
     }
     report.storageConfigs = configs;
     await checkpointReport();

@@ -416,8 +416,7 @@ function exactProductionStorageConfig(config) {
     || typeof config !== "object"
     || config["log-level"] !== "INFO"
     || config["listen-ip"] !== "0.0.0.0"
-    || config.nat !== "any"
-    || config.network !== "logos.test"
+    || config.nat !== "extip:127.0.0.1"
     || !Number.isInteger(config["listen-port"])
     || config["listen-port"] < 1024
     || config["listen-port"] > 65535
@@ -435,10 +434,10 @@ function exactProductionStorageConfig(config) {
       "listen-port",
       "log-level",
       "nat",
-      "network",
+      "no-bootstrap-node",
     ].join(",")
   ) {
-    return true;
+    return config["no-bootstrap-node"] === true;
   }
   if (
     keys !== [
@@ -448,7 +447,6 @@ function exactProductionStorageConfig(config) {
       "listen-port",
       "log-level",
       "nat",
-      "network",
     ].join(",")
   ) {
     return false;
