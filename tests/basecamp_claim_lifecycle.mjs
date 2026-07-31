@@ -372,6 +372,26 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.EEIV4ITA @ e5e6898: creator sealed MVP + storage mesh dials, peer B
+  // gate3FetchBundle returned degraded (published=8 verified=0) before LEZ write.
+  Object.freeze({
+    gitCommit: "e5e68981d5cffc75380df198172c7e37bc611e3e",
+    snapshotNarHash:
+      "sha256-Zg8fKTCB5vbyHmQR75SwKJaK2YZAEhjPSpfFHjvgZn4=",
+    snapshotNarSize: 7_263_432,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "b993ce9b2e4bf73320469016cea0a7c13dba765a7c72293d40b2f1949f3f5baa",
+    compiledReportSha256:
+      "eb28dd9f44c1f9e213771b4c0d79e1ebb976e61d7a1439d0f2597fb6e8e768e7",
+    gate3ReportSha256:
+      "0056a01edb5b498a52ff8b9f9004c7f071956bfc756be1d6b2aca0898555cc2d",
+    gate3Failure:
+      "b did not expose fetching state: ok;state=degraded;published=8;verified=0;total=8;retention=degraded",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
