@@ -329,30 +329,161 @@ function parseStorageBaseConfig() {
 }
 
 function exactProductionStorageConfig(config) {
+  if (
+    !config
+    || Array.isArray(config)
+    || typeof config !== "object"
+    || config["log-level"] !== "INFO"
+    || config["listen-ip"] !== "0.0.0.0"
+    || config.nat !== "any"
+    || config.network !== "logos.test"
+    || !Number.isInteger(config["listen-port"])
+    || config["listen-port"] < 1024
+    || config["listen-port"] > 65535
+    || !Number.isInteger(config["disc-port"])
+    || config["disc-port"] < 1024
+    || config["disc-port"] > 65535
+  ) {
+    return false;
+  }
+  const keys = Object.keys(config).sort().join(",");
+  // Creator A uses the exact logos.test production shape. Peer B/C may also
+  // carry bootstrap-node=[creator SPR] so multi-node discovery works on a
+  // co-located host where public DHT provider multiaddrs are private.
+  if (
+    keys === [
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+      "network",
+    ].join(",")
+  ) {
+    return true;
+  }
+  if (
+    keys !== [
+      "bootstrap-node",
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+      "network",
+    ].join(",")
+  ) {
+    return false;
+  }
+  const bootstrap = config["bootstrap-node"];
   return (
-    config
-    && !Array.isArray(config)
-    && typeof config === "object"
-    && Object.keys(config).sort().join(",")
-      === [
-        "disc-port",
-        "listen-ip",
-        "listen-port",
-        "log-level",
-        "nat",
-        "network",
-      ].join(",")
-    && config["log-level"] === "INFO"
-    && config["listen-ip"] === "0.0.0.0"
-    && config.nat === "any"
-    && config.network === "logos.test"
-    && Number.isInteger(config["listen-port"])
-    && config["listen-port"] >= 1024
-    && config["listen-port"] <= 65535
-    && Number.isInteger(config["disc-port"])
-    && config["disc-port"] >= 1024
-    && config["disc-port"] <= 65535
+    Array.isArray(bootstrap)
+    && bootstrap.length >= 1
+    && bootstrap.length <= 8
+    && bootstrap.every(
+      (entry) =>
+        typeof entry === "string"
+        && entry.length >= 16
+        && entry.length <= 8192
+        && !entry.includes("\0"),
+    )
   );
+}
+
+function parseStoragePeerEndpointReceipt(receipt) {
+  const text = String(receipt ?? "");
+  if (!text.startsWith("ok;")) {
+    throw new Error(`storage peer endpoint rejected: ${text}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text.slice(3));
+  } catch {
+    throw new Error(`storage peer endpoint is not JSON: ${text}`);
+  }
+  if (
+    !parsed
+    || typeof parsed !== "object"
+    || Array.isArray(parsed)
+    || typeof parsed.peerId !== "string"
+    || parsed.peerId.length < 16
+    || parsed.peerId.length > 1024
+    || typeof parsed.spr !== "string"
+    || parsed.spr.length < 16
+    || parsed.spr.length > 8192
+  ) {
+    throw new Error(`storage peer endpoint invalid: ${text}`);
+  }
+  return {
+    peerId: parsed.peerId,
+    spr: parsed.spr,
+    addrs: Array.isArray(parsed.addrs) ? parsed.addrs : [],
+    announceAddresses: Array.isArray(parsed.announceAddresses)
+      ? parsed.announceAddresses
+      : [],
+  };
+}
+
+function loopbackStorageDialAddresses(tcpPort) {
+  if (!Number.isInteger(tcpPort) || tcpPort < 1024 || tcpPort > 65535) {
+    throw new Error(`invalid storage listen-port for dial: ${tcpPort}`);
+  }
+  return [`/ip4/127.0.0.1/tcp/${tcpPort}`];
+}
+
+async function readStoragePeerEndpoint(worker) {
+  const observed = await invoke(
+    worker,
+    "gate3StoragePeerEndpoint",
+    [],
+    { prefix: "ok;" },
+    false,
+    30_000,
+  );
+  return {
+    ...parseStoragePeerEndpointReceipt(observed.receipt),
+    receipt: observed.receipt,
+    elapsedMs: observed.elapsedMs,
+  };
+}
+
+async function connectStoragePeer(worker, peerId, addresses) {
+  const observed = await invoke(
+    worker,
+    "gate3ConnectStoragePeer",
+    [peerId, JSON.stringify(addresses)],
+    { prefix: "ok;connect=sent" },
+    false,
+    30_000,
+  );
+  return observed;
+}
+
+async function meshStoragePeers(workersByLabel, configsByLabel, endpoints) {
+  const labels = Object.keys(endpoints).sort();
+  const dials = [];
+  for (const from of labels) {
+    for (const to of labels) {
+      if (from === to) continue;
+      const toConfig = JSON.parse(configsByLabel[to]);
+      const addresses = loopbackStorageDialAddresses(toConfig["listen-port"]);
+      dials.push({
+        from,
+        to,
+        peerId: endpoints[to].peerId,
+        addresses,
+        result: await connectStoragePeer(
+          workersByLabel.get(from),
+          endpoints[to].peerId,
+          addresses,
+        ),
+      });
+    }
+  }
+  // Connect is async at the libstorage layer; give the mesh a brief settle
+  // window before publish/fetch traffic depends on the dials.
+  await sleep(2_000);
+  return { labels, dials };
 }
 
 function storageConfig(base, tcpPort, udpPort, label) {
@@ -2355,10 +2486,59 @@ try {
       }
     }
   }
-  for (const label of ["a", "b"]) {
-    report.storageStartup[label] = await startStorage(
-      workers.get(label),
-      configs[label],
+  // Start creator Storage first. Peers bootstrap from its SPR and dial its
+  // loopback multiaddr so gate3FetchBundle does not hang on logos.test
+  // GetProviders against private announce addresses.
+  report.storageStartup.a = await startStorage(
+    workers.get("a"),
+    configs.a,
+  );
+  await checkpointReport();
+  report.storagePeerEndpoints = {
+    ...(previousReport?.storagePeerEndpoints ?? {}),
+  };
+  if (productionIdentityMode) {
+    const creatorEndpoint = await readStoragePeerEndpoint(workers.get("a"));
+    report.storagePeerEndpoints.a = {
+      peerId: creatorEndpoint.peerId,
+      spr: creatorEndpoint.spr,
+      addrs: creatorEndpoint.addrs,
+      announceAddresses: creatorEndpoint.announceAddresses,
+    };
+    for (const label of ["b", "c"]) {
+      const parsed = JSON.parse(configs[label]);
+      if (!exactProductionStorageConfig(parsed) && !parsed["bootstrap-node"]) {
+        throw new Error(`storage config ${label} unsafe before bootstrap inject`);
+      }
+      parsed["bootstrap-node"] = [creatorEndpoint.spr];
+      if (!exactProductionStorageConfig(parsed)) {
+        throw new Error(`storage config ${label} unsafe after bootstrap inject`);
+      }
+      configs[label] = JSON.stringify(parsed);
+    }
+    report.storageConfigs = configs;
+    await checkpointReport();
+  }
+  report.storageStartup.b = await startStorage(
+    workers.get("b"),
+    configs.b,
+  );
+  await checkpointReport();
+  if (productionIdentityMode) {
+    const providerEndpoint = await readStoragePeerEndpoint(workers.get("b"));
+    report.storagePeerEndpoints.b = {
+      peerId: providerEndpoint.peerId,
+      spr: providerEndpoint.spr,
+      addrs: providerEndpoint.addrs,
+      announceAddresses: providerEndpoint.announceAddresses,
+    };
+    report.storageMesh = await meshStoragePeers(
+      workers,
+      configs,
+      {
+        a: report.storagePeerEndpoints.a,
+        b: report.storagePeerEndpoints.b,
+      },
     );
     await checkpointReport();
   }
@@ -2587,6 +2767,25 @@ try {
   }
   report.storageStartup.c = await startStorage(coldClient, configs.c);
   await checkpointReport();
+  if (productionIdentityMode) {
+    const coldEndpoint = await readStoragePeerEndpoint(coldClient);
+    report.storagePeerEndpoints.c = {
+      peerId: coldEndpoint.peerId,
+      spr: coldEndpoint.spr,
+      addrs: coldEndpoint.addrs,
+      announceAddresses: coldEndpoint.announceAddresses,
+    };
+    report.storageMeshC = await meshStoragePeers(
+      workers,
+      configs,
+      {
+        a: report.storagePeerEndpoints.a,
+        b: report.storagePeerEndpoints.b,
+        c: report.storagePeerEndpoints.c,
+      },
+    );
+    await checkpointReport();
+  }
   const coldCFetch = await fetchBundle(coldClient, published.catalog);
   if (coldCFetch.mode === "network") {
     report.coldCFetch = coldCFetch;

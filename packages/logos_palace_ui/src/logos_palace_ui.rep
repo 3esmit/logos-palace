@@ -34,6 +34,8 @@ class LogosPalaceUi
     SLOT(QString verifyMvpStorageRetention())
     SLOT(QString storageObjectStatus(QString objectId))
     SLOT(QString storageSessionStatus())
+    SLOT(QString storagePeerEndpoint())
+    SLOT(QString connectStoragePeer(QString peerId, QString addressesJson))
     SLOT(QString startLez(QString password))
     SLOT(QString createIdentity(QString displayName))
     SLOT(QString openPalace(QString palaceUri))

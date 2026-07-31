@@ -410,29 +410,61 @@ function statusFields(receipt) {
 }
 
 function exactProductionStorageConfig(config) {
+  if (
+    !config
+    || Array.isArray(config)
+    || typeof config !== "object"
+    || config["log-level"] !== "INFO"
+    || config["listen-ip"] !== "0.0.0.0"
+    || config.nat !== "any"
+    || config.network !== "logos.test"
+    || !Number.isInteger(config["listen-port"])
+    || config["listen-port"] < 1024
+    || config["listen-port"] > 65535
+    || !Number.isInteger(config["disc-port"])
+    || config["disc-port"] < 1024
+    || config["disc-port"] > 65535
+  ) {
+    return false;
+  }
+  const keys = Object.keys(config).sort().join(",");
+  if (
+    keys === [
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+      "network",
+    ].join(",")
+  ) {
+    return true;
+  }
+  if (
+    keys !== [
+      "bootstrap-node",
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+      "network",
+    ].join(",")
+  ) {
+    return false;
+  }
+  const bootstrap = config["bootstrap-node"];
   return (
-    config
-    && !Array.isArray(config)
-    && typeof config === "object"
-    && Object.keys(config).sort().join(",")
-      === [
-        "disc-port",
-        "listen-ip",
-        "listen-port",
-        "log-level",
-        "nat",
-        "network",
-      ].join(",")
-    && config["log-level"] === "INFO"
-    && config["listen-ip"] === "0.0.0.0"
-    && config.nat === "any"
-    && config.network === "logos.test"
-    && Number.isInteger(config["listen-port"])
-    && config["listen-port"] >= 1024
-    && config["listen-port"] <= 65535
-    && Number.isInteger(config["disc-port"])
-    && config["disc-port"] >= 1024
-    && config["disc-port"] <= 65535
+    Array.isArray(bootstrap)
+    && bootstrap.length >= 1
+    && bootstrap.length <= 8
+    && bootstrap.every(
+      (entry) =>
+        typeof entry === "string"
+        && entry.length >= 16
+        && entry.length <= 8192
+        && !entry.includes("\0"),
+    )
   );
 }
 

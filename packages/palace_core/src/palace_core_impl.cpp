@@ -4848,6 +4848,134 @@ std::string PalaceCoreImpl::storageSessionStatus()
         + std::to_string(m_storageMvpRetainedObjects.size());
 }
 
+namespace {
+
+bool storageResultAsString(const StdLogosResult& result, std::string& out)
+{
+    if (!result.success)
+        return false;
+    if (result.value.is_string()) {
+        out = result.value.get<std::string>();
+        return !out.empty() && out.size() <= 8192U;
+    }
+    return false;
+}
+
+} // namespace
+
+std::string PalaceCoreImpl::storagePeerEndpoint()
+{
+    drainStorageCallbacks();
+    if (!isContextReady() || !m_storageCallbacksRegistered)
+        return "rejected=storage-not-ready";
+    if (!m_storageSession.hasConfiguration()
+        || !m_storageSession.running()) {
+        return "rejected=storage-not-running";
+    }
+
+    const StdLogosResult peerIdResult = modules().storage_module.peerId();
+    const StdLogosResult sprResult = modules().storage_module.spr();
+    std::string peerId;
+    std::string spr;
+    if (!storageResultAsString(peerIdResult, peerId))
+        return "rejected=storage-peer-id";
+    if (!storageResultAsString(sprResult, spr))
+        return "rejected=storage-spr";
+
+    QJsonObject endpoint;
+    endpoint.insert(QStringLiteral("peerId"), QString::fromStdString(peerId));
+    endpoint.insert(QStringLiteral("spr"), QString::fromStdString(spr));
+
+    const StdLogosResult debugResult = modules().storage_module.debug();
+    if (debugResult.success && debugResult.value.is_object()) {
+        const auto& debug = debugResult.value;
+        if (debug.contains("addrs") && debug["addrs"].is_array()) {
+            QJsonArray addrs;
+            for (const auto& entry : debug["addrs"]) {
+                if (!entry.is_string())
+                    continue;
+                const std::string address = entry.get<std::string>();
+                if (address.empty() || address.size() > 512U)
+                    continue;
+                addrs.append(QString::fromStdString(address));
+            }
+            if (!addrs.isEmpty())
+                endpoint.insert(QStringLiteral("addrs"), addrs);
+        }
+        if (debug.contains("announceAddresses")
+            && debug["announceAddresses"].is_array()) {
+            QJsonArray announce;
+            for (const auto& entry : debug["announceAddresses"]) {
+                if (!entry.is_string())
+                    continue;
+                const std::string address = entry.get<std::string>();
+                if (address.empty() || address.size() > 512U)
+                    continue;
+                announce.append(QString::fromStdString(address));
+            }
+            if (!announce.isEmpty()) {
+                endpoint.insert(
+                    QStringLiteral("announceAddresses"), announce);
+            }
+        }
+    }
+
+    const QByteArray encoded =
+        QJsonDocument(endpoint).toJson(QJsonDocument::Compact);
+    if (encoded.isEmpty() || encoded.size() > 16 * 1024)
+        return "rejected=storage-endpoint-too-large";
+    return std::string("ok;") + encoded.toStdString();
+}
+
+std::string PalaceCoreImpl::connectStoragePeer(
+    const std::string& peerId,
+    const std::string& addressesJson)
+{
+    drainStorageCallbacks();
+    if (!isContextReady() || !m_storageCallbacksRegistered)
+        return "rejected=storage-not-ready";
+    if (!m_storageSession.hasConfiguration()
+        || !m_storageSession.running()) {
+        return "rejected=storage-not-running";
+    }
+    if (peerId.empty() || peerId.size() > 1024U)
+        return "rejected=storage-connect-peer-id";
+    if (addressesJson.empty() || addressesJson.size() > 16 * 1024U)
+        return "rejected=storage-connect-addresses";
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(addressesJson), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray())
+        return "rejected=storage-connect-addresses-json";
+    const QJsonArray array = document.array();
+    if (array.isEmpty() || array.size() > 16)
+        return "rejected=storage-connect-addresses-count";
+
+    std::vector<std::string> addresses;
+    addresses.reserve(static_cast<std::size_t>(array.size()));
+    for (const QJsonValue& entry : array) {
+        if (!entry.isString())
+            return "rejected=storage-connect-address-type";
+        const std::string address = entry.toString().toStdString();
+        if (address.empty() || address.size() > 512U)
+            return "rejected=storage-connect-address-size";
+        // Require multiaddr-shaped dial targets (ip4/ip6 + tcp).
+        if (address.find("/tcp/") == std::string::npos
+            || (address.rfind("/ip4/", 0) != 0
+                && address.rfind("/ip6/", 0) != 0)) {
+            return "rejected=storage-connect-address-shape";
+        }
+        addresses.push_back(address);
+    }
+
+    const StdLogosResult connected =
+        modules().storage_module.connect(peerId, addresses);
+    if (!connected.success)
+        return "rejected=storage-connect-dispatch";
+    return "ok;connect=sent;peers=" + std::to_string(addresses.size());
+}
+
 std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
                                                 const std::string& derivativeCid,
                                                 std::uint64_t byteLength,

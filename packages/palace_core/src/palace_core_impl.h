@@ -321,6 +321,14 @@ public:
     std::string refreshPresence();
     std::string startStorage(const std::string& nodeConfig);
     std::string storageSessionStatus();
+    // Multi-node mesh: peerId + SPR after Storage is running. Gate 3 uses SPR
+    // as bootstrap-node for peer B/C and peerId for explicit loopback dials.
+    std::string storagePeerEndpoint();
+    // Dial an explicit peer (JSON array of multiaddrs). Completes async via
+    // storageConnect; success here only means the connect command was sent.
+    std::string connectStoragePeer(
+        const std::string& peerId,
+        const std::string& addressesJson);
     std::string fetchPngDerivative(const std::string& sourceCid,
                                    const std::string& derivativeCid,
                                    std::uint64_t byteLength,

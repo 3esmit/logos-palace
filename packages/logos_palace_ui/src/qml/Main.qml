@@ -1151,6 +1151,21 @@ Item {
         return watchAction(backend.storageSessionStatus(), null)
     }
 
+    function gate3StoragePeerEndpoint() {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(backend.storagePeerEndpoint(), null)
+    }
+
+    function gate3ConnectStoragePeer(peerId, addressesJson) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.connectStoragePeer(
+                String(peerId), String(addressesJson)),
+            null)
+    }
+
     function gate4StartLez(password) {
         if (!ready || !backend)
             return rejectedNotReady()

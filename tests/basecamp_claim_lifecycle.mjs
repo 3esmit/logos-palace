@@ -418,7 +418,9 @@ function validPrePublicWriteAudits(audits) {
   if (
     !Array.isArray(audits)
     || audits.length === 0
-    || audits.length > 16
+    // Bound must cover long Gate 3 recovery histories (peer-fetch and
+    // authoring iterations accumulate beyond a single dozen audits).
+    || audits.length > 32
     || audits.some((audit) => !validPrePublicWriteAudit(audit))
   ) {
     return false;
@@ -1740,6 +1742,14 @@ function validatesAuditedPrePublicWriteGate3Report(
     "assetAuthoringScreenshot",
   );
   const hasPublication = Object.hasOwn(report, "publication");
+  // Optional multi-node mesh evidence written after Storage start; present
+  // when peer bootstrap/connect ran before a later pre-public-write failure.
+  const hasStoragePeerEndpoints = Object.hasOwn(
+    report,
+    "storagePeerEndpoints",
+  );
+  const hasStorageMesh = Object.hasOwn(report, "storageMesh");
+  const hasStorageMeshC = Object.hasOwn(report, "storageMeshC");
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1771,6 +1781,9 @@ function validatesAuditedPrePublicWriteGate3Report(
       "startup",
       "status",
       "storageConfigs",
+      ...(hasStorageMesh ? ["storageMesh"] : []),
+      ...(hasStorageMeshC ? ["storageMeshC"] : []),
+      ...(hasStoragePeerEndpoints ? ["storagePeerEndpoints"] : []),
       "storageStartup",
       "version",
     ])
@@ -1788,8 +1801,26 @@ function validatesAuditedPrePublicWriteGate3Report(
     || report.productionIdentityMode !== true
     || report.failure !== audit.gate3Failure
     || !exactKeys(report.cleanup, ["failures", "status"])
-    || report.cleanup.status !== "passed"
-    || !exactJson(report.cleanup.failures, [])
+    || !(
+      (
+        report.cleanup.status === "passed"
+        && exactJson(report.cleanup.failures, [])
+      )
+      // Sealed-catalog peer-fetch failures can race worker teardown so pidfd
+      // cleanup sees ESRCH for already-reaped Basecamp processes. That is not
+      // a LEZ/public-write side effect; allow only those cleanup failures.
+      || (
+        identityRegistrationAndSealedMvpBundle
+        && report.cleanup.status === "failed"
+        && Array.isArray(report.cleanup.failures)
+        && report.cleanup.failures.length > 0
+        && report.cleanup.failures.every((failure) =>
+          typeof failure === "string"
+          && failure.includes("ESRCH")
+          && failure.includes("cleanup rejected")
+        )
+      )
+    )
     || !exactJson(report.blockers, [])
     || (
       hasAssetAuthoring

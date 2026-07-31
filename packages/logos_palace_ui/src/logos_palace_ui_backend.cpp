@@ -597,6 +597,27 @@ QString LogosPalaceUiBackend::storageSessionStatus()
     return rememberStorageReceipt(status);
 }
 
+QString LogosPalaceUiBackend::storagePeerEndpoint()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.storagePeerEndpoint();
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::connectStoragePeer(
+    QString peerId,
+    QString addressesJson)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.connectStoragePeer(
+        peerId, addressesJson);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
 QString LogosPalaceUiBackend::startLez(QString password)
 {
     if (!isContextReady())

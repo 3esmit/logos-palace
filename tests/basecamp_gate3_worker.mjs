@@ -1390,6 +1390,8 @@ const allowedFunctions = new Set([
   "gate3VerifyRetention",
   "gate3ObjectStatus",
   "gate3StorageStatus",
+  "gate3StoragePeerEndpoint",
+  "gate3ConnectStoragePeer",
   "gate4StartLez",
   "gate4CreateIdentity",
   "gate4OpenPalace",
