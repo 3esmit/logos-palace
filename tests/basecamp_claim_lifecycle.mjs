@@ -660,6 +660,27 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-strict-evidence-rejection",
     reportProfile: completedGate3StrictEvidenceRejectionProfile,
   }),
+  // Gate 3 sealed the local catalog and admin-selected assets, then a resumed
+  // fresh provider worker skipped its former Storage-start receipt. No Palace
+  // root action or Gate 4 evidence exists in this exact failed run.
+  Object.freeze({
+    gitCommit: "6e3f711f313e6f5f9399049b69698f3192c2c374",
+    snapshotNarHash:
+      "sha256-OLNLtc+ZXMOVZedHq0lSPmp6LkzAH0xGuZQ/MJZf7I4=",
+    snapshotNarSize: 7_440_488,
+    snapshotRunnerSha256:
+      "135facfee7b336eee5960a6a59d231558e08cb9634e82541bc0b8db334a6558e",
+    runtimeManifestSha256:
+      "ed6a6f1c61e253f8137001035caa71c7a2df749ce48a41f60f037aa5da1a32d3",
+    compiledReportSha256:
+      "b8ebb0062b2071793aa4012a64107cbde108aa5a7508820d989d4d72fd5a41a2",
+    gate3ReportSha256:
+      "0451c0bd23fdbfe51ff7da6049148b174284ae002e94651527caa8a4fd17a0ea",
+    gate3Failure:
+      "worker b: gate3StoragePeerEndpoint receipt timeout: before=\"identity=36089c2b0d74de064b50e490591b8cb069c8f314b77595d6d58f126ace13ffc7;display=Bob;delivery_key=f707f434cc4f0a7b63663884700c83c76f4e02a9f5bb863fcb060e6e3a417fa7;key_epoch=1;registration=submitted;registration_ready=1;registration_tx=c13413819da93907f636415489a33c144bbc8e7741967d3d01d1fb0536d16ea9\" after=\"rejected=storage-not-running\" state=\"wallet=opened;ready=1;compatible=1;running=1;tracked=0;sync=current;current_height=45730;synced_height=45730;authority=missing;vm=idle;vm_action=none;program=e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61\" sequence=2->3",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 // Gate 4 reached its local startup guard, but the guard rejected an unrelated
