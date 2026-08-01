@@ -4222,6 +4222,28 @@ test("rejects direct Storage provider attribution overclaim", async () => {
   });
 });
 
+test("rejects shared Storage configuration in private mesh evidence", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate3/gate3-report.json");
+    const gate3 = await readJson(path);
+    gate3.storageConfigs.b = JSON.stringify({
+      "log-level": "INFO",
+      "listen-ip": "0.0.0.0",
+      "listen-port": 31002,
+      "disc-port": 32002,
+      nat: "any",
+      network: "logos.test",
+    });
+    await writeJson(path, gate3);
+    await writeCompiled(runDir);
+    await assert.rejects(
+      buildPublicEvidence(runDir, output),
+      /raw Storage network evidence differs/,
+    );
+    await assert.rejects(access(output), { code: "ENOENT" });
+  });
+});
+
 test("rejects changed raw admin asset authoring evidence", async () => {
   const mutations = [
     {
