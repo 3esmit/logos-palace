@@ -31,6 +31,12 @@ const runnerSha256 = "c".repeat(64);
 const completedSha256 = "d".repeat(64);
 const processScopeSlice = "logos-palace-run-NEW00001.slice";
 const processScopePrefix = "logos-palace-run-NEW00001";
+const gate4WrapperLezRevisionMismatchProfile =
+  "gate4-wrapper-lez-revision-mismatch-before-palace-write";
+const gate4WrapperLezRevisionMismatchFailure =
+  "Gate 4 LEZ module revision is not approved";
+const gate4WrapperLezRevisionMismatchRetirementStatus =
+  "audited-pre-root-write-gate4-wrapper-lez-revision-mismatch";
 const gates = [
   "gate0",
   "gate1",
@@ -822,6 +828,138 @@ async function writeAuditedPreRootWriteGate4Artifacts({
   );
 }
 
+async function writeAuditedPreRootWriteGate4WrapperArtifacts({
+  predecessorRun,
+  predecessorClaim,
+  preRootWriteGate4Audit,
+}) {
+  const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+  const compiled = failedReport(predecessorClaim.productSnapshot, "gate4");
+  await writeJson(compiledPath, compiled);
+
+  const gate3Directory = join(predecessorRun, "gate3");
+  await mkdir(gate3Directory, { mode: 0o700 });
+  const gate3Path = join(gate3Directory, "gate3-report.json");
+  await writeJson(
+    gate3Path,
+    completedGate3StrictEvidenceRejectionReport(predecessorClaim),
+  );
+
+  const gate4Directory = join(predecessorRun, "gate4");
+  await mkdir(gate4Directory, { mode: 0o700 });
+  await mkdir(join(gate4Directory, "process-scope-history"), { mode: 0o700 });
+  const scopePath = join(gate4Directory, "process-scope.json");
+  await writeJson(scopePath, preRootWriteGate4Scope());
+
+  const packageFiles = [
+    ["staged-packages-a.json", "{\"packages\":[\"a-stage\"]}\n"],
+    ["installed-packages-a.json", "{\"packages\":[\"a-install\"]}\n"],
+    ["installed-roots-a.json", "{\"roots\":[\"a-root\"]}\n"],
+    ["staged-packages-b.json", "{\"packages\":[\"b-stage\"]}\n"],
+    ["installed-packages-b.json", "{\"packages\":[\"b-install\"]}\n"],
+    ["installed-roots-b.json", "{\"roots\":[\"b-root\"]}\n"],
+    ["staged-packages-c.json", "{\"packages\":[\"c-stage\"]}\n"],
+    ["installed-packages-c.json", "{\"packages\":[\"c-install\"]}\n"],
+    ["installed-roots-c.json", "{\"roots\":[\"c-root\"]}\n"],
+  ];
+  for (const [name, contents] of packageFiles) {
+    await writeMode(join(gate4Directory, name), contents);
+  }
+
+  const gate4SourcePath = join(
+    predecessorClaim.productSnapshot,
+    "tests",
+    "basecamp_gate4.mjs",
+  );
+  await mkdir(join(predecessorClaim.productSnapshot, "tests"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  await writeMode(
+    gate4SourcePath,
+    [
+      "const approvedLezModuleRevision =",
+      `  "${preRootWriteGate4Audit.approvedLezModuleRevision}";`,
+      "",
+    ].join("\n"),
+  );
+  const sourceLockPath = join(predecessorClaim.productSnapshot, "flake.lock");
+  await writeJson(sourceLockPath, {
+    nodes: {
+      lez_core: {
+        locked: {
+          rev: preRootWriteGate4Audit.lockedLezModuleRevision,
+        },
+      },
+    },
+  });
+
+  preRootWriteGate4Audit.compiledReportSha256 = sha256(
+    await readFile(compiledPath),
+  );
+  preRootWriteGate4Audit.gate3ReportSha256 = sha256(
+    await readFile(gate3Path),
+  );
+  preRootWriteGate4Audit.gate4ScopeSha256 = sha256(
+    await readFile(scopePath),
+  );
+  preRootWriteGate4Audit.gate4SourceSha256 = sha256(
+    await readFile(gate4SourcePath),
+  );
+  preRootWriteGate4Audit.sourceLockSha256 = sha256(
+    await readFile(sourceLockPath),
+  );
+  preRootWriteGate4Audit.stagedPackagesSha256 = {
+    a: sha256(await readFile(join(gate4Directory, "staged-packages-a.json"))),
+    b: sha256(await readFile(join(gate4Directory, "staged-packages-b.json"))),
+    c: sha256(await readFile(join(gate4Directory, "staged-packages-c.json"))),
+  };
+  preRootWriteGate4Audit.installedPackagesSha256 = {
+    a: sha256(
+      await readFile(join(gate4Directory, "installed-packages-a.json")),
+    ),
+    b: sha256(
+      await readFile(join(gate4Directory, "installed-packages-b.json")),
+    ),
+    c: sha256(
+      await readFile(join(gate4Directory, "installed-packages-c.json")),
+    ),
+  };
+  preRootWriteGate4Audit.installedRootsSha256 = {
+    a: sha256(await readFile(join(gate4Directory, "installed-roots-a.json"))),
+    b: sha256(await readFile(join(gate4Directory, "installed-roots-b.json"))),
+    c: sha256(await readFile(join(gate4Directory, "installed-roots-c.json"))),
+  };
+}
+
+function wrapperLezRevisionMismatchAuditOverrides() {
+  return {
+    cleanupStatus: "passed",
+    initialFailure: gate4WrapperLezRevisionMismatchFailure,
+    retirementStatus: gate4WrapperLezRevisionMismatchRetirementStatus,
+    reportProfile: gate4WrapperLezRevisionMismatchProfile,
+    gate4SourceSha256: "3".repeat(64),
+    sourceLockSha256: "4".repeat(64),
+    approvedLezModuleRevision: "5".repeat(40),
+    lockedLezModuleRevision: "6".repeat(40),
+    stagedPackagesSha256: {
+      a: "7".repeat(64),
+      b: "8".repeat(64),
+      c: "9".repeat(64),
+    },
+    installedPackagesSha256: {
+      a: "a".repeat(64),
+      b: "b".repeat(64),
+      c: "c".repeat(64),
+    },
+    installedRootsSha256: {
+      a: "d".repeat(64),
+      b: "e".repeat(64),
+      c: "f".repeat(64),
+    },
+  };
+}
+
 async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
@@ -967,6 +1105,9 @@ async function fixture({
     terminalFailure,
     ...preRootWriteGate4AuditExtra
   } = preRootWriteGate4AuditOverrides;
+  const wrapperLezRevisionMismatch =
+    preRootWriteGate4AuditExtra.reportProfile
+      === gate4WrapperLezRevisionMismatchProfile;
   const preRootWriteGate4Audit = {
     gitCommit: predecessorCommon.gitCommit,
     snapshotNarHash: predecessorCommon.snapshotNarHash,
@@ -975,8 +1116,10 @@ async function fixture({
     runtimeManifestSha256: predecessorCommon.runtimeManifestSha256,
     compiledReportSha256: sha256(await readFile(compiledPath)),
     gate3ReportSha256: "f".repeat(64),
-    gate4ReportSha256: "1".repeat(64),
     gate4ScopeSha256: "2".repeat(64),
+    ...(wrapperLezRevisionMismatch
+      ? {}
+      : { gate4ReportSha256: "1".repeat(64) }),
     cleanupStatus,
     initialFailure,
     retirementStatus,
@@ -1887,6 +2030,157 @@ test("rolls forward the exact audited Gate 4 action-zero sync rejection", async 
   });
 });
 
+test("rolls forward exact audited Gate 4 wrapper LEZ revision mismatch", async () => {
+  await withFixture({
+    preRootWriteGate4AuditOverrides:
+      wrapperLezRevisionMismatchAuditOverrides(),
+  }, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    preRootWriteGate4Audit,
+    lifecycle,
+  }) => {
+    await writeAuditedPreRootWriteGate4WrapperArtifacts({
+      predecessorRun,
+      predecessorClaim,
+      preRootWriteGate4Audit,
+    });
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(
+          predecessorRun,
+          "pre-root-write-gate4-wrapper-retirement.json",
+        ),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.version, 2);
+    assert.equal(
+      certificate.status,
+      gate4WrapperLezRevisionMismatchRetirementStatus,
+    );
+    assert.equal(
+      certificate.predecessor.approvedLezModuleRevision,
+      preRootWriteGate4Audit.approvedLezModuleRevision,
+    );
+    assert.equal(
+      certificate.predecessor.lockedLezModuleRevision,
+      preRootWriteGate4Audit.lockedLezModuleRevision,
+    );
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.version, 4);
+    assert.equal(evidence.status, "retired-pre-root-write-gate4-wrapper");
+    assert.equal(evidence.proof.gate4Report, "absent");
+    assert.equal(evidence.proof.sourceDependencyMismatch, "audited");
+    assert.equal(
+      evidence.proof.gate4Artifacts,
+      gate4WrapperLezRevisionMismatchRetirementStatus,
+    );
+    assert.deepEqual(
+      JSON.parse((await lifecycle.execute("retired-runs")).output),
+      [predecessorRun],
+    );
+  });
+});
+
+test("rejects mutations of audited Gate 4 wrapper revision-mismatch evidence", async () => {
+  const mutations = [
+    {
+      expected: /audited Gate 4 wrapper artifacts are not exact/,
+      apply: async ({ predecessorRun }) => {
+        await writeJson(
+          join(predecessorRun, "gate4", "gate4-report.json"),
+          { actions: ["forbidden"] },
+        );
+      },
+    },
+    {
+      expected: /audited Gate 4 wrapper revision mismatch is invalid/,
+      apply: async ({ predecessorClaim, preRootWriteGate4Audit }) => {
+        const sourceLockPath = join(
+          predecessorClaim.productSnapshot,
+          "flake.lock",
+        );
+        preRootWriteGate4Audit.lockedLezModuleRevision =
+          preRootWriteGate4Audit.approvedLezModuleRevision;
+        await writeJson(sourceLockPath, {
+          nodes: {
+            lez_core: {
+              locked: { rev: preRootWriteGate4Audit.lockedLezModuleRevision },
+            },
+          },
+        });
+        preRootWriteGate4Audit.sourceLockSha256 = sha256(
+          await readFile(sourceLockPath),
+        );
+      },
+    },
+    {
+      expected: /audited Gate 4 wrapper revision mismatch is invalid/,
+      apply: async ({ predecessorRun, preRootWriteGate4Audit }) => {
+        const scopePath = join(predecessorRun, "gate4", "process-scope.json");
+        const scope = JSON.parse(await readFile(scopePath, "utf8"));
+        scope.commandExitStatus = 0;
+        await writeJson(scopePath, scope);
+        preRootWriteGate4Audit.gate4ScopeSha256 = sha256(
+          await readFile(scopePath),
+        );
+      },
+    },
+    {
+      expected: /pre-root-write Gate 5 evidence must be absent/,
+      apply: async ({ predecessorRun }) => {
+        await mkdir(join(predecessorRun, "gate5"), { mode: 0o700 });
+      },
+    },
+  ];
+  for (const mutation of mutations) {
+    await withFixture({
+      preRootWriteGate4AuditOverrides:
+        wrapperLezRevisionMismatchAuditOverrides(),
+    }, async ({
+      claimPath,
+      predecessorClaim,
+      predecessorRun,
+      preRootWriteGate4Audit,
+      lifecycle,
+    }) => {
+      await writeAuditedPreRootWriteGate4WrapperArtifacts({
+        predecessorRun,
+        predecessorClaim,
+        preRootWriteGate4Audit,
+      });
+      await mutation.apply({
+        predecessorClaim,
+        predecessorRun,
+        preRootWriteGate4Audit,
+      });
+      await writeJson(claimPath, {
+        ...predecessorClaim,
+        status: "gate3-entered",
+        gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+      });
+
+      await assert.rejects(
+        lifecycle.execute("acquire-or-roll-forward"),
+        mutation.expected,
+      );
+    });
+  }
+});
+
 test("rejects audited Gate 4 pre-root-write evidence after any action", async () => {
   await withFixture({}, async ({
     claimPath,
@@ -2234,6 +2528,58 @@ test("pins the exact audited Gate 4 action-zero sync rejection", () => {
         "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
       reportProfile:
         "gate4-action-zero-submit-sync-rejection-before-palace-write",
+    },
+  );
+});
+
+test("pins the exact audited Gate 4 wrapper LEZ revision mismatch", () => {
+  assert.deepEqual(
+    auditedPreRootWriteGate4HarnessFailures.find((audit) =>
+      audit.gitCommit === "95d36fddd90230a5434282b33e935945e712dce0"
+    ),
+    {
+      gitCommit: "95d36fddd90230a5434282b33e935945e712dce0",
+      snapshotNarHash:
+        "sha256-mE2+hunMkx+no0NvMQgR4PpXdXPooE+VsaWUQLRGGzA=",
+      snapshotNarSize: 7562776,
+      snapshotRunnerSha256:
+        "69a85990456bdd1caac1825d129b3b61a089e3a25aeca78c54f373d6e15c8fa6",
+      runtimeManifestSha256:
+        "9c4e40869f6f19023000f582dc6d7de11279e59acdd3ab923aac3040e17fc8ca",
+      compiledReportSha256:
+        "1316229fde4e6285d04b854428fa712fab797eb980159b839578556756d2ee26",
+      gate3ReportSha256:
+        "b8dbe6e3293300e71291500d5a352939d0a278670fd8032f3187bcbd4f216c35",
+      gate4ScopeSha256:
+        "1dec3398acc0554253d793e8b670f51f902af5ac729adc953408efe73ebf2692",
+      gate4SourceSha256:
+        "3ad1aa8581d0eff73a794e79f84045a024a2836448240c08d05684cbf2614d5f",
+      sourceLockSha256:
+        "d5b697db07efc9fe4db056faece2975f29688f6274c0ef226c5f694e854bbafb",
+      approvedLezModuleRevision:
+        "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
+      lockedLezModuleRevision:
+        "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
+      stagedPackagesSha256: {
+        a: "a14bc50754bf04627741e5f00d03a833b2940ff7ebd5dab28f96271ff0e9ff61",
+        b: "022896c2a47f31fb32cc64cd7b8843892a1c3018267975015ac472f4cb813bc9",
+        c: "7477b5d89c68c78d2948bf21e5546b4cb4ae7916d86f73bef076d21c7e085b60",
+      },
+      installedPackagesSha256: {
+        a: "2368a8cb1634355b60d6e9f39a92d45023cc2d464e8a4ac149ffd0d64287544c",
+        b: "093db31d8ca1e91c04f51b29bc318d38de7bb01a91e20e829f97372349f3a3c0",
+        c: "3702b0f2462049f848e0b34793d914bdf31977265ff6b5f70f2a52b7664269f4",
+      },
+      installedRootsSha256: {
+        a: "0ce8dd06ad0cf2f4c25a343e2cb6b3c3aee2a9d2e791f32fa7ccc6863402a069",
+        b: "0ce8dd06ad0cf2f4c25a343e2cb6b3c3aee2a9d2e791f32fa7ccc6863402a069",
+        c: "0ce8dd06ad0cf2f4c25a343e2cb6b3c3aee2a9d2e791f32fa7ccc6863402a069",
+      },
+      cleanupStatus: "passed",
+      initialFailure: "Gate 4 LEZ module revision is not approved",
+      retirementStatus:
+        "audited-pre-root-write-gate4-wrapper-lez-revision-mismatch",
+      reportProfile: "gate4-wrapper-lez-revision-mismatch-before-palace-write",
     },
   );
 });
