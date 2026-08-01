@@ -53,6 +53,11 @@ const identityRegistrationAndPublishedAssetsProfile =
 // on peer fetch/retention before any LEZ palace write (root still uninitialized).
 const identityRegistrationAndSealedMvpBundleProfile =
   "identity-registration-and-sealed-mvp-bundle-before-palace-write";
+// The creator can be stopped after a sealed bundle has survived both local
+// retention rounds. This remains before the first Palace-root write, but must
+// not weaken the earlier sealed-bundle recovery profile.
+const identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile =
+  "identity-registration-and-sealed-mvp-bundle-retained-after-creator-offline-before-palace-write";
 const storageCidPattern =
   /^(b[a-z2-7]{50,}|z[1-9A-HJ-NP-Za-km-z]{40,})$/;
 
@@ -587,6 +592,28 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.HA1Lqdln @ 1eb4e2c: B completed both retention rounds after A stopped,
+  // then its exact verified PNG fetch timed out before cold-C work or any
+  // Palace-root write.
+  Object.freeze({
+    gitCommit: "1eb4e2c76b3e3b0118ec78a8df7d214871c6568c",
+    snapshotNarHash:
+      "sha256-/o985IqfKf5YNc5/aUWsjjVmXyu1WWzIQSp5GCOyKtY=",
+    snapshotNarSize: 7311024,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "12ae44fde819e24da2a891dadd40e539e45fbcd46b2af40f477bae430cb3cad2",
+    compiledReportSha256:
+      "dc9337cf66a506b0d8337a85d816ddd150660c44a2dcebea64d66e96c29f570d",
+    gate3ReportSha256:
+      "04a6a88dd9c90917f55e3dc1d01f09a775e64b5d7843838e84a5ecd9540046af",
+    gate3Failure:
+      "worker b: gate3FetchPng receipt timeout: before=\"missing\" after=\"\" state=\"wallet=created;ready=1;compatible=1;running=1;tracked=0;sync=current;current_height=45472;synced_height=45472;authority=missing;vm=idle;vm_action=none;program=e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61\" sequence=69->70",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile:
+      identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -623,6 +650,7 @@ function validPrePublicWriteAudit(audit) {
         identityRegistrationAndApprovalGuardedAssetsProfile,
         identityRegistrationAndPublishedAssetsProfile,
         identityRegistrationAndSealedMvpBundleProfile,
+        identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile,
       ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
@@ -1933,6 +1961,131 @@ function validIdentityRegistrationAndSealedMvpBundleGate3Report(report) {
     );
 }
 
+function validTimedReceipt(record, prefix) {
+  return exactKeys(record, ["elapsedMs", "receipt"])
+    && Number.isSafeInteger(record.elapsedMs)
+    && record.elapsedMs >= 0
+    && typeof record.receipt === "string"
+    && (prefix === undefined || record.receipt.startsWith(prefix));
+}
+
+function validRetentionRoundReceipt(record, publication, round, prefix) {
+  if (!validTimedReceipt(record, prefix)) return false;
+  const fields = receiptFields(record.receipt);
+  const count = String(publication.objects.length);
+  return exactKeys(fields, [
+    "catalog",
+    "native_available",
+    "native_total",
+    "published",
+    "retention",
+    "retention_round",
+    "source",
+    "state",
+    "total",
+    "verified",
+  ])
+    && fields.state === "verified"
+    && fields.published === count
+    && fields.verified === count
+    && fields.total === count
+    && fields.retention === "verified"
+    && fields.retention_round === String(round)
+    && fields.source === "cache"
+    && fields.native_available === count
+    && fields.native_total === count
+    && typeof fields.catalog === "string"
+    && fields.catalog.length > 0;
+}
+
+function validRetainedCatalogObjects(retained, publication) {
+  if (
+    !Array.isArray(retained)
+    || retained.length !== publication.objects.length
+    || new Set(publication.objects.map((object) => object.objectId)).size
+      !== publication.objects.length
+  ) {
+    return false;
+  }
+  const objectsById = new Map(
+    publication.objects.map((object) => [object.objectId, object]),
+  );
+  const retainedIds = retained.map((object) => object?.objectId);
+  if (new Set(retainedIds).size !== retainedIds.length) return false;
+  return retained.every((record) => {
+    const object = objectsById.get(record?.objectId);
+    if (
+      !object
+      || !exactKeys(record, ["cid", "elapsedMs", "objectId", "receipt"])
+      || record.cid !== object.cid
+      || !Number.isSafeInteger(record.elapsedMs)
+      || record.elapsedMs < 0
+      || typeof record.receipt !== "string"
+    ) {
+      return false;
+    }
+    const fields = receiptFields(record.receipt);
+    return exactKeys(fields, ["cid", "publication", "retention", "state"])
+      && fields.state === "verified"
+      && fields.publication === "published"
+      && fields.retention === "verified"
+      && fields.cid === object.cid;
+  });
+}
+
+function validPostCreatorOfflineRetentionProofs(proofs, publication) {
+  const proofDescription =
+    "native exists(cid)=true for every CID, then local-only Storage V2 retrieval "
+    + "with exact length, SHA-256, and bytes";
+  return Array.isArray(proofs)
+    && proofs.length === 2
+    && proofs.every((proof, index) => {
+      const round = index + 1;
+      return exactKeys(proof, [
+        "completed",
+        "dispatched",
+        "proof",
+        "retained",
+        "round",
+      ])
+        && proof.round === round
+        && proof.proof === proofDescription
+        && validRetentionRoundReceipt(
+          proof.dispatched,
+          publication,
+          round,
+          "ok;",
+        )
+        && validRetentionRoundReceipt(proof.completed, publication, round)
+        && validRetainedCatalogObjects(proof.retained, publication);
+    });
+}
+
+function validPostCreatorOfflineFetchFailure(failure) {
+  const match = /^worker b: gate3FetchPng receipt timeout: before="missing" after="" state="([^"]+)" sequence=[1-9][0-9]*->[1-9][0-9]*$/.exec(
+    failure,
+  );
+  return match !== null
+    && validCurrentLezAuthorityFields(receiptFields(match[1]));
+}
+
+function validIdentityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline(
+  report,
+) {
+  return validIdentityRegistrationAndSealedMvpBundleGate3Report(report)
+    && exactKeys(report.creatorStopIntent, ["checkpointed", "pid"])
+    && report.creatorStopIntent.checkpointed === true
+    && Number.isSafeInteger(report.creatorStopIntent.pid)
+    && report.creatorStopIntent.pid > 1
+    && report.creatorStopIntent.pid === report.startup.a.basecampPid
+    && report.creatorOffline === true
+    && validPostCreatorOfflineRetentionProofs(
+      report.providerBRetentionProofs,
+      report.publication,
+    )
+    && validPostCreatorOfflineFetchFailure(report.failure);
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
@@ -1947,10 +2100,15 @@ function validatesAuditedPrePublicWriteGate3Report(
     audit.reportProfile === identityRegistrationAndPublishedAssetsProfile;
   const identityRegistrationAndSealedMvpBundle =
     audit.reportProfile === identityRegistrationAndSealedMvpBundleProfile;
+  const identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline =
+    audit.reportProfile
+      === identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile;
+  const hasSealedMvpBundle = identityRegistrationAndSealedMvpBundle
+    || identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline;
   const hasAssetAuthoring = identityRegistrationAndIdleStorage
     || identityRegistrationAndApprovalGuardedAssets
     || identityRegistrationAndPublishedAssets
-    || identityRegistrationAndSealedMvpBundle;
+    || hasSealedMvpBundle;
   // Gate 3 may attach a path-free screenshot evidence object after authoring
   // completes and still fail later (e.g. MVP bundle publish timeout).
   const hasAssetAuthoringScreenshot = Object.hasOwn(
@@ -1958,6 +2116,7 @@ function validatesAuditedPrePublicWriteGate3Report(
     "assetAuthoringScreenshot",
   );
   const hasPublication = Object.hasOwn(report, "publication");
+  const hasCreatorStopIntent = Object.hasOwn(report, "creatorStopIntent");
   // Optional multi-node mesh evidence written after Storage start; present
   // when peer bootstrap/connect ran before a later pre-public-write failure.
   const hasStoragePeerEndpoints = Object.hasOwn(
@@ -2000,6 +2159,7 @@ function validatesAuditedPrePublicWriteGate3Report(
       "blockers",
       "cleanup",
       "creatorOffline",
+      ...(hasCreatorStopIntent ? ["creatorStopIntent"] : []),
       "failure",
       "fullGate3",
       "identities",
@@ -2055,7 +2215,7 @@ function validatesAuditedPrePublicWriteGate3Report(
       // cleanup sees ESRCH for already-reaped Basecamp processes. That is not
       // a LEZ/public-write side effect; allow only those cleanup failures.
       || (
-        identityRegistrationAndSealedMvpBundle
+        hasSealedMvpBundle
         && report.cleanup.status === "failed"
         && Array.isArray(report.cleanup.failures)
         && report.cleanup.failures.length > 0
@@ -2076,7 +2236,7 @@ function validatesAuditedPrePublicWriteGate3Report(
               ? validIdentityRegistrationAndApprovalGuardedAssetsGate3Report(
                 report,
               )
-              : identityRegistrationAndSealedMvpBundle
+              : hasSealedMvpBundle
                 ? validIdentityRegistrationAndSealedMvpBundleGate3Report(
                   report,
                 )
@@ -2093,10 +2253,35 @@ function validatesAuditedPrePublicWriteGate3Report(
           || report.startup.a.startupMs < 0
         )
     )
-    || (identityRegistrationAndSealedMvpBundle !== hasPublication)
+    || (hasSealedMvpBundle !== hasPublication)
+    || (
+      identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline
+      && (
+        !hasCreatorStopIntent
+        || !hasProviderBFetch
+        || !hasProviderBCachedFetch
+        || hasStorageMeshC
+        || hasStorageBlockMaterializationC
+        || !validIdentityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline(
+          report,
+        )
+      )
+    )
+    || (
+      !identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline
+      && hasCreatorStopIntent
+    )
     || !Array.isArray(report.providerBRetentionProofs)
-    || report.providerBRetentionProofs.length !== 0
-    || report.creatorOffline !== false
+    || (
+      identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline
+        ? false
+        : report.providerBRetentionProofs.length !== 0
+    )
+    || (
+      identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline
+        ? report.creatorOffline !== true
+        : report.creatorOffline !== false
+    )
     || report.pngRecovery !== "failed"
     || report.releasePreflight?.status !== "passed"
     || report.releasePreflight?.rootAccountBeforeWrites?.status !== "passed"

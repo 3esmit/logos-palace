@@ -261,6 +261,125 @@ function identityRegistrationAndApprovalGuardedAssetsGate3Report(predecessor) {
   return report;
 }
 
+function sealedBundleRetainedAfterCreatorOfflineGate3Report(predecessor) {
+  const report = identityRegistrationAndApprovalGuardedAssetsGate3Report(
+    predecessor,
+  );
+  const template = report.assetAuthoring.assets[0];
+  const cid = (suffix) => `z${"a".repeat(49)}${suffix}`;
+  const makeAsset = ({ assetId, file, handle, objectCid, roomId }) => ({
+    ...template,
+    assetId,
+    file,
+    label: file,
+    handle,
+    target: { kind: "room-background", roomId },
+    commit: {
+      ...template.commit,
+      receipt: `ok;handle=${handle};width=1;height=1;bytes=10`,
+    },
+    review: { receipt: `ok;handle=${handle};review=approved`, elapsedMs: 1 },
+    publication: {
+      dispatched: { receipt: "ok;asset=publishing", elapsedMs: 1 },
+      completed: { receipt: `published;cid=${objectCid}`, elapsedMs: 1 },
+    },
+    cid: objectCid,
+    assignment: { receipt: `ok;room=${roomId};handle=${handle}`, elapsedMs: 1 },
+  });
+  const atrium = makeAsset({
+    assetId: "fixture-atrium",
+    file: "fixture-atrium.png",
+    handle: "a".repeat(64),
+    objectCid: cid(1),
+    roomId: "atrium",
+  });
+  const lounge = makeAsset({
+    assetId: "fixture-lounge",
+    file: "fixture-lounge.png",
+    handle: "b".repeat(64),
+    objectCid: cid(2),
+    roomId: "lounge",
+  });
+  const objects = [
+    ["background-atrium", atrium.cid, atrium.handle],
+    ["background-lounge", lounge.cid, lounge.handle],
+    ["room-atrium-metadata", cid(3), "c".repeat(64)],
+    ["room-lounge-metadata", cid(4), "d".repeat(64)],
+    ["palace-1", cid(5), "e".repeat(64)],
+  ].map(([objectId, objectCid, contentSha256]) => ({
+    objectId,
+    cid: objectCid,
+    contentSha256,
+    byteLength: 10,
+    mediaType: "application/octet-stream",
+    type: "fixture",
+  }));
+  const binding = (asset, object, targetId) => ({
+    kind: "room-background",
+    targetId,
+    objectId: object.objectId,
+    assetId: asset.assetId,
+    assignment: asset.assignment,
+    cid: object.cid,
+    contentSha256: object.contentSha256,
+  });
+  report.assetAuthoring = {
+    ...report.assetAuthoring,
+    phase: "complete",
+    selectedAssetCount: 2,
+    catalogCount: 2,
+    inputManifest: { ...report.assetAuthoring.inputManifest, assetCount: 2 },
+    assets: [atrium, lounge],
+    assignments: {
+      rooms: { atrium: atrium.handle, lounge: lounge.handle },
+      prop: null,
+    },
+    graphBindings: [
+      binding(atrium, objects[0], "atrium"),
+      binding(lounge, objects[1], "lounge"),
+    ],
+  };
+  report.publication = {
+    checksum: "f".repeat(64),
+    dispatched: { receipt: "ok;state=published", elapsedMs: 1 },
+    completed: { receipt: "state=verified;catalog=fixture", elapsedMs: 1 },
+    objects,
+  };
+  const retentionReceipt = (round, prefix = "") =>
+    `${prefix}state=verified;published=5;verified=5;total=5;`
+    + `retention=verified;retention_round=${round};source=cache;`
+    + "native_available=5;native_total=5;catalog=fixture";
+  const retention = (round) => ({
+    round,
+    proof:
+      "native exists(cid)=true for every CID, then local-only Storage V2 retrieval "
+      + "with exact length, SHA-256, and bytes",
+    dispatched: { receipt: retentionReceipt(round, "ok;"), elapsedMs: 1 },
+    completed: { receipt: retentionReceipt(round), elapsedMs: 1 },
+    retained: objects.map((object) => ({
+      objectId: object.objectId,
+      cid: object.cid,
+      receipt:
+        `state=verified;publication=published;retention=verified;cid=${object.cid}`,
+      elapsedMs: 1,
+    })),
+  });
+  report.providerBFetch = {};
+  report.providerBCachedFetch = {};
+  report.providerBRetentionProofs = [retention(1), retention(2)];
+  report.creatorStopIntent = {
+    checkpointed: true,
+    pid: report.startup.a.basecampPid,
+  };
+  report.creatorOffline = true;
+  report.failure =
+    "worker b: gate3FetchPng receipt timeout: before=\"missing\" after=\"\" "
+    + "state=\"wallet=created;ready=1;compatible=1;running=1;tracked=0;"
+    + "sync=current;current_height=10;synced_height=10;authority=missing;"
+    + `vm=idle;vm_action=none;program=${releaseProgramId}\" sequence=1->2`;
+  return report;
+}
+
 async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
@@ -965,6 +1084,106 @@ test("rolls forward exact approval-guarded staged assets before a Palace write",
     assert.equal(
       evidence.proof.gate3Artifacts,
       "audited-pre-public-write-failure",
+    );
+  });
+});
+
+test("rolls forward sealed storage retained after creator shutdown before a Palace write", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = sealedBundleRetainedAfterCreatorOfflineGate3Report(
+      predecessorClaim,
+    );
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.reportProfile =
+      "identity-registration-and-sealed-mvp-bundle-retained-after-creator-offline-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure = report.failure;
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-public-write-gate3-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.status, "audited-pre-public-write-failure");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.status, "retired-pre-public-write");
+  });
+});
+
+test("rejects post-creator retention evidence with a catalog CID mismatch", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = sealedBundleRetainedAfterCreatorOfflineGate3Report(
+      predecessorClaim,
+    );
+    report.providerBRetentionProofs[1].retained[0].cid =
+      `z${"b".repeat(50)}`;
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.reportProfile =
+      "identity-registration-and-sealed-mvp-bundle-retained-after-creator-offline-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure = report.failure;
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    await assert.rejects(
+      lifecycle.execute("acquire-or-roll-forward"),
+      /pre-public-write report is invalid/,
     );
   });
 });

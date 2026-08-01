@@ -426,6 +426,57 @@ LOGOS_TEST(storage_mvp_visitor_restores_placeholders_then_validates_bytes)
         "background-atrium", changed));
 }
 
+LOGOS_TEST(storage_mvp_resolves_only_fully_fetched_published_png_by_cid)
+{
+    const Backgrounds images = backgrounds();
+    palace::PalaceStorageMvpBundle source;
+    LOGOS_ASSERT_TRUE(initialize(source, images));
+    LOGOS_ASSERT_TRUE(publishAll(source));
+    const auto* sourceAtrium =
+        source.artifact("background-atrium");
+    const auto* sourceManifest = source.artifact("room-atrium");
+    const auto* sourceProp = source.artifact(propImageObjectId());
+    LOGOS_ASSERT_TRUE(sourceAtrium != nullptr);
+    LOGOS_ASSERT_TRUE(sourceManifest != nullptr);
+    LOGOS_ASSERT_TRUE(sourceProp != nullptr);
+
+    palace::PalaceStorageMvpBundle visitor;
+    LOGOS_ASSERT_TRUE(visitor.restoreCanonicalCatalog(
+        source.canonicalCatalog()));
+    LOGOS_ASSERT_TRUE(visitor.complete());
+    LOGOS_ASSERT_FALSE(visitor.fetchedContentValid());
+    LOGOS_ASSERT_TRUE(visitor.fetchedPngArtifactForCid(
+        sourceAtrium->cid) == nullptr);
+
+    for (const palace::PalaceStorageMvpArtifactV1& artifact
+         : source.artifacts()) {
+        LOGOS_ASSERT_TRUE(visitor.acceptFetchedBytes(
+            artifact.objectId, artifact.bytes));
+    }
+    LOGOS_ASSERT_TRUE(visitor.fetchedContentValid());
+
+    const auto* resolved = visitor.fetchedPngArtifactForCid(
+        sourceAtrium->cid);
+    LOGOS_ASSERT_TRUE(resolved != nullptr);
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(resolved->type),
+        static_cast<int>(
+            palace::PalaceStorageMvpArtifactType::BackgroundPng));
+    LOGOS_ASSERT_EQ(resolved->bytes, images.atrium);
+    const auto* resolvedProp = visitor.fetchedPngArtifactForCid(
+        sourceProp->cid);
+    LOGOS_ASSERT_TRUE(resolvedProp != nullptr);
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(resolvedProp->type),
+        static_cast<int>(
+            palace::PalaceStorageMvpArtifactType::PropPng));
+    LOGOS_ASSERT_EQ(resolvedProp->bytes, images.prop);
+    LOGOS_ASSERT_TRUE(visitor.fetchedPngArtifactForCid(
+        cid(palace::crypto::sha256Hex("not-in-catalog"))) == nullptr);
+    LOGOS_ASSERT_TRUE(visitor.fetchedPngArtifactForCid(
+        sourceManifest->cid) == nullptr);
+}
+
 LOGOS_TEST(storage_mvp_background_and_prop_digests_are_runtime_inputs)
 {
     const Backgrounds first = backgrounds();

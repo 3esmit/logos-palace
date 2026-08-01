@@ -104,6 +104,11 @@ public:
     const PalaceStorageMvpArtifactV1* artifact(
         const std::string& objectId) const;
     std::vector<PalaceStorageMvpArtifactV1> artifacts() const;
+    // Resolves a published PNG leaf only after every catalog object has
+    // passed exact byte verification. The returned artifact remains owned by
+    // this bundle and binds bytes to the published source CID.
+    const PalaceStorageMvpArtifactV1* fetchedPngArtifactForCid(
+        const std::string& sourceCid) const;
     bool assignPublicationCid(
         const std::string& objectId,
         const std::string& cid);

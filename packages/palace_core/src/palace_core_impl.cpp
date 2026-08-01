@@ -5061,6 +5061,28 @@ std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
     if (!pending.has_value())
         return "rejected=invalid-or-already-pending-asset";
 
+    // An administrator-selected catalog leaf can be reused only when this
+    // exact published CID already has a fully verified local graph. Still
+    // run the caller's derivative covenant: mismatched metadata degrades
+    // synchronously instead of trusting the catalog bytes for a new claim.
+    if (m_storageMvpColocatedMaterialized) {
+        const auto* materialized =
+            m_storageMvpBundle.fetchedPngArtifactForCid(
+                reference.sourceCid);
+        if (materialized != nullptr) {
+            const palace::VerifiedAsset verified =
+                m_verifiedAssetStore->stagePngDerivative(
+                    reference, materialized->bytes);
+            if (!m_storageAssets.cancel(pending->operationId))
+                return "rejected=materialized-asset-queue";
+            m_assetStatus[reference.derivativeCid] = verified.accepted
+                ? "verified;handle=" + verified.handle
+                : "degraded;reason=" + verified.reason;
+            return "ok;asset=fetching;operation="
+                + pending->operationId;
+        }
+    }
+
     const palace::StorageModuleSessionTransition fetch =
         m_storageSession.beginNetworkFetch(
             pending->operationId,

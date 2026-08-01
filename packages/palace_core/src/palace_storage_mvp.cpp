@@ -637,6 +637,34 @@ PalaceStorageMvpBundle::artifacts() const
     return result;
 }
 
+const PalaceStorageMvpArtifactV1*
+PalaceStorageMvpBundle::fetchedPngArtifactForCid(
+    const std::string& sourceCid) const
+{
+    if (!complete() || !fetchedContentValid()
+        || !isCanonicalStorageCid(sourceCid)) {
+        return nullptr;
+    }
+
+    for (const auto& entry : m_artifacts) {
+        const PalaceStorageMvpArtifactV1& artifact = entry.second;
+        if (artifact.cid != sourceCid)
+            continue;
+        if ((artifact.type
+                != PalaceStorageMvpArtifactType::BackgroundPng
+                && artifact.type
+                    != PalaceStorageMvpArtifactType::PropPng)
+            || artifact.mediaType != "image/png"
+            || artifact.specification.kind
+                != StorageCatalogObjectKind::Blob
+            || artifact.bytes.empty()) {
+            return nullptr;
+        }
+        return &artifact;
+    }
+    return nullptr;
+}
+
 bool PalaceStorageMvpBundle::assignPublicationCid(
     const std::string& objectId,
     const std::string& cid)
