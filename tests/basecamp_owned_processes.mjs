@@ -8,7 +8,7 @@ function bounded(bytes, maximum, description) {
   return bytes;
 }
 
-function procIdentity(stat, pid) {
+function procIdentity(stat, pid, { allowUnownedTopology = false } = {}) {
   const encoded = stat.toString("utf8").trim();
   const close = encoded.lastIndexOf(")");
   if (!encoded.startsWith(`${pid} (`) || close < 3) {
@@ -19,13 +19,18 @@ function procIdentity(stat, pid) {
   const processGroupId = Number(fields[2]);
   const sessionId = Number(fields[3]);
   const startTimeTicks = Number(fields[19]);
+  const hasPositiveGroupAndSession =
+    Number.isSafeInteger(processGroupId)
+    && processGroupId > 0
+    && Number.isSafeInteger(sessionId)
+    && sessionId > 0;
+  if (!hasPositiveGroupAndSession) {
+    if (allowUnownedTopology) return undefined;
+    throw new Error(`process ${pid} has invalid topology during cleanup`);
+  }
   if (
     !Number.isSafeInteger(parentPid)
     || parentPid < 0
-    || !Number.isSafeInteger(processGroupId)
-    || processGroupId <= 0
-    || !Number.isSafeInteger(sessionId)
-    || sessionId <= 0
     || !Number.isSafeInteger(startTimeTicks)
     || startTimeTicks <= 0
   ) {
@@ -76,7 +81,12 @@ async function procCgroup(procRoot, pid) {
   return match[1];
 }
 
-async function stableIdentity(procRoot, pid, expected) {
+async function stableIdentity(
+  procRoot,
+  pid,
+  expected,
+  { allowUnownedTopology = false } = {},
+) {
   const identity = procIdentity(
     bounded(
       await readFile(`${procRoot}/${pid}/stat`),
@@ -84,7 +94,9 @@ async function stableIdentity(procRoot, pid, expected) {
       `process ${pid} stat`,
     ),
     pid,
+    { allowUnownedTopology },
   );
+  if (!identity) return undefined;
   if (
     expected
     && (
@@ -97,6 +109,12 @@ async function stableIdentity(procRoot, pid, expected) {
     throw new Error(`process ${pid} changed identity during cleanup`);
   }
   return identity;
+}
+
+async function scanProcessIdentity(procRoot, pid) {
+  return stableIdentity(procRoot, pid, undefined, {
+    allowUnownedTopology: true,
+  });
 }
 
 function requireCgroupPath(path, description) {
@@ -286,7 +304,8 @@ export async function ownedProcessGroupMembers({
   for (const entry of await procEntries(procRoot)) {
     const pid = Number(entry.name);
     try {
-      const identity = await stableIdentity(procRoot, pid);
+      const identity = await scanProcessIdentity(procRoot, pid);
+      if (!identity) continue;
       if (identity.processGroupId !== processGroupId) continue;
       const memberCgroup = await procCgroup(procRoot, pid);
       if (!inCgroupSubtree(memberCgroup, cgroupPath)) {
@@ -426,11 +445,11 @@ export async function cgroupProcesses({
   for (const entry of await procEntries(procRoot)) {
     const pid = Number(entry.name);
     try {
-      const identity = await stableIdentity(procRoot, pid);
       const processCgroup = await procCgroup(procRoot, pid);
       if (!inCgroupSubtree(processCgroup, cgroupPath)) {
         continue;
       }
+      const identity = await stableIdentity(procRoot, pid);
       await stableIdentity(procRoot, pid, identity);
       if (await procCgroup(procRoot, pid) !== processCgroup) {
         throw new Error(`process ${pid} changed cgroup during cleanup`);

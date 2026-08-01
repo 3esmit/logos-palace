@@ -175,6 +175,45 @@ test("process-group authorization rejects mixed claim ownership", async () => {
   }
 });
 
+test("process-group scan ignores unrelated zero-topology entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "palace-proc-zero-topology-"));
+  const claimPath = "/var/tmp/logos-palace-1000/active-claim.json";
+  try {
+    const kernelLike = join(root, "2");
+    const owned = join(root, "804");
+    await mkdir(kernelLike);
+    await mkdir(owned);
+    await writeFile(join(kernelLike, "stat"), procStat(2, 1, 0, 0));
+    await writeFile(
+      join(owned, "status"),
+      "Name:\tworker\nUid:\t1000\t1000\t1000\t1000\n",
+    );
+    await writeFile(join(owned, "stat"), procStat(804, 1, 804, 804));
+    await writeFile(join(owned, "cgroup"), `0::${scopeCgroup}\n`);
+    await writeFile(
+      join(owned, "environ"),
+      `PALACE_MVP_CLAIM_PATH=${claimPath}\0`,
+    );
+    assert.deepEqual(
+      await ownedProcessGroupMembers({
+        processGroupId: 804,
+        claimPath,
+        cgroupPath: scopeCgroup,
+        uid: 1000,
+        procRoot: root,
+      }),
+      [{
+        pid: 804,
+        startTimeTicks: 12345,
+        observedCgroupPath: scopeCgroup,
+        owned: true,
+      }],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("claim scan finds module host in alternate process group", async () => {
   const root = await mkdtemp(join(tmpdir(), "palace-proc-claim-"));
   const claimPath = "/var/tmp/logos-palace-1000/active-claim.json";
@@ -347,6 +386,52 @@ test("cgroup inventory finds residue without claim environment", async () => {
         sessionId: 905,
         startTimeTicks: 12345,
       }],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cgroup inventory ignores unrelated zero-topology entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "palace-proc-cgroup-zero-"));
+  try {
+    const kernelLike = join(root, "2");
+    const inside = join(root, "909");
+    await mkdir(kernelLike);
+    await mkdir(inside);
+    await writeFile(join(kernelLike, "stat"), procStat(2, 1, 0, 0));
+    await writeFile(join(kernelLike, "cgroup"), "0::/init.scope\n");
+    await writeFile(join(inside, "stat"), procStat(909, 1, 909, 909));
+    await writeFile(join(inside, "cgroup"), `0::${scopeCgroup}\n`);
+    assert.deepEqual(
+      await cgroupProcesses({ cgroupPath: scopeCgroup, procRoot: root }),
+      [{
+        pid: 909,
+        parentPid: 1,
+        processGroupId: 909,
+        sessionId: 909,
+        startTimeTicks: 12345,
+      }],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("owned identity keeps zero-topology target rejection strict", async () => {
+  const root = await mkdtemp(join(tmpdir(), "palace-proc-target-zero-"));
+  try {
+    const processDir = join(root, "910");
+    await mkdir(processDir);
+    await writeFile(join(processDir, "stat"), procStat(910, 1, 0, 0));
+    await writeFile(join(processDir, "cgroup"), `0::${scopeCgroup}\n`);
+    await assert.rejects(
+      captureOwnedProcessIdentity({
+        pid: 910,
+        cgroupPath: scopeCgroup,
+        procRoot: root,
+      }),
+      /process 910 has invalid topology during cleanup/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -900,6 +900,20 @@ test("Gate 4 provides the exact pidfd helper before worker startup", async () =>
   ]);
 });
 
+test("Gate 4 skips foreign process topology before strict inventory parsing", async () => {
+  const source = await readFile(gate4HarnessPath, "utf8");
+  const scanStart = source.indexOf('const procEntries = await readdir("/proc"');
+  const foreignUidFilter = source.indexOf(
+    "if (effectiveUid !== root.effectiveUid) continue;",
+    scanStart,
+  );
+  const topologyParse = source.indexOf("const candidate = parseProcStat(", scanStart);
+  assert.notEqual(scanStart, -1);
+  assert.notEqual(foreignUidFilter, -1);
+  assert.notEqual(topologyParse, -1);
+  assert.ok(foreignUidFilter < topologyParse);
+});
+
 test("Gate 4 approves and binds the exact LEZ dependency before work", async () => {
   const [runner, gate4] = await Promise.all([
     readFile(runnerPath, "utf8"),

@@ -5034,36 +5034,35 @@ async function processMetrics(pid, expectedTcpListeners, label) {
           /^Uid:\s+[0-9]+\s+([0-9]+)\s+[0-9]+\s+[0-9]+$/m,
         )?.[1],
       );
-      if (effectiveUid === root.effectiveUid) {
-        const name = status.match(/^Name:\s+(.+)$/m)?.[1];
-        const cmdlineBytes = await readBoundedProcFile(
-          `/proc/${processId}/cmdline`,
-          64 * 1024,
-        );
-        const argumentBasenames = boundedArgumentBasenames(
-          cmdlineBytes,
-          processId,
-        );
-        let executable;
-        try {
-          executable = basename(await readlink(`/proc/${processId}/exe`));
-        } catch (error) {
-          if (error?.code !== "ENOENT") throw error;
-        }
-        standaloneScanProcesses.push({
-          pid: processId,
-          name,
-          executable,
-          executableArgument: argumentBasenames[0],
-          programArgument:
-            /^ld(?:-[a-z0-9_-]+)?-linux[^/]*\.so(?:\.[0-9]+)*$/i.test(
-              argumentBasenames[0] ?? "",
-            )
-              ? argumentBasenames[1]
-              : argumentBasenames[0],
-          argumentBasenames,
-        });
+      if (effectiveUid !== root.effectiveUid) continue;
+      const name = status.match(/^Name:\s+(.+)$/m)?.[1];
+      const cmdlineBytes = await readBoundedProcFile(
+        `/proc/${processId}/cmdline`,
+        64 * 1024,
+      );
+      const argumentBasenames = boundedArgumentBasenames(
+        cmdlineBytes,
+        processId,
+      );
+      let executable;
+      try {
+        executable = basename(await readlink(`/proc/${processId}/exe`));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
       }
+      standaloneScanProcesses.push({
+        pid: processId,
+        name,
+        executable,
+        executableArgument: argumentBasenames[0],
+        programArgument:
+          /^ld(?:-[a-z0-9_-]+)?-linux[^/]*\.so(?:\.[0-9]+)*$/i.test(
+            argumentBasenames[0] ?? "",
+          )
+            ? argumentBasenames[1]
+            : argumentBasenames[0],
+        argumentBasenames,
+      });
       const candidate = parseProcStat(
         await readBoundedProcFile(`/proc/${processId}/stat`, 4096),
         processId,
