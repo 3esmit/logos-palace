@@ -109,6 +109,7 @@ test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /function noteAuthoringPreviewReady/);
   assert.match(mainQml, /function noteAuthoringPreviewLost/);
   assert.match(mainQml, /function resetAuthoringPreviewState/);
+  assert.match(mainQml, /function syncSelectedModerationUser\(\)/);
   assert.match(mainQml, /Component\.onDestruction:\s*root\.abandonAssetImport\(\)/);
   assert.match(mainQml, /resetAuthoringPreviewState\(\)/);
   assert.match(mainQml, /active:\s*root\.backgroundModerationOpen/);
@@ -413,6 +414,35 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
   assert.match(mainQml, /property string selectedModerationUserId:\s*""/);
   assert.match(mainQml, /function selectedModerationUser\(\)/);
   assert.match(mainQml, /function selectedModerationUserName\(\)/);
+  assert.match(
+    mainQml,
+    /onParticipantsChanged:\s*syncSelectedModerationUser\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /function syncSelectedModerationUser\(\)[\s\S]{0,520}selectedModerationUserId = participantUserId/,
+  );
+
+  const statusUserOffset = mainQml.indexOf(
+    'objectName: "palaceStatusSelectedUser"',
+  );
+  const statusBanOffset = mainQml.indexOf(
+    'objectName: "palaceStatusBanUserButton"',
+  );
+  assert.ok(statusUserOffset >= 0 && statusBanOffset > statusUserOffset);
+  const statusUserBlock = mainQml.slice(statusUserOffset, statusBanOffset);
+  const statusBanBlock = mainQml.slice(statusBanOffset, statusBanOffset + 420);
+  const statusBanBlockLong = mainQml.slice(
+    statusBanOffset,
+    statusBanOffset + 720,
+  );
+  assert.match(statusUserBlock, /text: root\.selectedModerationUserName\(\)\.length > 0/);
+  assert.match(statusUserBlock, /onClicked:\s*root\.userListOpen = true/);
+  assert.match(statusBanBlock, /visible:\s*root\.canBanUser/);
+  assert.match(
+    statusBanBlockLong,
+    /onClicked:\s*root\.gate4BanUser\(subjectUserId\)/,
+  );
 
   const rosterOffset = mainQml.indexOf(
     'objectName: "palaceModerationRoster"',
@@ -458,6 +488,23 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
     /onClicked:\s*root\.gate4BanUser\(subjectUserId\)/,
   );
 
+  const participantSelectOffset = mainQml.indexOf(
+    'objectName: "palaceParticipantSelect"',
+  );
+  assert.ok(participantSelectOffset >= 0);
+  const participantSelectBlock = mainQml.slice(
+    participantSelectOffset,
+    participantSelectOffset + 640,
+  );
+  assert.match(
+    participantSelectBlock,
+    /anchors\.fill:\s*remoteAvatar/,
+  );
+  assert.match(
+    participantSelectBlock,
+    /onClicked:[\s\S]{0,120}root\.selectedModerationUserId[\s\S]{0,80}= participantDelegate\.participantUserId/,
+  );
+
   assert.match(mainQml, /function closeActiveUtilityPanel\(\)/);
   assert.match(
     mainQml,
@@ -489,5 +536,34 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
   assert.match(
     mainQml,
     /objectName:\s*"palaceChatInput"[\s\S]{0,260}Accessible\.name:\s*"Chat message"/,
+  );
+});
+
+test("prop placement uses bounded layer presets and click preview", () => {
+  assert.match(mainQml, /function validPropLayer\(\s*value\s*\)/);
+  assert.match(mainQml, /function clampAnchorToAsset\(\s*value,\s*sourceExtent\s*\)/);
+  assert.match(mainQml, /function propPreviewScale\(\s*sourceWidth,\s*sourceHeight\s*\)/);
+  assert.match(mainQml, /function setPropDraftAnchorFromPreview\(/);
+  assert.match(
+    mainQml,
+    /function propDraftReady\(\)[\s\S]{0,220}validPropLayer\(propDraftLayer\)/,
+  );
+  assert.match(
+    mainQml,
+    /model:\s*\["head",\s*"body",\s*"hand",\s*"back"\]/,
+  );
+  assert.match(
+    mainQml,
+    /onClicked:\s*root\.propDraftLayer = modelData/,
+  );
+  assert.match(mainQml, /objectName:\s*"palaceAssetPropPreview-"\s*\+\s*backgroundCard\.handle/);
+  assert.match(mainQml, /objectName:\s*"palaceAssetPropPreviewHit-"\s*\+\s*backgroundCard\.handle/);
+  assert.match(
+    mainQml,
+    /setPropDraftAnchorFromPreview\([\s\S]{0,220}mouse\.x,[\s\S]{0,120}mouse\.y/,
+  );
+  assert.match(
+    mainQml,
+    /Pick layer, then click prop preview to set hot spot/,
   );
 });

@@ -258,6 +258,20 @@ Item {
         return String(participant.displayName || participant.userId || "")
     }
 
+    function syncSelectedModerationUser() {
+        if (selectedModerationUser() !== null)
+            return
+        for (var index = 0; index < participants.length; ++index) {
+            var participant = participants[index] || ({})
+            var participantUserId = String(participant.userId || "")
+            if (participantUserId.length > 0) {
+                selectedModerationUserId = participantUserId
+                return
+            }
+        }
+        selectedModerationUserId = ""
+    }
+
     function focusChatWhenUnobstructed() {
         if (ready && !backgroundModerationOpen && !propBagOpen
                 && !roomListOpen && !userListOpen)
@@ -345,11 +359,62 @@ Item {
         return Number.isSafeInteger(parsed) ? parsed : -1
     }
 
+    function validPropLayer(value) {
+        var normalized = String(value).trim()
+        return normalized === "head"
+            || normalized === "body"
+            || normalized === "hand"
+            || normalized === "back"
+    }
+
     function propDraftReady() {
         return validAssetIdentifier(propDraftId)
-            && validAssetIdentifier(propDraftLayer)
+            && validPropLayer(propDraftLayer)
             && parsedAssetAnchor(propDraftAnchorX) >= 0
             && parsedAssetAnchor(propDraftAnchorY) >= 0
+    }
+
+    function clampAnchorToAsset(value, sourceExtent) {
+        var extent = Math.max(1, Number(sourceExtent))
+        var coordinate = Math.round(Number(value))
+        if (isNaN(coordinate) || !isFinite(coordinate))
+            return 0
+        return Math.max(0, Math.min(extent - 1, coordinate))
+    }
+
+    function propPreviewScale(sourceWidth, sourceHeight) {
+        return Math.min(
+            1,
+            92 / Math.max(1, Number(sourceWidth)),
+            62 / Math.max(1, Number(sourceHeight)))
+    }
+
+    function propPreviewTargetX(layer, stageWidth) {
+        var normalized = String(layer)
+        if (normalized === "hand")
+            return stageWidth - 22
+        if (normalized === "back")
+            return 34
+        return Math.round(stageWidth / 2)
+    }
+
+    function propPreviewTargetY(layer, stageHeight) {
+        var normalized = String(layer)
+        if (normalized === "head")
+            return 18
+        if (normalized === "body")
+            return Math.round(stageHeight / 2) - 2
+        return Math.round(stageHeight * 0.67)
+    }
+
+    function setPropDraftAnchorFromPreview(
+            localX, localY, scale, sourceWidth, sourceHeight) {
+        if (!canManageAssets || scale <= 0)
+            return
+        propDraftAnchorX = String(clampAnchorToAsset(
+            Number(localX) / scale, sourceWidth))
+        propDraftAnchorY = String(clampAnchorToAsset(
+            Number(localY) / scale, sourceHeight))
     }
 
     function assetAuthoringEvidence(epoch) {
@@ -1582,6 +1647,8 @@ Item {
             focusChatWhenUnobstructed()
     }
 
+    onParticipantsChanged: syncSelectedModerationUser()
+
     Shortcut {
         sequence: "Esc"
         enabled: root.backgroundModerationOpen || root.propBagOpen
@@ -1961,6 +2028,33 @@ Item {
                                 font.pixelSize: 16
                                 font.bold: true
                             }
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: parent.width + 10
+                                height: parent.height + 10
+                                radius: width / 2
+                                color: "transparent"
+                                border.width: 2
+                                border.color:
+                                    root.selectedModerationUserId
+                                    === participantDelegate.participantUserId
+                                    ? "#2b6aa4" : "transparent"
+                            }
+                        }
+
+                        MouseArea {
+                            objectName: "palaceParticipantSelect"
+                            anchors.fill: remoteAvatar
+                            enabled: participantDelegate.participantUserId
+                                .length > 0
+                            cursorShape: enabled
+                                ? Qt.PointingHandCursor
+                                : Qt.ArrowCursor
+                            acceptedButtons: Qt.LeftButton
+                            onClicked:
+                                root.selectedModerationUserId
+                                = participantDelegate.participantUserId
                         }
 
                         Item {
@@ -2177,6 +2271,32 @@ Item {
                                 32, root.participants.length)
                         color: "#000000"
                         font.pixelSize: 11
+                    }
+                    Button {
+                        objectName: "palaceStatusSelectedUser"
+                        text: root.selectedModerationUserName().length > 0
+                            ? "Op: "
+                              + root.selectedModerationUserName()
+                            : "Op: select user"
+                        Accessible.name: text
+                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 136
+                        enabled: root.ready
+                        onClicked: root.userListOpen = true
+                    }
+                    Button {
+                        objectName: "palaceStatusBanUserButton"
+                        property string subjectUserId:
+                            root.selectedModerationUserId
+                        text: "Ban"
+                        Accessible.name: "Ban selected user"
+                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 42
+                        visible: root.canBanUser
+                        enabled: root.canBanUser
+                            && subjectUserId.length === 64
+                            && root.selectedModerationUser() !== null
+                        onClicked: root.gate4BanUser(subjectUserId)
                     }
                     // Classic suitcase / trash sit on the status strip.
                     Button {
@@ -2699,12 +2819,35 @@ Item {
                         onTextEdited: root.propDraftLayer = text
                     }
 
+                    RowLayout {
+                        spacing: 3
+
+                        Repeater {
+                            model: ["head", "body", "hand", "back"]
+
+                            delegate: Button {
+                                objectName:
+                                    "palaceAssetPropLayer-" + modelData
+                                required property string modelData
+                                text: modelData.slice(0, 1).toUpperCase()
+                                    + modelData.slice(1)
+                                font.pixelSize: 9
+                                Layout.preferredWidth: 46
+                                checkable: true
+                                checked:
+                                    root.propDraftLayer.trim() === modelData
+                                enabled: root.canManageAssets
+                                onClicked: root.propDraftLayer = modelData
+                            }
+                        }
+                    }
+
                     Text {
                         Layout.fillWidth: true
                         text: root.canManageAssets
                             ? (root.propDraftReady()
                                ? "Ready to assign"
-                               : "Enter metadata before assigning a prop")
+                               : "Pick layer, then click prop preview to set hot spot")
                             : root.assetAuthoringReadOnlyMessage()
                         color: root.canManageAssets
                             ? (root.propDraftReady()
@@ -2763,7 +2906,7 @@ Item {
                                         (backgroundGrid.width
                                          - backgroundFlow.spacing) / 2))
                                 width: cardWidth
-                                height: 242
+                                height: 334
                                 radius: 8
                                 color: "#292018"
                                 border.color: publicationState === "published"
@@ -2980,6 +3123,221 @@ Item {
                                                 root.assignRoomBackground(
                                                     "lounge",
                                                     backgroundCard.handle)
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        visible: backgroundCard
+                                            .publicationState
+                                            === "published"
+                                            && backgroundCard.handle.length
+                                            === 64
+
+                                        Rectangle {
+                                            id: propPlacementStage
+                                            objectName:
+                                                "palaceAssetPropPreview-"
+                                                + backgroundCard.handle
+                                            property real sourceWidth:
+                                                Math.max(
+                                                    1,
+                                                    Number(backgroundCard.asset
+                                                        .width))
+                                            property real sourceHeight:
+                                                Math.max(
+                                                    1,
+                                                    Number(backgroundCard.asset
+                                                        .height))
+                                            property real previewScale:
+                                                root.propPreviewScale(
+                                                    sourceWidth,
+                                                    sourceHeight)
+                                            property real targetX:
+                                                root.propPreviewTargetX(
+                                                    root.propDraftLayer,
+                                                    width)
+                                            property real targetY:
+                                                root.propPreviewTargetY(
+                                                    root.propDraftLayer,
+                                                    height)
+                                            width: 152
+                                            height: 86
+                                            radius: 5
+                                            color: "#18110c"
+                                            border.color:
+                                                root.propDraftReady()
+                                                ? "#7ecb78" : "#62513b"
+
+                                            Rectangle {
+                                                width: 34
+                                                height: 34
+                                                radius: 17
+                                                color: "#ffe566"
+                                                border.color: "#222222"
+                                                border.width: 2
+                                                anchors.horizontalCenter:
+                                                    parent.horizontalCenter
+                                                anchors.verticalCenter:
+                                                    parent.verticalCenter
+                                            }
+
+                                            Rectangle {
+                                                width: 26
+                                                height: 18
+                                                radius: 7
+                                                color: "#ffe566"
+                                                border.color: "#222222"
+                                                border.width: 2
+                                                anchors.horizontalCenter:
+                                                    parent.horizontalCenter
+                                                anchors.top:
+                                                    parent.verticalCenter
+                                                anchors.topMargin: 8
+                                            }
+
+                                            Item {
+                                                id: propPlacementPreview
+                                                width: propPlacementStage
+                                                    .sourceWidth
+                                                    * propPlacementStage
+                                                        .previewScale
+                                                height: propPlacementStage
+                                                    .sourceHeight
+                                                    * propPlacementStage
+                                                        .previewScale
+                                                x: propPlacementStage.targetX
+                                                    - root.clampAnchorToAsset(
+                                                        root.parsedAssetAnchor(
+                                                            root.propDraftAnchorX),
+                                                        propPlacementStage
+                                                            .sourceWidth)
+                                                      * propPlacementStage
+                                                            .previewScale
+                                                y: propPlacementStage.targetY
+                                                    - root.clampAnchorToAsset(
+                                                        root.parsedAssetAnchor(
+                                                            root.propDraftAnchorY),
+                                                        propPlacementStage
+                                                            .sourceHeight)
+                                                      * propPlacementStage
+                                                            .previewScale
+                                                z: root.propDraftLayer.trim()
+                                                    === "back" ? 0 : 2
+
+                                                Image {
+                                                    anchors.fill: parent
+                                                    source:
+                                                        "image://basecamp-verified/"
+                                                        + backgroundCard.handle
+                                                    fillMode: Image.Stretch
+                                                    smooth: true
+                                                    asynchronous: false
+                                                    opacity: root
+                                                        .propDraftReady()
+                                                        ? 0.95 : 0.72
+                                                }
+
+                                                Rectangle {
+                                                    width: 8
+                                                    height: 8
+                                                    radius: 4
+                                                    color: "#ffcc44"
+                                                    border.color: "#3b2c14"
+                                                    border.width: 1
+                                                    x: root.clampAnchorToAsset(
+                                                        root.parsedAssetAnchor(
+                                                            root.propDraftAnchorX),
+                                                        propPlacementStage
+                                                            .sourceWidth)
+                                                       * propPlacementStage
+                                                            .previewScale
+                                                       - width / 2
+                                                    y: root.clampAnchorToAsset(
+                                                        root.parsedAssetAnchor(
+                                                            root.propDraftAnchorY),
+                                                        propPlacementStage
+                                                            .sourceHeight)
+                                                       * propPlacementStage
+                                                            .previewScale
+                                                       - height / 2
+                                                }
+
+                                                MouseArea {
+                                                    objectName:
+                                                        "palaceAssetPropPreviewHit-"
+                                                        + backgroundCard.handle
+                                                    anchors.fill: parent
+                                                    enabled: root.canManageAssets
+                                                    cursorShape: enabled
+                                                        ? Qt.CrossCursor
+                                                        : Qt.ArrowCursor
+                                                    onClicked:
+                                                        root.setPropDraftAnchorFromPreview(
+                                                            mouse.x,
+                                                            mouse.y,
+                                                            propPlacementStage
+                                                                .previewScale,
+                                                            propPlacementStage
+                                                                .sourceWidth,
+                                                            propPlacementStage
+                                                                .sourceHeight)
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                width: 14
+                                                height: 14
+                                                radius: 7
+                                                color: "#ffcc44"
+                                                border.color: "#3b2c14"
+                                                border.width: 1
+                                                x: propPlacementStage.targetX
+                                                    - width / 2
+                                                y: propPlacementStage.targetY
+                                                    - height / 2
+                                                z: 3
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 3
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: "Prop preview"
+                                                color: "#fff2cf"
+                                                font.bold: true
+                                                font.pixelSize: 10
+                                            }
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                wrapMode: Text.Wrap
+                                                text: root.propDraftReady()
+                                                    ? "Hot spot follows yellow pin."
+                                                    : "Set prop ID/layer, then click prop to place hot spot."
+                                                color: "#c9b78e"
+                                                font.pixelSize: 9
+                                            }
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: "Anchor "
+                                                    + root.propDraftAnchorX
+                                                    + ","
+                                                    + root.propDraftAnchorY
+                                                    + " · "
+                                                    + (root.propDraftLayer
+                                                        .length > 0
+                                                       ? root.propDraftLayer
+                                                       : "layer?")
+                                                color: "#a7e3a0"
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                            }
                                         }
                                     }
                                 }
