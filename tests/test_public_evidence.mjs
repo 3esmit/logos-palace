@@ -1238,6 +1238,10 @@ async function fixture() {
       },
     },
   };
+  const finalRoomAssignments = {
+    atrium: selectedAssetSpecs[2].handle,
+    lounge: selectedAssetSpecs[1].handle,
+  };
   const authoredAssets = selectedAssetSpecs.map((asset, index) => {
     const cid = storageCidForSha256(asset.handle);
     const session = (index + 1).toString(16).padStart(32, "0");
@@ -1295,10 +1299,15 @@ async function fixture() {
         },
       },
       cid,
-      assignment: {
-        receipt: assignmentReceipt,
-        elapsedMs: index + 7,
-      },
+      assignment: (
+        asset.target.kind === "room-background"
+        && asset.handle !== finalRoomAssignments[asset.target.roomId]
+      )
+        ? null
+        : {
+            receipt: assignmentReceipt,
+            elapsedMs: index + 7,
+          },
     };
   });
   const selectedGraphBindings = selectedGraphTargets.map((binding) => {
@@ -1399,10 +1408,7 @@ async function fixture() {
       activePropProjection: { version: 1, available: false },
       catalogCount: selectedAssetSpecs.length,
       assignments: {
-        rooms: {
-          atrium: selectedAssetSpecs[2].handle,
-          lounge: selectedAssetSpecs[1].handle,
-        },
+        rooms: finalRoomAssignments,
         prop: null,
       },
     },
@@ -4244,6 +4250,36 @@ test("rejects shared Storage configuration in private mesh evidence", async () =
   });
 });
 
+test("accepts superseded room-background targets without assignment receipts", async () => {
+  await withFixture(async ({ runDir, output }) => {
+    const path = join(runDir, "gate3/gate3-report.json");
+    const gate3 = await readJson(path);
+    const superseded = gate3.assetAuthoring.assets.find(
+      (asset) => (
+        asset.target.kind === "room-background"
+        && asset.handle
+          !== gate3.assetAuthoring.assignments.rooms[asset.target.roomId]
+      ),
+    );
+    assert.equal(superseded?.assignment, null);
+    await buildPublicEvidence(runDir, output);
+
+    delete superseded.assignment;
+    await writeJson(path, gate3);
+    const gate4Path = join(runDir, "gate4/gate4-report.json");
+    const gate4 = await readJson(gate4Path);
+    gate4.gate3.assetAuthoringEvidence.evidenceSha256 = digest(
+      JSON.stringify(stableFixture({
+        assetAuthoring: gate3.assetAuthoring,
+        assetAuthoringScreenshot: gate3.assetAuthoringScreenshot,
+      })),
+    );
+    await writeJson(gate4Path, gate4);
+    await writeCompiled(runDir);
+    await buildPublicEvidence(runDir, output);
+  });
+});
+
 test("rejects changed raw admin asset authoring evidence", async () => {
   const mutations = [
     {
@@ -4276,6 +4312,33 @@ test("rejects changed raw admin asset authoring evidence", async () => {
       mutate: (gate3) => {
         gate3.assetAuthoring.assets[2].cid =
           gate3.assetAuthoring.assets[1].cid;
+      },
+    },
+    {
+      name: "final room assignment receipt",
+      mutate: (gate3) => {
+        const asset = gate3.assetAuthoring.assets.find(
+          ({ handle, target }) => (
+            target.kind === "room-background"
+            && handle === gate3.assetAuthoring.assignments.rooms[target.roomId]
+          ),
+        );
+        asset.assignment = null;
+      },
+    },
+    {
+      name: "superseded room assignment receipt",
+      mutate: (gate3) => {
+        const asset = gate3.assetAuthoring.assets.find(
+          ({ handle, target }) => (
+            target.kind === "room-background"
+            && handle !== gate3.assetAuthoring.assignments.rooms[target.roomId]
+          ),
+        );
+        asset.assignment = {
+          receipt: `ok;room=${asset.target.roomId};handle=${asset.handle}`,
+          elapsedMs: 1,
+        };
       },
     },
     {

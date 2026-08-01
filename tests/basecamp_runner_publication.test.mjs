@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -816,6 +818,75 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
     /cms-press\.logos\.co|\/uploads\/[^\s"']+\.(?:png|jpe?g)/i,
   );
   assert.doesNotMatch(publicSources, /\bcurated\b/i);
+});
+
+test("Gate 3 requires receipts only for final room-background owners", async () => {
+  const source = await readFile(runnerPath, "utf8");
+  const validatorStart = source.indexOf("      def exact_object_keys($expected):");
+  const validatorEnd = source.indexOf(
+    "\n\n      def valid_asset_authoring_evidence:",
+    validatorStart,
+  );
+  assert.notEqual(validatorStart, -1);
+  assert.notEqual(validatorEnd, -1);
+  const filter = `${source.slice(validatorStart, validatorEnd)}\n`
+    + "valid_room_assignment_selection(.assets; .assignments)";
+  const atriumCandidate = "a".repeat(64);
+  const atriumWinner = "b".repeat(64);
+  const loungeWinner = "c".repeat(64);
+  const fixture = {
+    assets: [
+      {
+        handle: atriumCandidate,
+        target: { kind: "room-background", roomId: "atrium" },
+        assignment: null,
+      },
+      {
+        handle: atriumWinner,
+        target: { kind: "room-background", roomId: "atrium" },
+        assignment: {
+          receipt: `ok;room=atrium;handle=${atriumWinner}`,
+          elapsedMs: 1,
+        },
+      },
+      {
+        handle: loungeWinner,
+        target: { kind: "room-background", roomId: "lounge" },
+        assignment: {
+          receipt: `ok;room=lounge;handle=${loungeWinner}`,
+          elapsedMs: 1,
+        },
+      },
+    ],
+    assignments: {
+      rooms: { atrium: atriumWinner, lounge: loungeWinner },
+    },
+  };
+  const accepts = (value) => {
+    const result = spawnSync(
+      resolve(process.env.PALACE_JQ ?? "/usr/bin/jq"),
+      ["-e", filter],
+      { input: `${JSON.stringify(value)}\n`, encoding: "utf8" },
+    );
+    if (result.error) throw result.error;
+    return result.status === 0;
+  };
+  assert.equal(accepts(fixture), true);
+
+  const omittedSupersededReceipt = structuredClone(fixture);
+  delete omittedSupersededReceipt.assets[0].assignment;
+  assert.equal(accepts(omittedSupersededReceipt), true);
+
+  const missingWinnerReceipt = structuredClone(fixture);
+  missingWinnerReceipt.assets[1].assignment = null;
+  assert.equal(accepts(missingWinnerReceipt), false);
+
+  const supersededReceipt = structuredClone(fixture);
+  supersededReceipt.assets[0].assignment = {
+    receipt: `ok;room=atrium;handle=${atriumCandidate}`,
+    elapsedMs: 1,
+  };
+  assert.equal(accepts(supersededReceipt), false);
 });
 
 test("Gate 4 provides the exact pidfd helper before worker startup", async () => {

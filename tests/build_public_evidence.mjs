@@ -3790,6 +3790,7 @@ function publicAssetAuthoringProjection(gate3, gate4) {
 
   const assets = source.assets.map((asset) => {
     const hasTarget = Object.hasOwn(asset, "target");
+    const hasAssignment = Object.hasOwn(asset, "assignment");
     const keys = [
       "assetId",
       "label",
@@ -3807,7 +3808,9 @@ function publicAssetAuthoringProjection(gate3, gate4) {
       "review",
       "publication",
       "cid",
-      ...(hasTarget ? ["target", "assignment"] : []),
+      ...(hasTarget
+        ? ["target", ...(hasAssignment ? ["assignment"] : [])]
+        : []),
     ];
     if (
       !exactKeys(asset, keys)
@@ -3900,7 +3903,13 @@ function publicAssetAuthoringProjection(gate3, gate4) {
     if (!validStorageCid(asset.cid)) {
       throw new Error("asset publication CID is invalid");
     }
-    if (hasTarget) {
+    if (
+      hasTarget
+      && (
+        asset.target.kind !== "room-background"
+        || (hasAssignment && asset.assignment !== null)
+      )
+    ) {
       validElapsedReceipt(
         asset.assignment,
         "asset assignment",
@@ -3948,6 +3957,17 @@ function publicAssetAuthoringProjection(gate3, gate4) {
     || !exactKeys(source.assignments, ["rooms", "prop"])
     || !exactKeys(source.assignments.rooms, ["atrium", "lounge"])
     || !exactJson(source.assignments.rooms, finalRoomAssignments)
+    || roomTargets.some((asset) => (
+      asset.handle === finalRoomAssignments[asset.target.roomId]
+        ? !Object.hasOwn(asset, "assignment") || asset.assignment === null
+        : Object.hasOwn(asset, "assignment") && asset.assignment !== null
+    ))
+    || ["atrium", "lounge"].some((roomId) => !roomTargets.some(
+      (asset) => (
+        asset.target.roomId === roomId
+        && asset.handle === finalRoomAssignments[roomId]
+      ),
+    ))
     || source.propStory !== (propTargets.length === 1
       ? "requested"
       : "not-requested")

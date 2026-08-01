@@ -1969,6 +1969,22 @@ gate_report_passes() {
           )
         );
 
+      def valid_asset_assignment_receipt:
+        (.assignment | valid_asset_invocation)
+          and (
+            (
+              .target.kind == "room-background"
+              and .assignment.receipt
+                == "ok;room=\(.target.roomId);handle=\(.handle)"
+            )
+            or
+            (
+              .target.kind == "prop-image"
+              and .assignment.receipt
+                == "ok;propId=\(.target.propId);handle=\(.handle);anchorX=\(.target.anchorX);anchorY=\(.target.anchorY);layer=\(.target.layer)"
+            )
+          );
+
       def valid_authored_asset:
         . as $asset
         | (
@@ -1993,7 +2009,9 @@ gate_report_passes() {
               "cid"
             ] + (
               if has("target")
-              then ["target", "assignment"]
+              then ["target"] + (
+                if has("assignment") then ["assignment"] else [] end
+              )
               else []
               end
             )) | sort
@@ -2084,24 +2102,39 @@ gate_report_passes() {
           and (
             if has("target")
             then (
-              (.assignment | valid_asset_invocation)
-              and (
-                (
-                  .target.kind == "room-background"
-                  and .assignment.receipt
-                    == "ok;room=\(.target.roomId);handle=\(.handle)"
-                )
-                or
-                (
-                  .target.kind == "prop-image"
-                  and .assignment.receipt
-                    == "ok;propId=\(.target.propId);handle=\(.handle);anchorX=\(.target.anchorX);anchorY=\(.target.anchorY);layer=\(.target.layer)"
-                )
-              )
+              if .target.kind == "room-background"
+                and ((has("assignment") | not) or .assignment == null)
+              then true
+              else valid_asset_assignment_receipt
+              end
             )
             else true
             end
           );
+
+      def valid_room_assignment_selection($assets; $assignments):
+        all(
+          $assets[];
+          if .target.kind == "room-background"
+          then (
+            if .handle == $assignments.rooms[.target.roomId]
+            then valid_asset_assignment_receipt
+            else ((has("assignment") | not) or .assignment == null)
+            end
+          )
+          else true
+          end
+        )
+        and all(
+          ["atrium", "lounge"][];
+          . as $room
+          | any(
+              $assets[];
+              .target.kind == "room-background"
+                and .target.roomId == $room
+                and .handle == $assignments.rooms[$room]
+            )
+        );
 
       def valid_asset_authoring_evidence:
         . as $report
@@ -2199,6 +2232,12 @@ gate_report_passes() {
               end
             )
           ) == $authoring.assignments.rooms
+          and (
+            valid_room_assignment_selection(
+              $authoring.assets;
+              $authoring.assignments
+            )
+          )
           and (
             if $authoring.propStory == "requested"
             then (

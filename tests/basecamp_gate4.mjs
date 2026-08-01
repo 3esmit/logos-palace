@@ -1372,7 +1372,9 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
     ];
     const expectedKeys = !Object.hasOwn(actual, "target")
       ? baseKeys
-      : [...baseKeys, "target", "assignment"];
+      : Object.hasOwn(actual, "assignment")
+        ? [...baseKeys, "target", "assignment"]
+        : [...baseKeys, "target"];
     const beginFields = statusFields(actual.begin?.receipt);
     const commitReceipt =
       `ok;handle=${actual.handle};width=${actual.width};`
@@ -1497,34 +1499,6 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
         `Gate 3 asset byte total is invalid: ${actual.assetId}`,
       );
     }
-    if (
-      !Object.hasOwn(actual, "target")
-        ? Object.hasOwn(actual, "assignment")
-        : (
-            actual.target.kind === "room-background"
-              ? !validElapsedEvidence(
-                  actual.assignment,
-                  (receipt) =>
-                    receipt
-                      === `ok;room=${actual.target.roomId};`
-                        + `handle=${actual.handle}`,
-                )
-              : !validElapsedEvidence(
-                  actual.assignment,
-                  (receipt) =>
-                    receipt
-                      === `ok;propId=${actual.target.propId};`
-                        + `handle=${actual.handle};`
-                        + `anchorX=${actual.target.anchorX};`
-                        + `anchorY=${actual.target.anchorY};`
-                        + `layer=${actual.target.layer}`,
-                )
-          )
-    ) {
-      throw new Error(
-        `Gate 3 asset assignment is invalid: ${actual.assetId}`,
-      );
-    }
     byAssetId[actual.assetId] = actual;
   }
   if (
@@ -1535,6 +1509,54 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
       !== authoring.selectedAssetCount
   ) {
     throw new Error("Gate 3 asset fixtures are not unique");
+  }
+
+  const finalRoomCandidates = {};
+  for (const asset of authoring.assets) {
+    if (asset.target?.kind === "room-background") {
+      finalRoomCandidates[asset.target.roomId] = asset;
+    }
+  }
+  for (const actual of authoring.assets) {
+    if (!Object.hasOwn(actual, "target")) {
+      if (Object.hasOwn(actual, "assignment")) {
+        throw new Error(
+          `Gate 3 asset assignment is invalid: ${actual.assetId}`,
+        );
+      }
+      continue;
+    }
+    const supersededRoomCandidate =
+      actual.target.kind === "room-background"
+      && finalRoomCandidates[actual.target.roomId] !== actual;
+    const assignmentMissingOrNull =
+      !Object.hasOwn(actual, "assignment") || actual.assignment === null;
+    const assignmentIsValid = actual.target.kind === "room-background"
+      ? validElapsedEvidence(
+          actual.assignment,
+          (receipt) =>
+            receipt
+              === `ok;room=${actual.target.roomId};`
+                + `handle=${actual.handle}`,
+        )
+      : validElapsedEvidence(
+          actual.assignment,
+          (receipt) =>
+            receipt
+              === `ok;propId=${actual.target.propId};`
+                + `handle=${actual.handle};`
+                + `anchorX=${actual.target.anchorX};`
+                + `anchorY=${actual.target.anchorY};`
+                + `layer=${actual.target.layer}`,
+        );
+    if (
+      !(supersededRoomCandidate && assignmentMissingOrNull)
+      && !assignmentIsValid
+    ) {
+      throw new Error(
+        `Gate 3 asset assignment is invalid: ${actual.assetId}`,
+      );
+    }
   }
 
   const assignedFixtures = authoring.assets.filter(
