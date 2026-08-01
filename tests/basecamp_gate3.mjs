@@ -44,7 +44,9 @@ import {
   loadGate3AssetInputs,
 } from "./basecamp_gate3_asset_inputs.mjs";
 import {
+  currentStorageStateExpectation,
   currentLezStateExpectation,
+  isStartedStorageState,
   isCurrentLezState,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
@@ -1016,8 +1018,19 @@ async function startStorage(worker, config) {
     worker,
     "gate3StartStorage",
     [config],
-    { prefix: "ok;" },
+    currentStorageStateExpectation(),
   );
+  if (start.receipt.startsWith("rejected=")) {
+    throw new Error(`storage start ${worker.label} rejected: ${start.receipt}`);
+  }
+  if (
+    start.receipt.length === 0
+    && !isStartedStorageState(start.storageStatus)
+  ) {
+    throw new Error(
+      `storage start ${worker.label} returned empty receipt without live state`,
+    );
+  }
   const running = await pollReceipt({
     worker,
     name: "gate3StorageStatus",

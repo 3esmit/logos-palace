@@ -4,9 +4,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  acceptsStorageStartupObservation,
   acceptsLezStartupObservation,
+  currentStorageStateExpectation,
   currentLezStateExpectation,
   hasNonEmptyReceipt,
+  isStartedStorageState,
   isCurrentLezState,
   lezStartupTimeoutMs,
   ordinaryInvocationTimeoutMs,
@@ -73,6 +76,48 @@ test("LEZ startup accepts an action receipt or current visible state", async () 
   assert.match(worker, /acceptsLezStartupObservation\(/);
   assert.match(gate3, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
   assert.match(gate4, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
+});
+
+test("storage startup accepts an action receipt or live storage state", async () => {
+  const starting =
+    "storage=starting;pending=0;callbacks=0;callback_registration=ready;"
+    + "reconciliation_required=0;catalog=idle;catalog_verified=0;"
+    + "retention_round=0;retained=0";
+  const running =
+    "storage=running;pending=0;callbacks=0;callback_registration=ready;"
+    + "reconciliation_required=0;catalog=idle;catalog_verified=0;"
+    + "retention_round=0;retained=0";
+  assert.equal(isStartedStorageState(starting), true);
+  assert.equal(isStartedStorageState(running), true);
+  assert.equal(
+    isStartedStorageState(
+      starting.replace("callback_registration=ready", "callback_registration=failed"),
+    ),
+    false,
+  );
+  assert.equal(
+    acceptsStorageStartupObservation("", starting),
+    true,
+  );
+  assert.equal(
+    acceptsStorageStartupObservation("", "storage=offline;callback_registration=ready"),
+    false,
+  );
+  assert.equal(
+    acceptsStorageStartupObservation("rejected=storage-session-config", ""),
+    true,
+  );
+  assert.deepEqual(currentStorageStateExpectation(), {
+    startedStorageState: true,
+  });
+
+  const [worker, gate3] = await Promise.all([
+    readFile(workerPath, "utf8"),
+    readFile(gate3Path, "utf8"),
+  ]);
+  assert.match(worker, /expected\.startedStorageState !== undefined/);
+  assert.match(worker, /acceptsStorageStartupObservation\(/);
+  assert.match(gate3, /"gate3StartStorage",[\s\S]{0,180}currentStorageStateExpectation/);
 });
 
 test("Gate 4 invocations are authorized by the Palace worker", async () => {

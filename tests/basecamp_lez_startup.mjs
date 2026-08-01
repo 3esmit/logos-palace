@@ -37,6 +37,26 @@ export function currentLezStateExpectation(programId) {
   return Object.freeze({ currentLezState: String(programId) });
 }
 
+export function isStartedStorageState(receipt) {
+  const fields = statusFields(receipt);
+  return [
+    "starting",
+    "running",
+    "recovering",
+    "reconciliation_required",
+  ].includes(fields.storage)
+    && fields.callback_registration === "ready"
+    && ["0", "1"].includes(fields.reconciliation_required);
+}
+
+export function acceptsStorageStartupObservation(receipt, state) {
+  return hasNonEmptyReceipt(receipt) || isStartedStorageState(state);
+}
+
+export function currentStorageStateExpectation() {
+  return Object.freeze({ startedStorageState: true });
+}
+
 export function workerInvocationTimeoutLimit(name) {
   return name === "gate4StartLez"
     ? lezStartupTimeoutMs

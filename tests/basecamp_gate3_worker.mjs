@@ -17,6 +17,7 @@ import {
   palaceFrameTimingContract,
 } from "./basecamp_frame_timing.mjs";
 import {
+  acceptsStorageStartupObservation,
   acceptsLezStartupObservation,
   workerInvocationTimeoutLimit,
 } from "./basecamp_lez_startup.mjs";
@@ -1427,6 +1428,15 @@ function receiptMatches(receipt, expected, properties) {
     return false;
   }
   if (
+    expected.startedStorageState !== undefined
+    && !acceptsStorageStartupObservation(
+      receipt,
+      String(properties.storageStatus ?? ""),
+    )
+  ) {
+    return false;
+  }
+  if (
     expected.exact !== undefined &&
     receipt !== String(expected.exact)
   ) {
@@ -1479,6 +1489,7 @@ async function invoke(params) {
   const deadline = Date.now() + timeout;
   let receipt = "";
   let lezState = "";
+  let storageStatus = "";
   let sequence = beforeSequence;
   while (Date.now() < deadline) {
     if (shuttingDown) {
@@ -1487,6 +1498,7 @@ async function invoke(params) {
     const properties = await rootProperties();
     receipt = String(properties[receiptProperty] ?? "");
     lezState = String(properties.gate4LezState ?? "");
+    storageStatus = String(properties.storageStatus ?? "");
     sequence = Number(properties.invocationSequence ?? -1);
     if (
       receiptMatches(receipt, params.expect, properties) &&
@@ -1498,6 +1510,7 @@ async function invoke(params) {
         evaluated,
         receipt,
         lezState,
+        storageStatus,
         invocationSequence: sequence,
         elapsedMs: Math.round(performance.now() - startedAt),
         startedAtUnixMs,
@@ -1507,7 +1520,7 @@ async function invoke(params) {
     await sleep(50);
   }
   throw new Error(
-    `${name} receipt timeout: before=${JSON.stringify(before)} after=${JSON.stringify(receipt)} state=${JSON.stringify(lezState)} sequence=${beforeSequence}->${sequence}`,
+    `${name} receipt timeout: before=${JSON.stringify(before)} after=${JSON.stringify(receipt)} state=${JSON.stringify(lezState)} storage=${JSON.stringify(storageStatus)} sequence=${beforeSequence}->${sequence}`,
   );
 }
 
