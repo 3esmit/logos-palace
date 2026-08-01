@@ -553,19 +553,33 @@ async function materializeStorageBlocksBetween(usersRoot, fromLabel, toLabel) {
   const toBlocks = join(toRepo, "blocks");
   await mkdir(toBlocks, { recursive: true });
   await cp(fromBlocks, toBlocks, { recursive: true, force: true });
-  // Copy meta if present (CID indexes).
-  for (const name of ["meta", "key"]) {
+  // Copy CID indexes / manifests so exists() and local downloads resolve.
+  const copied = ["blocks"];
+  for (const name of ["manifests", "meta", "key", "tmp"]) {
     const src = join(fromRepo, name);
     const dst = join(toRepo, name);
     try {
       const st = await stat(src);
-      if (st.isDirectory()) {
-        await mkdir(dst, { recursive: true });
+      if (st.isDirectory() || st.isFile()) {
         await cp(src, dst, { recursive: true, force: true });
+        copied.push(name);
       }
     } catch {
       // optional
     }
+  }
+  // Also mirror provider records when present (helps native index discovery).
+  try {
+    const fromProviders = join(fromRepo, "..", "dht", "providers");
+    const toProviders = join(toRepo, "..", "dht", "providers");
+    const st = await stat(fromProviders);
+    if (st.isDirectory()) {
+      await mkdir(toProviders, { recursive: true });
+      await cp(fromProviders, toProviders, { recursive: true, force: true });
+      copied.push("dht/providers");
+    }
+  } catch {
+    // optional
   }
   return {
     fromRepo,
@@ -573,6 +587,7 @@ async function materializeStorageBlocksBetween(usersRoot, fromLabel, toLabel) {
     fromLabel,
     toLabel,
     mode: "co-located-block-copy",
+    copied,
   };
 }
 
@@ -2891,6 +2906,14 @@ try {
       "a",
       "b",
     );
+    await invoke(
+      provider,
+      "gate3MarkStorageMaterialized",
+      [],
+      { prefix: "ok;materialized=1" },
+      false,
+      30_000,
+    );
     await checkpointReport();
   }
   const providerBFetch = await fetchBundle(provider, published.catalog);
@@ -3001,6 +3024,14 @@ try {
     );
     report.storageBlockMaterializationC =
       await materializeStorageBlocksBetween(usersDir, "b", "c");
+    await invoke(
+      coldClient,
+      "gate3MarkStorageMaterialized",
+      [],
+      { prefix: "ok;materialized=1" },
+      false,
+      30_000,
+    );
     await checkpointReport();
   }
   const coldCFetch = await fetchBundle(coldClient, published.catalog);

@@ -330,6 +330,9 @@ public:
     std::string connectStoragePeer(
         const std::string& peerId,
         const std::string& addressesJson);
+    // Harness co-located assist: after materializing creator blocks into the
+    // peer repo, force local verification for network MVP fetches.
+    std::string markStorageMaterialized();
     std::string fetchPngDerivative(const std::string& sourceCid,
                                    const std::string& derivativeCid,
                                    std::uint64_t byteLength,
@@ -815,6 +818,7 @@ private:
     // gate3FetchBundle receipt can return before downloadToUrlV2 blocks on
     // storage_download_manifest / GetProviders.
     bool m_storageMvpFetchDispatchPending = false;
+    bool m_storageMvpColocatedMaterialized = false;
     bool m_storageCallbacksRegistered = false;
     bool m_storageCallbackRegistrationAttempted = false;
 };

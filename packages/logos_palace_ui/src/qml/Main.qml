@@ -1166,6 +1166,12 @@ Item {
             null)
     }
 
+    function gate3MarkStorageMaterialized() {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(backend.markStorageMaterialized(), null)
+    }
+
     function gate4StartLez(password) {
         if (!ready || !backend)
             return rejectedNotReady()

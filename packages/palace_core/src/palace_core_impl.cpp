@@ -5017,6 +5017,14 @@ std::string PalaceCoreImpl::connectStoragePeer(
     return "ok;connect=sent;peers=" + std::to_string(addresses.size());
 }
 
+std::string PalaceCoreImpl::markStorageMaterialized()
+{
+    if (!isContextReady() || !m_storageSession.running())
+        return "rejected=storage-not-running";
+    m_storageMvpColocatedMaterialized = true;
+    return "ok;materialized=1";
+}
+
 std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
                                                 const std::string& derivativeCid,
                                                 std::uint64_t byteLength,
@@ -8653,31 +8661,30 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
         storageDownloadPath(operation.operationId);
     if (path.empty())
         return false;
-    // Peer network path: storage_module.fetch() pulls blocks into the local
-    // repo, then localOnly verification completes the catalog object.
-    // downloadToUrlV2(local=false) accepts then hangs (network-fetch-timeout)
-    // even when DHT tablePeers already list the provider, so do not use it.
+    // Peer network path: never use downloadToUrlV2(local=false) — it hangs
+    // after accept on co-located meshes (network-fetch-timeout). Prefer local
+    // verification when blocks were materialized or fetch()/exists succeeds.
     bool useLocalVerification = localOnly;
     if (!localOnly
         && purpose == StorageMvpTransferPurpose::NetworkFetch) {
-        (void)modules().storage_module.fetch(operation.cid);
-        // Short probe per status poll; outer poll/remesh retries.
-        for (int probe = 0; probe < 6; ++probe) {
-            const StdLogosResult exists =
-                modules().storage_module.exists(operation.cid);
-            if (exists.success
-                && exists.value.is_boolean()
-                && exists.value.get<bool>()) {
-                useLocalVerification = true;
-                break;
+        if (m_storageMvpColocatedMaterialized) {
+            useLocalVerification = true;
+        } else {
+            (void)modules().storage_module.fetch(operation.cid);
+            for (int probe = 0; probe < 6; ++probe) {
+                const StdLogosResult exists =
+                    modules().storage_module.exists(operation.cid);
+                if (exists.success
+                    && exists.value.is_boolean()
+                    && exists.value.get<bool>()) {
+                    useLocalVerification = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
-        if (!useLocalVerification) {
-            // Leave the object unstarted so a later status poll retries after
-            // mesh remesh; avoid hanging downloadToUrlV2(local=false).
+        if (!useLocalVerification)
             return false;
-        }
     }
     const palace::StorageModuleSessionTransition dispatched =
         useLocalVerification

@@ -618,6 +618,15 @@ QString LogosPalaceUiBackend::connectStoragePeer(
     return rememberStorageReceipt(result);
 }
 
+QString LogosPalaceUiBackend::markStorageMaterialized()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.markStorageMaterialized();
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
 QString LogosPalaceUiBackend::startLez(QString password)
 {
     if (!isContextReady())

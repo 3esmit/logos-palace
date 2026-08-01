@@ -1392,6 +1392,7 @@ const allowedFunctions = new Set([
   "gate3StorageStatus",
   "gate3StoragePeerEndpoint",
   "gate3ConnectStoragePeer",
+  "gate3MarkStorageMaterialized",
   "gate4StartLez",
   "gate4CreateIdentity",
   "gate4OpenPalace",

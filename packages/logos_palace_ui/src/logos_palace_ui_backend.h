@@ -68,6 +68,7 @@ public:
     QString storageSessionStatus() override;
     QString storagePeerEndpoint() override;
     QString connectStoragePeer(QString peerId, QString addressesJson) override;
+    QString markStorageMaterialized() override;
     QString startLez(QString password) override;
     QString createIdentity(QString displayName) override;
     QString openPalace(QString palaceUri) override;
