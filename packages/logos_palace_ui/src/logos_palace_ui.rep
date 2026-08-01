@@ -15,6 +15,7 @@ class LogosPalaceUi
     SLOT(QString removeProp(QString propId))
     SLOT(QString refreshPresence())
     SLOT(QString startStorage(QString nodeConfig))
+    SLOT(QString connectStorage())
     SLOT(QString fetchPngDerivative(QString sourceCid, QString derivativeCid, qint64 byteLength, QString contentSha256, qint64 width, qint64 height))
     SLOT(QString assetStatus(QString derivativeCid))
     SLOT(QString publishVerifiedPng(QString handle))

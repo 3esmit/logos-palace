@@ -594,7 +594,7 @@ Item {
         return invocationError
     }
 
-    function watchAction(pendingCall, onAccepted) {
+    function watchAction(pendingCall, onAccepted, onRejected) {
         logos.watch(pendingCall, function (value) {
             var receipt = String(value)
             // Surface terminal rejections through the local sequence so
@@ -603,6 +603,8 @@ Item {
             if (receipt.indexOf("rejected=") === 0) {
                 invocationError = receipt
                 watchedActionReceipt = ""
+                if (onRejected)
+                    onRejected(receipt)
             } else {
                 invocationError = ""
                 watchedActionReceipt = receipt
@@ -613,6 +615,8 @@ Item {
         }, function (error) {
             invocationError = "rejected=ui-remote-call;" + String(error)
             watchedActionReceipt = ""
+            if (onRejected)
+                onRejected(invocationError)
             ++invocationSequence
         })
         return "pending"
@@ -736,6 +740,20 @@ Item {
         if (!ready || !backend)
             return rejectedNotReady()
         return watchAction(backend.startStorage(String(configJson)), null)
+    }
+
+    // Product flow: the user starts a Storage node in Logos Control, then
+    // explicitly attaches this Palace session. No Storage configuration is
+    // embedded in Palace or inferred from the room setup.
+    function connectStorage() {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(backend.connectStorage(), null, function (receipt) {
+            if (String(receipt).indexOf("storage=stopped") >= 0) {
+                invocationError =
+                    "Storage is not running. Start it in Logos Control, then connect it here."
+            }
+        })
     }
 
     function gate3FetchPng(sourceCid, derivativeCid, byteLength,
@@ -2749,6 +2767,33 @@ Item {
                             color: "#c9b78e"
                             font.pixelSize: 11
                         }
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.encodedStatusValue(
+                                root.storageStatus, "storage")
+                                === "running"
+                                ? "Storage connected"
+                                : "Start Storage in Logos Control, then connect it here."
+                            color: root.encodedStatusValue(
+                                root.storageStatus, "storage")
+                                === "running" ? "#a7e3a0" : "#e2c37b"
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Button {
+                        objectName: "palaceConnectStorage"
+                        text: root.encodedStatusValue(
+                            root.storageStatus, "storage") === "running"
+                            ? "Storage connected" : "Connect Storage"
+                        enabled: root.ready && root.canManageAssets
+                            && root.encodedStatusValue(
+                                root.storageStatus, "storage")
+                                !== "running"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Start Storage in Logos Control first. Palace only connects to an already running node."
+                        onClicked: root.connectStorage()
                     }
 
                     Button {

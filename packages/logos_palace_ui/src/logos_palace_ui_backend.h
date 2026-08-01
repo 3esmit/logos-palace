@@ -30,6 +30,7 @@ public:
     QString removeProp(QString propId) override;
     QString refreshPresence() override;
     QString startStorage(QString nodeConfig) override;
+    QString connectStorage() override;
     QString fetchPngDerivative(QString sourceCid,
                                QString derivativeCid,
                                qint64 byteLength,

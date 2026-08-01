@@ -357,6 +357,15 @@ QString LogosPalaceUiBackend::startStorage(QString nodeConfig)
     return rememberStorageReceipt(result);
 }
 
+QString LogosPalaceUiBackend::connectStorage()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.connectStorage();
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
 QString LogosPalaceUiBackend::fetchPngDerivative(QString sourceCid,
                                                   QString derivativeCid,
                                                   qint64 byteLength,

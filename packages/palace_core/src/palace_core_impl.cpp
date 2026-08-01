@@ -4655,6 +4655,55 @@ std::string PalaceCoreImpl::startStorage(const std::string& nodeConfig)
     return "ok;" + storageSessionStatus();
 }
 
+std::string PalaceCoreImpl::connectStorage()
+{
+    drainStorageCallbacks();
+    if (!isContextReady() || instancePersistencePath().empty())
+        return "rejected=storage-not-ready";
+    if (!m_storageCallbacksRegistered)
+        return "rejected=storage-callback-registration";
+    if (!m_deliveryIdentity.valid()
+        || !isLowerHexAccountId(m_deliveryIdentity.accountId())) {
+        return "rejected=storage-holder-identity-unavailable";
+    }
+
+    const std::string holderAccountId = m_deliveryIdentity.accountId();
+    if (!m_storageSession.hasConfiguration()) {
+        palace::StorageModuleSessionConfigV1 sessionConfig;
+        sessionConfig.externallyManaged = true;
+        sessionConfig.operationIdPrefix =
+            "palace-storage-attach-"
+            + std::to_string(
+                std::chrono::steady_clock::now()
+                    .time_since_epoch()
+                    .count());
+        if (!m_storageSession.configure(sessionConfig))
+            return "rejected=storage-attach-session-config";
+        palace::StorageCatalogSessionConfigV3 catalogConfig;
+        catalogConfig.localHolderAccountId = holderAccountId;
+        if (!m_storageCatalog.configure(catalogConfig))
+            return "rejected=storage-attach-catalog-config";
+        m_storageInitializationConfig.clear();
+        m_storageHolderAccountId = holderAccountId;
+    } else if (!m_storageInitializationConfig.empty()) {
+        return "rejected=storage-managed-by-palace";
+    } else if (m_storageHolderAccountId != holderAccountId) {
+        return "rejected=storage-holder-changed";
+    }
+
+    const palace::StorageModuleSessionTransition attached =
+        m_storageSession.start();
+    if (!attached.accepted)
+        return "rejected=storage-attach;" + attached.reason;
+    executeStorageCommands(attached.commands);
+    if (!m_storageSession.running()) {
+        return "rejected=storage-attach;"
+            + storageSessionStatus();
+    }
+    startRestoredStorageMvpFetchIfReady();
+    return "ok;storage=connected;" + storageSessionStatus();
+}
+
 std::string PalaceCoreImpl::storageSessionStatus()
 {
     drainStorageCallbacks();

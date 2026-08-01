@@ -379,6 +379,10 @@ public:
     std::string removeProp(const std::string& propId);
     std::string refreshPresence();
     std::string startStorage(const std::string& nodeConfig);
+    // Attach to a node the user has already started through Logos Control.
+    // This never accepts or stores a node configuration and never changes the
+    // external node lifecycle.
+    std::string connectStorage();
     std::string storageSessionStatus();
     // Multi-node mesh: peerId + SPR after Storage is running. Gate 3 uses SPR
     // as bootstrap-node for peer B/C and peerId for explicit loopback dials.
