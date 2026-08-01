@@ -116,8 +116,16 @@ bool validPlan(const PalaceLezTransactionPlanV3& plan)
 bool validIntent(const PalaceLezSubmissionIntentV1& intent)
 {
     std::uint64_t actionId = 0U;
-    if (!PalaceLezCodec::parseOrderedActionId(
-            intent.actionId, actionId)
+    const PalaceLezWireInstruction decoded =
+        PalaceLezCodec::decodeInstruction(intent.plan.instructionWords);
+    const bool initializesPalace =
+        decoded.accepted
+        && std::holds_alternative<PalaceLezInitializeV3>(
+            decoded.instruction.payload);
+    if ((intent.actionId == "0"
+            ? !initializesPalace
+            : !PalaceLezCodec::parseOrderedActionId(
+                intent.actionId, actionId))
         || !validPlan(intent.plan)
         || !isLowerHex64(intent.expectedRootDataSha256Hex)) {
         return false;

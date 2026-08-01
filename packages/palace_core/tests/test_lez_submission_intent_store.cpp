@@ -72,6 +72,42 @@ palace::PalaceLezSubmissionIntentV1 intent()
     return value;
 }
 
+palace::PalaceLezSubmissionIntentV1 initializeIntent()
+{
+    palace::PalaceLezInitializeV3 initialize;
+    initialize.palaceId.fill(0x10U);
+    initialize.title = "Palace";
+    initialize.activeManifestCid = "bafypalacemanifest";
+    initialize.ownerProfile.displayName = "Alice";
+    initialize.ownerProfile.deliveryKey.fill(0x22U);
+    initialize.ownerProfile.keyEpoch = 1U;
+    initialize.ownerGrantId.fill(0x11U);
+    initialize.entryRoomId.fill(0x31U);
+    initialize.entryRoom = {
+        "Atrium",
+        "bafyatrium",
+        "bafyatriumscript",
+        palace::PalaceLezVmProfileV3::IptScraeMvpV1,
+    };
+    initialize.secondaryRoomId.fill(0x32U);
+    initialize.secondaryRoom = {
+        "Lounge",
+        "bafylounge",
+        "bafyloungescript",
+        palace::PalaceLezVmProfileV3::IptScraeMvpV1,
+    };
+
+    palace::PalaceLezSubmissionIntentV1 value;
+    value.actionId = "0";
+    value.minimumFinalizedBlockExclusive = 42U;
+    value.plan = palace::PalaceLezCodec::buildTransaction(
+        kProgramIdHex,
+        kSignerHex,
+        palace::PalaceLezInstructionV3{initialize});
+    value.expectedRootDataSha256Hex = std::string(64U, 'a');
+    return value;
+}
+
 } // namespace
 
 LOGOS_TEST(lez_submission_intent_store_persists_exact_write_ahead_plan)
@@ -106,6 +142,49 @@ LOGOS_TEST(lez_submission_intent_store_persists_exact_write_ahead_plan)
     LOGOS_ASSERT_TRUE(
         store.save(restored)
         == palace::PalaceLezSubmissionIntentStoreStatus::Saved);
+}
+
+LOGOS_TEST(lez_submission_intent_store_persists_initialize_action_zero)
+{
+    TemporaryDirectory root("palace-lez-submission-intent-initialize");
+    palace::PalaceLezSubmissionIntentStore store(
+        root.path().string());
+
+    palace::PalaceLezSubmissionIntentV1 prepared = initializeIntent();
+    LOGOS_ASSERT_TRUE(prepared.plan.accepted);
+    LOGOS_ASSERT_TRUE(
+        store.save(prepared)
+        == palace::PalaceLezSubmissionIntentStoreStatus::Saved);
+
+    palace::PalaceLezSubmissionIntentV1 restored;
+    LOGOS_ASSERT_TRUE(
+        store.load(restored)
+        == palace::PalaceLezSubmissionIntentStoreStatus::Loaded);
+    LOGOS_ASSERT_TRUE(
+        palace::samePalaceLezSubmissionIntent(prepared, restored));
+
+    restored.phase = palace::PalaceLezSubmissionIntentPhase::
+        MayHaveBeenSubmitted;
+    LOGOS_ASSERT_TRUE(
+        store.save(restored)
+        == palace::PalaceLezSubmissionIntentStoreStatus::Saved);
+    restored.phase = palace::PalaceLezSubmissionIntentPhase::Committed;
+    restored.transactionHash = std::string(64U, 'b');
+    LOGOS_ASSERT_TRUE(
+        store.save(restored)
+        == palace::PalaceLezSubmissionIntentStoreStatus::Saved);
+}
+
+LOGOS_TEST(lez_submission_intent_store_rejects_zero_for_noninitialize)
+{
+    TemporaryDirectory root("palace-lez-submission-intent-zero");
+    palace::PalaceLezSubmissionIntentStore store(
+        root.path().string());
+    palace::PalaceLezSubmissionIntentV1 invalid = intent();
+    invalid.actionId = "0";
+    LOGOS_ASSERT_TRUE(
+        store.save(invalid)
+        == palace::PalaceLezSubmissionIntentStoreStatus::InvalidArgument);
 }
 
 LOGOS_TEST(lez_submission_intent_store_rejects_plan_drift_after_send_boundary)
