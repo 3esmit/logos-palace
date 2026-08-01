@@ -2102,7 +2102,7 @@ try {
     );
     rebuildReceipts.push({ label, name, args, receipt: rebuilt.receipt });
   }
-  const postRestartExpected = buildGate2PostRestartProjection({
+  const postRestartTransientExpected = buildGate2PostRestartProjection({
     beforeRestart: actionExpected,
     restartSpeechByUser: restartMessages,
     rebuiltMotionByUser: Object.fromEntries(
@@ -2112,6 +2112,17 @@ try {
       ]),
     ),
   });
+  // Motion envelopes expire after 10 seconds. The long post-restart
+  // settlement boundary proves durable replay, so it must assert only the
+  // rebuilt speech/presence state and not a transient avatar position.
+  const postRestartExpected = Object.fromEntries(
+    Object.entries(postRestartTransientExpected).map(
+      ([userId, participant]) => {
+        const { x: _x, y: _y, ...durableParticipant } = participant;
+        return [userId, durableParticipant];
+      },
+    ),
+  );
   const postRestartSnapshots = Object.fromEntries(
     await Promise.all(
       labels.map(async (label) => [
