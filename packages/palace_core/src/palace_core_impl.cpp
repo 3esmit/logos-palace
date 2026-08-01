@@ -5659,6 +5659,41 @@ std::string PalaceCoreImpl::verifyMvpStorageRetention()
 
     ++m_storageRetentionRound;
     m_storageMvpRetainedObjects.clear();
+    // Co-located materialize: never re-enter downloadToUrlV2 for retention.
+    // BOnEa1w7 hung gate3VerifyRetention after verified=8 because local
+    // verification downloads freeze after write. Re-check exists (above) plus
+    // in-memory/materialized digests that already passed peer fetch.
+    if (m_storageMvpColocatedMaterialized) {
+        for (const palace::PalaceStorageMvpArtifactV1& artifact
+             : artifacts) {
+            std::string bytes = artifact.bytes;
+            if (bytes.empty()
+                && !loadColocatedMaterializedObjectBytes(
+                    artifact, bytes)) {
+                m_storageMvpFailures[artifact.objectId] =
+                    "local-retention-materialized-missing";
+                m_storageMvpMode = "degraded";
+                return "rejected=storage-retention-materialized";
+            }
+            if (bytes.size()
+                    != artifact.specification.byteLength
+                || palace::crypto::sha256Hex(bytes)
+                    != artifact.specification.contentSha256
+                || (!artifact.bytes.empty()
+                    && bytes != artifact.bytes)) {
+                m_storageMvpFailures[artifact.objectId] =
+                    "local-retention-verification-failed";
+                m_storageMvpMode = "degraded";
+                return "rejected=storage-retention-bytes";
+            }
+            m_storageMvpRetainedObjects.insert(artifact.objectId);
+        }
+        if (m_storageMvpRetainedObjects.size()
+            == m_storageMvpBundle.artifactCount()) {
+            m_storageMvpMode = "retained";
+        }
+        return "ok;" + mvpStorageBundleStatus();
+    }
     m_storageRetentionInProgress = true;
     std::uint64_t sequence = 0U;
     for (const palace::PalaceStorageMvpArtifactV1& artifact
