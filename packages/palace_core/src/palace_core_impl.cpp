@@ -5451,7 +5451,7 @@ std::string PalaceCoreImpl::mvpStorageBundleStatus()
                 continue;
             }
             if (now - entry.second.startedAt
-                < std::chrono::seconds(45)) {
+                < std::chrono::seconds(20)) {
                 continue;
             }
             timedOut.push_back(entry.first);
@@ -5468,7 +5468,7 @@ std::string PalaceCoreImpl::mvpStorageBundleStatus()
             // Re-open the catalog object for another fetch attempt.
             const palace::StorageCatalogTransition fetch =
                 m_storageCatalog.beginLocalFetch(transfer.objectId);
-            if (transfer.attempt < 5U
+            if (transfer.attempt < 8U
                 && fetch.accepted
                 && fetch.operation.has_value()
                 && startStorageMvpCatalogDownload(
@@ -5483,14 +5483,32 @@ std::string PalaceCoreImpl::mvpStorageBundleStatus()
             m_storageMvpMode = "degraded";
         }
     }
+    // Keep pumping network fetches while idle-but-incomplete so a prior
+    // dispatch miss does not leave the bundle stuck in fetching forever.
+    if (m_storageMvpMode == "fetching"
+        && m_storageMvpTransfers.empty()
+        && m_storageMvpFailures.empty()
+        && m_storageMvpFetchedObjects.size()
+            < m_storageMvpBundle.artifactCount()) {
+        (void)scheduleNextStorageMvpFetch();
+    }
     if (!m_storageMvpFailures.empty()) {
+        std::string firstReason = "unknown";
+        std::string firstObject = "catalog";
+        for (const auto& entry : m_storageMvpFailures) {
+            firstObject = entry.first;
+            firstReason = entry.second;
+            break;
+        }
         return "state=degraded;published="
             + std::to_string(m_storageMvpBundle.publishedCount())
             + ";verified="
             + std::to_string(m_storageMvpFetchedObjects.size())
             + ";total="
             + std::to_string(m_storageMvpBundle.artifactCount())
-            + ";retention=degraded";
+            + ";retention=degraded"
+            + ";failed_object=" + firstObject
+            + ";failed_reason=" + firstReason;
     }
 
     std::string state = "missing";
@@ -8080,6 +8098,12 @@ bool PalaceCoreImpl::scheduleNextStorageMvpFetch()
                 *fetch.operation,
                 localOnly,
                 StorageMvpTransferPurpose::NetworkFetch)) {
+            // Network peer discovery can race connect/bootstrap. Keep the
+            // bundle in fetching and leave the object eligible for a later
+            // status-poll retry instead of sealing degraded on first miss.
+            if (!localOnly) {
+                return true;
+            }
             m_storageMvpFailures[artifact.objectId] =
                 fetch.accepted ? "network-fetch-dispatch"
                                : fetch.reason;

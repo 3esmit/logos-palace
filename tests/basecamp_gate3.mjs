@@ -1967,6 +1967,8 @@ async function fetchBundle(worker, catalog) {
       );
     },
   });
+  // Note: mesh remesh during fetch is handled by pre-fetch visibility wait;
+  // status polls pump deferred/retry downloads in palace_core.
   const verified = [];
   for (const object of catalog.objects) {
     const status = await invoke(
@@ -2796,7 +2798,11 @@ try {
         { timeoutMs: 60_000 },
       );
       report.storageMeshVisibility = visibility;
-      if (visibility.ready) break;
+      if (visibility.ready) {
+        // Give provider advertisements time to land after mesh formation.
+        await sleep(5_000);
+        break;
+      }
       await meshStoragePeers(
         workers,
         configs,
@@ -2807,6 +2813,16 @@ try {
         { settleMs: 10_000 },
       );
     }
+    // Final remesh immediately before fetch so download dials a live peer.
+    await meshStoragePeers(
+      workers,
+      configs,
+      {
+        a: report.storagePeerEndpoints.a,
+        b: report.storagePeerEndpoints.b,
+      },
+      { settleMs: 5_000 },
+    );
     await checkpointReport();
   }
   const providerBFetch = await fetchBundle(provider, published.catalog);

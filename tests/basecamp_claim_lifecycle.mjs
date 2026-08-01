@@ -452,6 +452,25 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.TO3C1wME @ d80cf5b: mesh visibility ready, fetch still degraded verified=0
+  Object.freeze({
+    gitCommit: "d80cf5b9a1d46778f74320147b2f41e32022127d",
+    snapshotNarHash:
+      "sha256-gpnnwk46fKuVBc8DjfQmQ4kK452LFdi6kKtA+9J5W6M=",
+    snapshotNarSize: 7282192,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "2eddeea8ad8c5c027951028441c9e3162776bb0eb4e2f8a877ec1d217bd57759",
+    compiledReportSha256:
+      "2c45dfe356422cf5ed633f026706eb678132e7b468681b2801c3c4799514fa5c",
+    gate3ReportSha256:
+      "bb654b78c8c925e790b6e713f172c44a33aac5fe7e8e43394ea0be1faf48622d",
+    gate3Failure:
+      "fetch exact MVP bundle on b degraded: state=degraded;published=8;verified=0;total=8;retention=degraded",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
