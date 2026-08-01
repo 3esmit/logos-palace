@@ -82,6 +82,7 @@ import {
 import {
   currentLezStateExpectation,
   isCurrentLezState,
+  isRetryableLezSyncReceipt,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -2537,12 +2538,6 @@ function requestTermination(signal) {
 process.on("SIGINT", () => requestTermination("SIGINT"));
 process.on("SIGTERM", () => requestTermination("SIGTERM"));
 
-function safeSyncRejection(receipt) {
-  return /^rejected=lez-sync;reason=(current-height-failed|last-synced-height-failed|chunk-failed|chunk-progress-mismatch|terminal-height-mismatch)$/.test(
-    receipt,
-  );
-}
-
 async function startLez(worker, attempts) {
   const password = stableId(`wallet-password/${worker.label}`);
   const deadline = Date.now() + lezStartupTimeoutMs;
@@ -2577,7 +2572,7 @@ async function startLez(worker, attempts) {
         },
       };
     }
-    if (!safeSyncRejection(lastReceipt)) {
+    if (!isRetryableLezSyncReceipt(lastReceipt, "lez-sync")) {
       throw new Error(`LEZ start ${worker.label} rejected: ${lastReceipt}`);
     }
     await sleep(1_000);
@@ -2813,13 +2808,19 @@ function submissionCanRetry(receipt) {
     receipt === "rejected=lez-current-root-call" ||
     receipt ===
       "rejected=lez-current-root;reason=invalid-account-response" ||
-    safeSyncRejection(receipt)
+    isRetryableLezSyncReceipt(receipt, "lez-sync") ||
+    isRetryableLezSyncReceipt(receipt, "lez-submit-sync")
   );
 }
 
 function observationCanRetry(receipt) {
   return (
-    /^rejected=lez-stable-account-read;reason=(sync-(current-height-failed|last-synced-height-failed|chunk-failed|chunk-progress-mismatch|terminal-height-mismatch)|height-before|wallet-height-raced|account-[0-9]+|height-after|unstable-height)$/.test(
+    isRetryableLezSyncReceipt(
+      receipt,
+      "lez-stable-account-read",
+      "sync-",
+    ) ||
+    /^rejected=lez-stable-account-read;reason=(height-before|wallet-height-raced|account-[0-9]+|height-after|unstable-height)$/.test(
       receipt,
     ) ||
     receipt === "rejected=lez-observation;reason=observation-mismatch" ||

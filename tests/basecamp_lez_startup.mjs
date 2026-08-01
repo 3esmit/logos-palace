@@ -1,5 +1,13 @@
 export const lezStartupTimeoutMs = 8 * 60_000;
 export const ordinaryInvocationTimeoutMs = 120_000;
+const retryableLezSyncReasons = Object.freeze([
+  "current-height-failed",
+  "last-synced-height-failed",
+  "synced-height-ahead",
+  "chunk-failed",
+  "chunk-progress-mismatch",
+  "terminal-height-mismatch",
+]);
 
 export function hasNonEmptyReceipt(receipt) {
   return typeof receipt === "string" && receipt.length > 0;
@@ -55,6 +63,22 @@ export function acceptsStorageStartupObservation(receipt, state) {
 
 export function currentStorageStateExpectation() {
   return Object.freeze({ startedStorageState: true });
+}
+
+export function isRetryableLezSyncReceipt(receipt, stage, reasonPrefix = "") {
+  if (
+    typeof receipt !== "string"
+    || typeof stage !== "string"
+    || typeof reasonPrefix !== "string"
+  ) {
+    return false;
+  }
+  const prefix = `rejected=${stage};reason=${reasonPrefix}`;
+  if (!receipt.startsWith(prefix)) {
+    return false;
+  }
+  const reason = receipt.slice(prefix.length);
+  return retryableLezSyncReasons.includes(reason);
 }
 
 export function workerInvocationTimeoutLimit(name) {

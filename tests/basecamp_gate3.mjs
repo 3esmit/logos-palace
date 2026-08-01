@@ -48,6 +48,7 @@ import {
   currentLezStateExpectation,
   isStartedStorageState,
   isCurrentLezState,
+  isRetryableLezSyncReceipt,
   lezStartupTimeoutMs,
 } from "./basecamp_lez_startup.mjs";
 
@@ -900,11 +901,7 @@ async function startProductionLez(worker) {
         },
       };
     }
-    if (
-      !/^rejected=lez-sync;reason=(current-height-failed|last-synced-height-failed|chunk-failed|chunk-progress-mismatch|terminal-height-mismatch)$/.test(
-        lastReceipt,
-      )
-    ) {
+    if (!isRetryableLezSyncReceipt(lastReceipt, "lez-sync")) {
       throw new Error(`production LEZ ${worker.label}: ${lastReceipt}`);
     }
     await sleep(1_000);
@@ -913,6 +910,40 @@ async function startProductionLez(worker) {
 }
 
 async function ensureProductionIdentity(worker) {
+  async function invokeIdentityRegistration(expectedPrefix) {
+    const deadline = Date.now() + lezStartupTimeoutMs;
+    let lastReceipt = "";
+    while (Date.now() < deadline) {
+      const created = await invoke(
+        worker,
+        "gate4CreateIdentity",
+        [displayNames[worker.label]],
+        undefined,
+        false,
+        120_000,
+      );
+      lastReceipt = created.receipt;
+      if (created.receipt.startsWith(expectedPrefix)) {
+        return created;
+      }
+      if (
+        !isRetryableLezSyncReceipt(
+          created.receipt,
+          "identity-registration-sync",
+        )
+      ) {
+        throw new Error(
+          `production identity registration ${worker.label}: ${created.receipt}`,
+        );
+      }
+      await startProductionLez(worker);
+      await sleep(1_000);
+    }
+    throw new Error(
+      `production identity registration ${worker.label} timed out: ${lastReceipt}`,
+    );
+  }
+
   const refreshed = await invoke(
     worker,
     "gate4RefreshIdentity",
@@ -932,14 +963,7 @@ async function ensureProductionIdentity(worker) {
       refreshedFields.registration !== "submitted"
       || !identity.registrationTransaction
     ) {
-      const ensured = await invoke(
-        worker,
-        "gate4CreateIdentity",
-        [displayNames[worker.label]],
-        { prefix: "ok;existing=1;" },
-        false,
-        120_000,
-      );
+      const ensured = await invokeIdentityRegistration("ok;existing=1;");
       receipt = ensured.receipt;
       identity = identityFields(receipt);
     }
@@ -954,14 +978,7 @@ async function ensureProductionIdentity(worker) {
     }
     return { ...identity, existing: true, receipt };
   }
-  const created = await invoke(
-    worker,
-    "gate4CreateIdentity",
-    [displayNames[worker.label]],
-    { prefix: "ok;" },
-    false,
-    120_000,
-  );
+  const created = await invokeIdentityRegistration("ok;");
   const fields = statusFields(created.receipt);
   const identity = identityFields(created.receipt);
   if (

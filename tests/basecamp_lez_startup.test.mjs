@@ -11,6 +11,7 @@ import {
   hasNonEmptyReceipt,
   isStartedStorageState,
   isCurrentLezState,
+  isRetryableLezSyncReceipt,
   lezStartupTimeoutMs,
   ordinaryInvocationTimeoutMs,
   workerInvocationTimeoutLimit,
@@ -76,6 +77,111 @@ test("LEZ startup accepts an action receipt or current visible state", async () 
   assert.match(worker, /acceptsLezStartupObservation\(/);
   assert.match(gate3, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
   assert.match(gate4, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
+});
+
+test("LEZ sync retry classifier stays exact across startup, submit, stable-read, and identity registration stages", async () => {
+  const accepted = [
+    "current-height-failed",
+    "last-synced-height-failed",
+    "synced-height-ahead",
+    "chunk-failed",
+    "chunk-progress-mismatch",
+    "terminal-height-mismatch",
+  ];
+  for (const reason of accepted) {
+    assert.equal(
+      isRetryableLezSyncReceipt(`rejected=lez-sync;reason=${reason}`, "lez-sync"),
+      true,
+    );
+    assert.equal(
+      isRetryableLezSyncReceipt(
+        `rejected=lez-submit-sync;reason=${reason}`,
+        "lez-submit-sync",
+      ),
+      true,
+    );
+    assert.equal(
+      isRetryableLezSyncReceipt(
+        `rejected=lez-stable-account-read;reason=sync-${reason}`,
+        "lez-stable-account-read",
+        "sync-",
+      ),
+      true,
+    );
+    assert.equal(
+      isRetryableLezSyncReceipt(
+        `rejected=identity-registration-sync;reason=${reason}`,
+        "identity-registration-sync",
+      ),
+      true,
+    );
+  }
+
+  const rejected = [
+    ["rejected=lez-submit-sync;reason=synced-height-ahead", "lez-sync"],
+    ["rejected=lez-sync;reason=synced-height-ahead-extra", "lez-sync"],
+    ["rejected=lez-submit-sync;reason=current-height-failed;extra=1", "lez-submit-sync"],
+    ["rejected=lez-submit-sync;reason=", "lez-submit-sync"],
+    ["rejected=lez-sync;reason=unknown", "lez-sync"],
+    ["rejected=lez-submit;reason=synced-height-ahead", "lez-submit-sync"],
+    [
+      "rejected=lez-stable-account-read;reason=sync-synced-height-ahead-extra",
+      "lez-stable-account-read",
+      "sync-",
+    ],
+    [
+      "rejected=lez-stable-account-read;reason=sync-current-height-failed;extra=1",
+      "lez-stable-account-read",
+      "sync-",
+    ],
+    [
+      "rejected=lez-stable-account-read;reason=sync-unknown",
+      "lez-stable-account-read",
+      "sync-",
+    ],
+    [
+      "rejected=lez-stable-account-read;reason=synced-height-ahead",
+      "lez-stable-account-read",
+      "sync-",
+    ],
+    [
+      "rejected=identity-registration-sync;reason=synced-height-ahead-extra",
+      "identity-registration-sync",
+    ],
+    [
+      "rejected=identity-registration-sync;reason=current-height-failed;extra=1",
+      "identity-registration-sync",
+    ],
+    [
+      "rejected=identity-registration-sync;reason=unknown",
+      "identity-registration-sync",
+    ],
+    ["ok;reason=synced-height-ahead", "lez-sync"],
+    [null, "lez-sync"],
+    ["rejected=lez-sync;reason=synced-height-ahead", null],
+  ];
+  for (const [receipt, stage, reasonPrefix] of rejected) {
+    assert.equal(
+      isRetryableLezSyncReceipt(receipt, stage, reasonPrefix),
+      false,
+    );
+  }
+
+  const gate4 = await readFile(gate4Path, "utf8");
+  const gate3 = await readFile(gate3Path, "utf8");
+  assert.match(gate3, /isRetryableLezSyncReceipt\(lastReceipt, "lez-sync"\)/);
+  assert.match(
+    gate3,
+    /isRetryableLezSyncReceipt\(\s*created\.receipt,\s*"identity-registration-sync",\s*\)/,
+  );
+  assert.match(gate3, /await startProductionLez\(worker\);/);
+  assert.match(gate4, /isRetryableLezSyncReceipt\(lastReceipt, "lez-sync"\)/);
+  assert.match(gate4, /isRetryableLezSyncReceipt\(receipt, "lez-sync"\)/);
+  assert.match(gate4, /isRetryableLezSyncReceipt\(receipt, "lez-submit-sync"\)/);
+  assert.match(
+    gate4,
+    /isRetryableLezSyncReceipt\(\s*receipt,\s*"lez-stable-account-read",\s*"sync-",\s*\)/,
+  );
 });
 
 test("storage startup accepts an action receipt or live storage state", async () => {
