@@ -197,6 +197,7 @@ Item {
     property bool propBagOpen: false
     property bool userListOpen: false
     property bool roomListOpen: false
+    property string selectedModerationUserId: ""
     // Keep whole avatars, their capped speech cards, and the in-scene door
     // inside the clipped room while using the formerly empty lower canvas.
     readonly property int roomCanvasHorizontalInset: 100
@@ -238,6 +239,49 @@ Item {
         } catch (error) {
             return []
         }
+    }
+
+    function selectedModerationUser() {
+        var selectedUserId = String(selectedModerationUserId)
+        for (var index = 0; index < participants.length; ++index) {
+            var participant = participants[index] || ({})
+            if (String(participant.userId || "") === selectedUserId)
+                return participant
+        }
+        return null
+    }
+
+    function selectedModerationUserName() {
+        var participant = selectedModerationUser()
+        if (!participant)
+            return ""
+        return String(participant.displayName || participant.userId || "")
+    }
+
+    function focusChatWhenUnobstructed() {
+        if (ready && !backgroundModerationOpen && !propBagOpen
+                && !roomListOpen && !userListOpen)
+            chatInput.forceActiveFocus()
+    }
+
+    function closeActiveUtilityPanel() {
+        if (backgroundModerationOpen) {
+            backgroundModerationOpen = false
+            return true
+        }
+        if (propBagOpen) {
+            propBagOpen = false
+            return true
+        }
+        if (roomListOpen) {
+            roomListOpen = false
+            return true
+        }
+        if (userListOpen) {
+            userListOpen = false
+            return true
+        }
+        return false
     }
 
     function parseAuthoringAssets(encoded) {
@@ -1442,6 +1486,7 @@ Item {
     Component.onCompleted: {
         root.ready = root.backend !== null
             && logos.isViewModuleReady("logos_palace_ui")
+        root.focusChatWhenUnobstructed()
     }
 
     FrameAnimation {
@@ -1511,8 +1556,37 @@ Item {
     Component.onDestruction: root.abandonAssetImport()
 
     onBackgroundModerationOpenChanged: {
-        if (!backgroundModerationOpen)
+        if (!backgroundModerationOpen) {
             resetAuthoringPreviewState()
+            focusChatWhenUnobstructed()
+        }
+    }
+
+    onPropBagOpenChanged: {
+        if (!propBagOpen)
+            focusChatWhenUnobstructed()
+    }
+
+    onRoomListOpenChanged: {
+        if (!roomListOpen)
+            focusChatWhenUnobstructed()
+    }
+
+    onUserListOpenChanged: {
+        if (!userListOpen)
+            focusChatWhenUnobstructed()
+    }
+
+    onReadyChanged: {
+        if (ready)
+            focusChatWhenUnobstructed()
+    }
+
+    Shortcut {
+        sequence: "Esc"
+        enabled: root.backgroundModerationOpen || root.propBagOpen
+            || root.roomListOpen || root.userListOpen
+        onActivated: root.closeActiveUtilityPanel()
     }
 
     FrameAnimation {
@@ -1556,6 +1630,7 @@ Item {
                         height: 28
                         text: "🚪"
                         font.pixelSize: 12
+                        Accessible.name: "Door / room exit"
                         ToolTip.visible: hovered
                         ToolTip.text: "Door / room exit"
                         enabled: root.ready
@@ -1570,6 +1645,7 @@ Item {
                         height: 28
                         text: "⌂"
                         font.pixelSize: 14
+                        Accessible.name: "Rooms"
                         ToolTip.visible: hovered
                         ToolTip.text: "Rooms"
                         enabled: root.ready
@@ -1580,6 +1656,7 @@ Item {
                         width: 28
                         height: 28
                         text: "↑"
+                        Accessible.name: "Move up"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX, root.localMotionY - 750)
@@ -1589,6 +1666,7 @@ Item {
                         width: 28
                         height: 28
                         text: "←"
+                        Accessible.name: "Move left"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX - 750, root.localMotionY)
@@ -1598,6 +1676,7 @@ Item {
                         width: 28
                         height: 28
                         text: "→"
+                        Accessible.name: "Move right"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX + 750, root.localMotionY)
@@ -1607,6 +1686,7 @@ Item {
                         width: 28
                         height: 28
                         text: "↓"
+                        Accessible.name: "Move down"
                         enabled: root.ready
                         onClicked: root.gate2Move(
                             root.localMotionX, root.localMotionY + 750)
@@ -1623,6 +1703,7 @@ Item {
                         height: 28
                         text: "☺+"
                         font.pixelSize: 11
+                        Accessible.name: "Wear assigned prop"
                         ToolTip.visible: hovered
                         ToolTip.text: "Wear assigned prop"
                         enabled: root.ready
@@ -1637,6 +1718,7 @@ Item {
                         height: 28
                         text: "☺−"
                         font.pixelSize: 11
+                        Accessible.name: "Remove worn prop"
                         ToolTip.visible: hovered
                         ToolTip.text: "Remove worn prop"
                         enabled: root.ready
@@ -1651,6 +1733,7 @@ Item {
                         height: 28
                         text: "Assets"
                         font.pixelSize: 10
+                        Accessible.name: "Assets"
                         enabled: root.ready
                         ToolTip.visible: hovered && !root.canManageAssets
                         ToolTip.text: root.assetAuthoringReadOnlyMessage()
@@ -1662,6 +1745,7 @@ Item {
                         height: 28
                         text: "Users"
                         font.pixelSize: 10
+                        Accessible.name: "User list"
                         enabled: root.ready
                         onClicked: root.userListOpen = !root.userListOpen
                     }
@@ -2010,6 +2094,7 @@ Item {
                        ? "Door finalizing…" : "Door to Lounge")
                 font.bold: true
                 font.pixelSize: 12
+                Accessible.name: text
                 enabled: root.ready
                     && (root.roomTitle !== "Atrium"
                         || !root.gate5DoorBlocked)
@@ -2097,6 +2182,7 @@ Item {
                     Button {
                         objectName: "palacePropBag"
                         text: "🧳"
+                        Accessible.name: "Prop bag"
                         Layout.preferredHeight: 22
                         Layout.preferredWidth: 28
                         ToolTip.visible: hovered
@@ -2107,6 +2193,8 @@ Item {
                     Button {
                         objectName: "palacePropTrash"
                         text: "🗑"
+                        Accessible.name: root.availablePropId.length > 0
+                            ? "Discard or ban assigned prop" : "Trash"
                         Layout.preferredHeight: 22
                         Layout.preferredWidth: 28
                         ToolTip.visible: hovered
@@ -2147,6 +2235,7 @@ Item {
                         Layout.preferredHeight: 24
                         placeholderText: ""
                         maximumLength: 280
+                        Accessible.name: "Chat message"
                         enabled: root.ready
                         onAccepted: {
                             if (text.length > 0) {
@@ -2158,6 +2247,7 @@ Item {
                     Button {
                         objectName: "palaceSayButton"
                         text: "Say"
+                        Accessible.name: "Send chat message"
                         Layout.preferredHeight: 24
                         Layout.preferredWidth: 44
                         enabled: root.ready && chatInput.text.length > 0
@@ -2322,7 +2412,7 @@ Item {
             anchors.topMargin: 42
             width: 176
             height: Math.min(
-                248, 108
+                272, 154
                 + (root.availablePropId.length > 0 ? 28 : 0)
                 + Math.min(root.participants.length, 32) * 2)
             radius: 2
@@ -2349,7 +2439,7 @@ Item {
                     height: Math.max(
                         24,
                         parent.height
-                        - 52
+                        - 100
                         - (root.availablePropId.length > 0 ? 28 : 0))
                     contentWidth: width
                     contentHeight: moderationRosterContent.implicitHeight
@@ -2365,7 +2455,9 @@ Item {
                         Repeater {
                             model: root.participants.length
 
-                            delegate: Row {
+                            delegate: Button {
+                                id: rosterUser
+                                objectName: "palaceModerationRosterUser"
                                 required property int index
                                 property var participant:
                                     root.participants[index] || ({})
@@ -2376,31 +2468,83 @@ Item {
                                     String(participant.userId || "")
                                 width: 164
                                 height: 24
-                                spacing: 4
+                                text: participantName
+                                font.pixelSize: 10
+                                checkable: true
+                                checked: root.selectedModerationUserId
+                                    === participantUserId
+                                enabled: participantUserId.length > 0
+                                Accessible.name: "Select " + participantName
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Select " + participantName
+                                onClicked: root.selectedModerationUserId
+                                    = participantUserId
 
-                                Text {
-                                    width: 96
+                                contentItem: Text {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 6
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 6
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: parent.participantName
+                                    text: rosterUser.text
                                     elide: Text.ElideRight
                                     color: "#000000"
-                                    font.pixelSize: 10
+                                    font: rosterUser.font
+                                    verticalAlignment: Text.AlignVCenter
                                 }
 
-                                Button {
-                                    objectName: "palaceBanUserButton"
-                                    property string subjectUserId:
-                                        parent.participantUserId
-                                    width: 56
-                                    height: 22
-                                    text: "Ban"
-                                    font.pixelSize: 9
-                                    visible: root.canBanUser
-                                    enabled: root.canBanUser
-                                        && subjectUserId.length === 64
-                                    onClicked: root.gate4BanUser(subjectUserId)
+                                background: Rectangle {
+                                    color: rosterUser.checked
+                                        ? "#b6d8ff" : "transparent"
+                                    border.color: rosterUser.checked
+                                        ? "#34699a" : "transparent"
                                 }
                             }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    objectName: "palaceModerationUserFooter"
+                    width: 164
+                    height: 46
+                    color: "#e8e8e8"
+                    border.color: "#9a9a9a"
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 3
+                        spacing: 2
+
+                        Text {
+                            width: parent.width
+                            text: root.selectedModerationUserName().length > 0
+                                ? "Selected: "
+                                  + root.selectedModerationUserName()
+                                : "Select a user"
+                            color: "#333333"
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
+                        }
+
+                        Button {
+                            objectName: "palaceBanUserButton"
+                            property string subjectUserId:
+                                root.selectedModerationUserId
+                            width: parent.width
+                            height: 22
+                            text: root.selectedModerationUserName().length > 0
+                                ? "Ban " + root.selectedModerationUserName()
+                                : "Ban selected user"
+                            font.pixelSize: 9
+                            visible: root.canBanUser
+                            enabled: root.canBanUser
+                                && subjectUserId.length === 64
+                                && root.selectedModerationUser() !== null
+                            Accessible.name: text
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Ban selected user"
+                            onClicked: root.gate4BanUser(subjectUserId)
                         }
                     }
                 }

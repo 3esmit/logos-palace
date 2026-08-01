@@ -368,7 +368,7 @@ test("LEZ moderation controls reflect Core finalized capability only", () => {
   assert.ok(trashOffset >= 0 && assetsOffset >= 0);
   const banUserBlock = mainQml.slice(banUserOffset, banPropOffset);
   const banPropBlock = mainQml.slice(banPropOffset, banPropOffset + 600);
-  const trashBlock = mainQml.slice(trashOffset, trashOffset + 600);
+  const trashBlock = mainQml.slice(trashOffset, trashOffset + 800);
   const assetsBlock = mainQml.slice(
     assetsOffset,
     mainQml.indexOf("onClicked:", assetsOffset),
@@ -406,5 +406,88 @@ test("moderation roster scrolls inside fixed operator panel", () => {
   assert.match(
     rosterBlock,
     /Repeater\s*\{[\s\S]{0,180}model:\s*root\.participants\.length/,
+  );
+});
+
+test("operator utilities keep selected-user moderation and keyboard access", () => {
+  assert.match(mainQml, /property string selectedModerationUserId:\s*""/);
+  assert.match(mainQml, /function selectedModerationUser\(\)/);
+  assert.match(mainQml, /function selectedModerationUserName\(\)/);
+
+  const rosterOffset = mainQml.indexOf(
+    'objectName: "palaceModerationRoster"',
+  );
+  const footerOffset = mainQml.indexOf(
+    'objectName: "palaceModerationUserFooter"',
+  );
+  const banUserOffset = mainQml.indexOf(
+    'objectName: "palaceBanUserButton"',
+  );
+  const banPropOffset = mainQml.indexOf(
+    'objectName: "palaceBanAssignedPropButton"',
+  );
+  assert.ok(rosterOffset >= 0 && footerOffset > rosterOffset);
+  assert.ok(banUserOffset > footerOffset && banPropOffset > banUserOffset);
+  assert.equal(
+    [...mainQml.matchAll(/objectName:\s*"palaceBanUserButton"/g)].length,
+    1,
+  );
+
+  const rosterBlock = mainQml.slice(rosterOffset, footerOffset);
+  assert.match(rosterBlock, /delegate:\s*Button/);
+  assert.match(rosterBlock, /objectName:\s*"palaceModerationRosterUser"/);
+  assert.match(rosterBlock, /checkable:\s*true/);
+  assert.match(
+    rosterBlock,
+    /checked:\s*root\.selectedModerationUserId[\s\S]{0,100}participantUserId/,
+  );
+  assert.match(
+    rosterBlock,
+    /onClicked:\s*root\.selectedModerationUserId\s*=\s*participantUserId/,
+  );
+  assert.match(rosterBlock, /Accessible\.name:\s*"Select " \+ participantName/);
+
+  const footerBlock = mainQml.slice(footerOffset, banPropOffset);
+  assert.match(
+    footerBlock,
+    /property string subjectUserId:\s*root\.selectedModerationUserId/,
+  );
+  assert.match(footerBlock, /visible:\s*root\.canBanUser/);
+  assert.match(
+    footerBlock,
+    /onClicked:\s*root\.gate4BanUser\(subjectUserId\)/,
+  );
+
+  assert.match(mainQml, /function closeActiveUtilityPanel\(\)/);
+  assert.match(
+    mainQml,
+    /Shortcut\s*\{[\s\S]{0,220}sequence:\s*"Esc"[\s\S]{0,220}onActivated:\s*root\.closeActiveUtilityPanel\(\)/,
+  );
+  assert.match(mainQml, /function focusChatWhenUnobstructed\(\)/);
+  assert.match(
+    mainQml,
+    /function focusChatWhenUnobstructed\(\)[\s\S]{0,240}chatInput\.forceActiveFocus\(\)/,
+  );
+
+  for (const [objectName, accessibleName] of [
+    ["palaceToolboxDoor", "Door / room exit"],
+    ["palaceToolboxRooms", "Rooms"],
+    ["palaceMoveUp", "Move up"],
+    ["palaceMoveLeft", "Move left"],
+    ["palaceMoveRight", "Move right"],
+    ["palaceMoveDown", "Move down"],
+    ["palaceWearAssignedProp", "Wear assigned prop"],
+    ["palaceRemoveAssignedProp", "Remove worn prop"],
+  ]) {
+    const offset = mainQml.indexOf(`objectName: "${objectName}"`);
+    assert.ok(offset >= 0, `${objectName} selector remains available`);
+    assert.match(
+      mainQml.slice(offset, offset + 360),
+      new RegExp(`Accessible\\.name:\\s*"${accessibleName}"`),
+    );
+  }
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceChatInput"[\s\S]{0,260}Accessible\.name:\s*"Chat message"/,
   );
 });
