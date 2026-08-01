@@ -11,6 +11,26 @@ export function clampNonNegative(value) {
 }
 
 /**
+ * Maps a click in the visible Palace room canvas back into its bounded
+ * protocol coordinate space. These insets are the inverse of Main.qml's
+ * roomX/roomY layout so clicking an avatar position is stable round-trip.
+ */
+export function canvasPixelsToProtocol(pixelX, pixelY, canvasWidth, canvasHeight) {
+  const width = Number(canvasWidth);
+  const height = Number(canvasHeight);
+  const x = Number(pixelX);
+  const y = Number(pixelY);
+  const usableWidth = Math.max(1, (Number.isFinite(width) ? width : 0) - 180);
+  const usableHeight = Math.max(1, (Number.isFinite(height) ? height : 0) - 330);
+  const protocolX = Number.isFinite(x) ? ((x - 90) * 10000) / usableWidth : 0;
+  const protocolY = Number.isFinite(y) ? ((y - 110) * 10000) / usableHeight : 0;
+  return {
+    x: Math.max(0, Math.min(10000, Math.round(protocolX))),
+    y: Math.max(0, Math.min(10000, Math.round(protocolY))),
+  };
+}
+
+/**
  * Transition ready-image count when a card's preview readiness changes.
  * wasCounted / isReady are booleans; returns { nextCount, nextCounted }.
  */

@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   applyPreviewDestroyed,
   applyPreviewReadyTransition,
+  canvasPixelsToProtocol,
   clampNonNegative,
   idleImportState,
   resetAuthoringPreviewCount,
@@ -77,6 +78,25 @@ test("orphan stage sessions are cancelled only when unmatched", () => {
   assert.equal(shouldCancelOrphanStage("not-a-session", false), false);
 });
 
+test("canvas clicks map to bounded Palace protocol coordinates", () => {
+  assert.deepEqual(canvasPixelsToProtocol(90, 110, 1000, 800), {
+    x: 0,
+    y: 0,
+  });
+  assert.deepEqual(canvasPixelsToProtocol(910, 580, 1000, 800), {
+    x: 10000,
+    y: 10000,
+  });
+  assert.deepEqual(canvasPixelsToProtocol(-100, 10000, 1000, 800), {
+    x: 0,
+    y: 10000,
+  });
+  assert.deepEqual(canvasPixelsToProtocol(Number.NaN, Number.NaN, 1000, 800), {
+    x: 0,
+    y: 0,
+  });
+});
+
 test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /function noteAuthoringPreviewReady/);
   assert.match(mainQml, /function noteAuthoringPreviewLost/);
@@ -92,6 +112,62 @@ test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /objectName:\s*"palacePropBagPanel"/);
   assert.match(mainQml, /objectName:\s*"palaceUserListToggle"/);
   assert.match(mainQml, /Users:\s*"\s*\+\s*root\.participants\.length/);
+});
+
+test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
+  assert.match(
+    mainQml,
+    /function canvasPixelToProtocol\s*\(\s*pixel,\s*inset,\s*usableSpan\s*\)/,
+  );
+  assert.match(
+    mainQml,
+    /function canvasPixelsToProtocol\s*\(\s*pixelX,\s*pixelY\s*\)/,
+  );
+  assert.match(mainQml, /objectName:\s*"palaceRoomMoveSurface"/);
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceRoomMoveSurface"[\s\S]{0,220}z:\s*2/,
+  );
+  assert.match(
+    mainQml,
+    /var coordinate\s*=\s*root\.canvasPixelsToProtocol\(\s*mouse\.x,\s*mouse\.y\s*\)[\s\S]{0,120}root\.gate2Move\(coordinate\.x,\s*coordinate\.y\)/,
+  );
+
+  const moveSurfaceOffset = mainQml.indexOf('objectName: "palaceRoomMoveSurface"');
+  const participantOffset = mainQml.indexOf('objectName: "palaceParticipants"');
+  const doorOffset = mainQml.indexOf('objectName: "palaceRoomDoor"');
+  assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < participantOffset);
+  assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < doorOffset);
+
+  assert.match(mainQml, /property bool roomListOpen:\s*false/);
+  assert.match(mainQml, /objectName:\s*"palaceRoomListPanel"/);
+  assert.match(mainQml, /objectName:\s*"palaceRoomListAtrium"/);
+  assert.match(mainQml, /objectName:\s*"palaceRoomListLounge"/);
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceRoomListAtrium"[\s\S]{0,420}root\.selectFixedRoom\("atrium"\)/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceRoomListLounge"[\s\S]{0,520}root\.selectFixedRoom\("lounge"\)/,
+  );
+  assert.match(mainQml, /function selectFixedRoom\s*\(\s*roomId\s*\)/);
+  assert.match(
+    mainQml,
+    /if \(selectedRoom === currentRoom\)[\s\S]{0,360}watchedActionReceipt\s*=\s*"ok=room-current;[\s\S]{0,180}return watchedActionReceipt/,
+  );
+  assert.match(
+    mainQml,
+    /selectedRoom === "lounge"[\s\S]{0,180}root\.gate5UseDoor\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /selectedRoom === "atrium"[\s\S]{0,220}backend\.enterRoom\("atrium"\)/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceToolboxRooms"[\s\S]{0,420}root\.roomListOpen\s*=\s*!root\.roomListOpen/,
+  );
 });
 
 test("backend stops poll timers on teardown", () => {

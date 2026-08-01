@@ -172,6 +172,10 @@ Item {
     // PalaceChat-style prop bag / operator list visibility.
     property bool propBagOpen: false
     property bool userListOpen: true
+    property bool roomListOpen: false
+    readonly property int roomCanvasHorizontalInset: 90
+    readonly property int roomCanvasTopInset: 110
+    readonly property int roomCanvasVerticalInset: 330
 
     function gateFrameTimingStart(sampleCount) {
         if (sampleCount !== gateFrameTimingSampleTarget
@@ -410,13 +414,40 @@ Item {
     }
 
     function roomX(coordinate) {
-        var usableWidth = Math.max(1, roomCanvas.width - 180)
-        return 90 + clampCoordinate(coordinate) * usableWidth / 10000
+        var usableWidth = Math.max(
+            1, roomCanvas.width - roomCanvasHorizontalInset * 2)
+        return roomCanvasHorizontalInset
+            + clampCoordinate(coordinate) * usableWidth / 10000
     }
 
     function roomY(coordinate) {
-        var usableHeight = Math.max(1, roomCanvas.height - 330)
-        return 110 + clampCoordinate(coordinate) * usableHeight / 10000
+        var usableHeight = Math.max(
+            1, roomCanvas.height - roomCanvasVerticalInset)
+        return roomCanvasTopInset
+            + clampCoordinate(coordinate) * usableHeight / 10000
+    }
+
+    // Inverse of roomX/roomY. Keep pointer motion in the same bounded
+    // protocol coordinates as remote participant projections.
+    function canvasPixelToProtocol(pixel, inset, usableSpan) {
+        var canvasPixel = Number(pixel)
+        if (isNaN(canvasPixel) || !isFinite(canvasPixel))
+            return 0
+        var span = Math.max(1, Number(usableSpan))
+        return clampCoordinate(
+            (canvasPixel - Number(inset)) * 10000 / span)
+    }
+
+    function canvasPixelsToProtocol(pixelX, pixelY) {
+        return {
+            "x": canvasPixelToProtocol(
+                pixelX, roomCanvasHorizontalInset,
+                Math.max(1, roomCanvas.width
+                         - roomCanvasHorizontalInset * 2)),
+            "y": canvasPixelToProtocol(
+                pixelY, roomCanvasTopInset,
+                Math.max(1, roomCanvas.height - roomCanvasVerticalInset))
+        }
     }
 
     function rejectedNotReady() {
@@ -481,6 +512,35 @@ Item {
         if (!ready || !backend)
             return rejectedNotReady()
         return watchAction(backend.enterRoom(String(roomId)), null)
+    }
+
+    // Bounded room palette for MVP. Lounge ingress remains a program-driven
+    // door transition; returning to Atrium keeps the existing direct action.
+    function selectFixedRoom(roomId) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        var selectedRoom = String(roomId).toLowerCase()
+        if (selectedRoom !== "atrium" && selectedRoom !== "lounge") {
+            invocationError = "rejected=room-not-listed"
+            watchedActionReceipt = ""
+            ++invocationSequence
+            return invocationError
+        }
+        var currentRoom = String(roomTitle).toLowerCase()
+        if (selectedRoom === currentRoom) {
+            invocationError = ""
+            watchedActionReceipt = "ok=room-current;room=" + selectedRoom
+            ++invocationSequence
+            return watchedActionReceipt
+        }
+        if (selectedRoom === "lounge" && currentRoom === "atrium")
+            return root.gate5UseDoor()
+        if (selectedRoom === "atrium" && currentRoom === "lounge")
+            return watchAction(backend.enterRoom("atrium"), null)
+        invocationError = "rejected=room-transition-unavailable"
+        watchedActionReceipt = ""
+        ++invocationSequence
+        return invocationError
     }
 
     function gate2Say(text) {
@@ -1435,14 +1495,8 @@ Item {
                         enabled: root.ready
                             && (root.roomTitle !== "Atrium"
                                 || !root.gate5DoorBlocked)
-                        onClicked: {
-                            if (root.roomTitle === "Atrium")
-                                root.gate5UseDoor()
-                            else
-                                root.watchAction(
-                                    root.backend.enterRoom("atrium"),
-                                    null)
-                        }
+                        onClicked: root.selectFixedRoom(
+                            root.roomTitle === "Atrium" ? "lounge" : "atrium")
                     }
                     Button {
                         objectName: "palaceToolboxRooms"
@@ -1453,14 +1507,7 @@ Item {
                         ToolTip.visible: hovered
                         ToolTip.text: "Rooms"
                         enabled: root.ready
-                        onClicked: {
-                            if (root.roomTitle === "Atrium")
-                                root.gate5UseDoor()
-                            else
-                                root.watchAction(
-                                    root.backend.enterRoom("atrium"),
-                                    null)
-                        }
+                        onClicked: root.roomListOpen = !root.roomListOpen
                     }
                     Button {
                         objectName: "palaceMoveUp"
@@ -1600,6 +1647,21 @@ Item {
                         opacity: roomBackground.status === Image.Ready
                             ? 0.12 : 0
                     }
+
+            // Canvas motion sits above the room art but below people and door.
+            MouseArea {
+                id: roomMoveSurface
+                objectName: "palaceRoomMoveSurface"
+                anchors.fill: parent
+                z: 2
+                enabled: root.ready
+                acceptedButtons: Qt.LeftButton
+                onClicked: function(mouse) {
+                    var coordinate = root.canvasPixelsToProtocol(
+                        mouse.x, mouse.y)
+                    root.gate2Move(coordinate.x, coordinate.y)
+                }
+            }
 
             Item {
                 id: participantLayer
@@ -1873,14 +1935,8 @@ Item {
                     && (root.roomTitle !== "Atrium"
                         || !root.gate5DoorBlocked)
                 z: 10
-                onClicked: {
-                    if (root.roomTitle === "Atrium") {
-                        root.gate5UseDoor()
-                    } else {
-                        root.watchAction(
-                            root.backend.enterRoom("atrium"), null)
-                    }
-                }
+                onClicked: root.selectFixedRoom(
+                    root.roomTitle === "Atrium" ? "lounge" : "atrium")
             }
                 } // roomCanvas
 
@@ -2004,6 +2060,64 @@ Item {
                 visible: root.lastActionReceipt.length > 0
             }
         } // main ColumnLayout
+
+        // Fixed, visible room palette: no inferred routing or hidden rooms.
+        Rectangle {
+            id: roomListPanel
+            objectName: "palaceRoomListPanel"
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 8
+            anchors.topMargin: 42
+            width: 164
+            height: 92
+            radius: 2
+            color: "#f5f5f5"
+            border.color: "#404040"
+            z: 20
+            visible: root.roomListOpen
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 3
+
+                Text {
+                    text: "Rooms"
+                    color: "#000000"
+                    font.bold: true
+                    font.pixelSize: 11
+                }
+
+                Button {
+                    objectName: "palaceRoomListAtrium"
+                    width: 150
+                    height: 25
+                    text: root.roomTitle === "Atrium"
+                        ? "Atrium (current)" : "Atrium"
+                    enabled: root.ready
+                    onClicked: {
+                        root.selectFixedRoom("atrium")
+                        root.roomListOpen = false
+                    }
+                }
+
+                Button {
+                    objectName: "palaceRoomListLounge"
+                    width: 150
+                    height: 25
+                    text: root.roomTitle === "Lounge"
+                        ? "Lounge (current)" : "Lounge"
+                    enabled: root.ready
+                        && (root.roomTitle !== "Atrium"
+                            || !root.gate5DoorBlocked)
+                    onClicked: {
+                        root.selectFixedRoom("lounge")
+                        root.roomListOpen = false
+                    }
+                }
+            }
+        }
 
         // Prop bag panel (compositional identity: wear/drop assigned prop).
         Rectangle {
