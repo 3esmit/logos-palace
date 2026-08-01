@@ -202,7 +202,7 @@ const basecampWrapperFallbackLoaderPaths = Object.freeze([
 const releaseProgramId = palaceRelease.programIdHex;
 const releaseRootId = palaceRelease.rootAccountIdHex;
 const approvedLezModuleRevision =
-  "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f";
+  "e50f1628dff936b017ee2ec69e8c99b0cafb69a6";
 function expectedGraphObjectContract(propId) {
   if (
     propId !== null

@@ -7,7 +7,7 @@ const PalaceLezNetworkFingerprint& PalaceLezReleaseLock::network()
     static const PalaceLezNetworkFingerprint value{
         "logos-lez-testnet-v0.2.0",
         "0.4.0-alpha.2",
-        "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
+        "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
         "e923315c020d4966807849f9db10536b628d5739",
         "palace-schema-v3",
         "2b67563baf590c32dd82e50e3252815ec56bdaec",

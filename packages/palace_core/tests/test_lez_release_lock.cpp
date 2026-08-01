@@ -12,7 +12,9 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
             "e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa"
             "0d188ec5a4b25c61"));
     LOGOS_ASSERT_EQ(network.programBytecodeSha256Hex.size(), 64U);
-    LOGOS_ASSERT_EQ(network.moduleRevision.size(), 40U);
+    LOGOS_ASSERT_EQ(
+        network.moduleRevision,
+        std::string("e50f1628dff936b017ee2ec69e8c99b0cafb69a6"));
     LOGOS_ASSERT_EQ(network.runtimeRevision.size(), 40U);
     LOGOS_ASSERT_EQ(network.publicContractRevision.size(), 40U);
 
