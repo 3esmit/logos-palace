@@ -8653,15 +8653,16 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
         storageDownloadPath(operation.operationId);
     if (path.empty())
         return false;
-    // Peer network path: prefer storage_module.fetch() to pull blocks into
-    // the local repo, then complete with localOnly verification. Direct
-    // downloadToUrlV2(local=false) has been observed to hang after accept
-    // even when the DHT table already lists the provider peer.
+    // Peer network path: storage_module.fetch() pulls blocks into the local
+    // repo, then localOnly verification completes the catalog object.
+    // downloadToUrlV2(local=false) accepts then hangs (network-fetch-timeout)
+    // even when DHT tablePeers already list the provider, so do not use it.
     bool useLocalVerification = localOnly;
     if (!localOnly
         && purpose == StorageMvpTransferPurpose::NetworkFetch) {
         (void)modules().storage_module.fetch(operation.cid);
-        for (int probe = 0; probe < 40; ++probe) {
+        // Short probe per status poll; outer poll/remesh retries.
+        for (int probe = 0; probe < 6; ++probe) {
             const StdLogosResult exists =
                 modules().storage_module.exists(operation.cid);
             if (exists.success
@@ -8671,6 +8672,11 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        if (!useLocalVerification) {
+            // Leave the object unstarted so a later status poll retries after
+            // mesh remesh; avoid hanging downloadToUrlV2(local=false).
+            return false;
         }
     }
     const palace::StorageModuleSessionTransition dispatched =

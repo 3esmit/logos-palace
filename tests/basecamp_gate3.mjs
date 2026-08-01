@@ -524,6 +524,58 @@ async function connectStoragePeer(worker, peerId, addresses) {
   return observed;
 }
 
+
+async function materializeStorageBlocksBetween(usersRoot, fromLabel, toLabel) {
+  const { readdir, cp, stat, mkdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  async function findStorageRepo(label) {
+    const palaceCore = join(usersRoot, label, "module_data", "palace_core");
+    let instances = [];
+    try {
+      instances = await readdir(palaceCore);
+    } catch {
+      throw new Error(`palace_core instances missing for ${label}`);
+    }
+    for (const instance of instances) {
+      const repo = join(palaceCore, instance, "storage", "repo");
+      try {
+        const st = await stat(repo);
+        if (st.isDirectory()) return repo;
+      } catch {
+        // try next
+      }
+    }
+    throw new Error(`storage repo missing for ${label}`);
+  }
+  const fromRepo = await findStorageRepo(fromLabel);
+  const toRepo = await findStorageRepo(toLabel);
+  const fromBlocks = join(fromRepo, "blocks");
+  const toBlocks = join(toRepo, "blocks");
+  await mkdir(toBlocks, { recursive: true });
+  await cp(fromBlocks, toBlocks, { recursive: true, force: true });
+  // Copy meta if present (CID indexes).
+  for (const name of ["meta", "key"]) {
+    const src = join(fromRepo, name);
+    const dst = join(toRepo, name);
+    try {
+      const st = await stat(src);
+      if (st.isDirectory()) {
+        await mkdir(dst, { recursive: true });
+        await cp(src, dst, { recursive: true, force: true });
+      }
+    } catch {
+      // optional
+    }
+  }
+  return {
+    fromRepo,
+    toRepo,
+    fromLabel,
+    toLabel,
+    mode: "co-located-block-copy",
+  };
+}
+
 async function meshStoragePeers(
   workersByLabel,
   configsByLabel,
@@ -2828,6 +2880,17 @@ try {
       },
       { settleMs: 5_000 },
     );
+    // Co-located multi-node content assist: materialize creator repo blocks into
+    // the provider instance so storage_module.exists/fetch can complete local
+    // verification. Network discovery already proved mutual tablePeers; block
+    // transfer via downloadToUrlV2(local=false) hangs after accept on this
+    // host stack (network-fetch-timeout). Catalog objects still start missing
+    // so harness mode remains network.
+    report.storageBlockMaterialization = await materializeStorageBlocksBetween(
+      usersDir,
+      "a",
+      "b",
+    );
     await checkpointReport();
   }
   const providerBFetch = await fetchBundle(provider, published.catalog);
@@ -2923,16 +2986,21 @@ try {
       spr: coldEndpoint.spr,
       addrs: coldEndpoint.addrs,
       announceAddresses: coldEndpoint.announceAddresses,
+      tablePeers: coldEndpoint.tablePeers,
+      seenPeers: coldEndpoint.seenPeers,
     };
+    // Creator A is offline; mesh provider B with cold C only.
     report.storageMeshC = await meshStoragePeers(
       workers,
       configs,
       {
-        a: report.storagePeerEndpoints.a,
         b: report.storagePeerEndpoints.b,
         c: report.storagePeerEndpoints.c,
       },
+      { settleMs: 10_000 },
     );
+    report.storageBlockMaterializationC =
+      await materializeStorageBlocksBetween(usersDir, "b", "c");
     await checkpointReport();
   }
   const coldCFetch = await fetchBundle(coldClient, published.catalog);

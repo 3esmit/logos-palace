@@ -509,6 +509,25 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.DZ7wkgNW @ 3d9a480: loopback mesh vis ready; still network-fetch-timeout
+  Object.freeze({
+    gitCommit: "3d9a4803ff3616d5fb8a6c2b0d4adac1651ad2ea",
+    snapshotNarHash:
+      "sha256-VL2LfzKb3Wkwnub5TlCd9lTRZMjnYVRLiVn5CZU0erU=",
+    snapshotNarSize: 7288368,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "e6b6ae796408e9f71c487c6f22a167cbeb658eb4c21c17f84e791ba77857b5b1",
+    compiledReportSha256:
+      "bb65a2b1e7d52b435a5532fcd6e3cc78b02689f005b85a29c416e0e2889f0940",
+    gate3ReportSha256:
+      "5164dffc4a8b8bbdc9f2b38710c6713563ceffc2e13c4c3b303f1e32ed777493",
+    gate3Failure:
+      "fetch exact MVP bundle on b degraded: state=degraded;published=8;verified=0;total=8;retention=degraded;failed_object=background-atrium;failed_reason=network-fetch-timeout",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -1896,6 +1915,14 @@ function validatesAuditedPrePublicWriteGate3Report(
     report,
     "storageMeshVisibility",
   );
+  const hasStorageBlockMaterialization = Object.hasOwn(
+    report,
+    "storageBlockMaterialization",
+  );
+  const hasStorageBlockMaterializationC = Object.hasOwn(
+    report,
+    "storageBlockMaterializationC",
+  );
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -1931,6 +1958,8 @@ function validatesAuditedPrePublicWriteGate3Report(
       ...(hasStorageMeshC ? ["storageMeshC"] : []),
       ...(hasStorageMeshPreFetch ? ["storageMeshPreFetch"] : []),
       ...(hasStorageMeshVisibility ? ["storageMeshVisibility"] : []),
+      ...(hasStorageBlockMaterialization ? ["storageBlockMaterialization"] : []),
+      ...(hasStorageBlockMaterializationC ? ["storageBlockMaterializationC"] : []),
       ...(hasStoragePeerEndpoints ? ["storagePeerEndpoints"] : []),
       "storageStartup",
       "version",
