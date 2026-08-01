@@ -74,3 +74,36 @@ test("LEZ startup accepts an action receipt or current visible state", async () 
   assert.match(gate3, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
   assert.match(gate4, /"gate4StartLez",[\s\S]{0,180}currentLezStateExpectation/);
 });
+
+test("Gate 4 invocations are authorized by the Palace worker", async () => {
+  const [worker, gate4] = await Promise.all([
+    readFile(workerPath, "utf8"),
+    readFile(gate4Path, "utf8"),
+  ]);
+  const allowlistStart = worker.indexOf("const allowedFunctions = new Set([");
+  const allowlistEnd = worker.indexOf("]);", allowlistStart);
+  assert.notEqual(allowlistStart, -1);
+  assert.notEqual(allowlistEnd, -1);
+  const allowlist = new Set(
+    [...worker.slice(allowlistStart, allowlistEnd).matchAll(/"([^"]+)"/g)]
+      .map((match) => match[1]),
+  );
+  const gate4Invocations = [
+    "gate4StartLez",
+    "gate4RefreshIdentity",
+    "gate4PalaceStatus",
+    "gate4OpenPalace",
+    "gate4ActionStatus",
+    "gate4Submit",
+    "gate4BanUser",
+    "gate4BanProp",
+    "gate4Observe",
+    "gate4Reconcile",
+    "gate4RefreshModeration",
+  ];
+
+  for (const name of gate4Invocations) {
+    assert.match(gate4, new RegExp(`"${name}"`));
+    assert.ok(allowlist.has(name), `${name} must be worker-authorized`);
+  }
+});
