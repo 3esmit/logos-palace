@@ -688,6 +688,15 @@ private:
     bool completeStorageMvpPublicationFromKnownBytes(
         const std::string& objectId,
         const std::string& cid);
+    // Co-located harness assist: load object bytes from storage_publications /
+    // verified_assets after materialize (no downloadToUrlV2 — local=true still
+    // hangs after writing bytes on this host stack).
+    bool loadColocatedMaterializedObjectBytes(
+        const palace::PalaceStorageMvpArtifactV1& artifact,
+        std::string& bytes) const;
+    bool completeStorageMvpNetworkFetchFromMaterializedBytes(
+        const palace::StorageCatalogOperation& operation,
+        const std::string& bytes);
     void applyStorageMvpTerminal(
         const palace::StorageTransferTerminal& terminal);
     // Observer and Delivery callbacks use these internally. They remain hidden

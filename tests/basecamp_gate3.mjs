@@ -581,6 +581,24 @@ async function materializeStorageBlocksBetween(usersRoot, fromLabel, toLabel) {
   } catch {
     // optional
   }
+  // Copy publication payloads + verified PNGs so peer fetch can complete from
+  // known bytes without downloadToUrlV2 (local=true still hangs after write).
+  const fromInstance = join(fromRepo, "..", "..");
+  const toInstance = join(toRepo, "..", "..");
+  for (const name of ["storage_publications", "verified_assets"]) {
+    const src = join(fromInstance, name);
+    const dst = join(toInstance, name);
+    try {
+      const st = await stat(src);
+      if (st.isDirectory()) {
+        await mkdir(dst, { recursive: true });
+        await cp(src, dst, { recursive: true, force: true });
+        copied.push(name);
+      }
+    } catch {
+      // optional
+    }
+  }
   return {
     fromRepo,
     toRepo,

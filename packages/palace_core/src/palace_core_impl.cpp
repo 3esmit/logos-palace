@@ -8651,6 +8651,179 @@ bool PalaceCoreImpl::completeStorageMvpPublicationFromKnownBytes(
     return true;
 }
 
+bool PalaceCoreImpl::loadColocatedMaterializedObjectBytes(
+    const palace::PalaceStorageMvpArtifactV1& artifact,
+    std::string& bytes) const
+{
+    bytes.clear();
+    const QString instanceRoot = QDir(
+        QString::fromStdString(instancePersistencePath()))
+                                     .canonicalPath();
+    if (instanceRoot.isEmpty()
+        || artifact.specification.contentSha256.empty()
+        || artifact.specification.byteLength == 0U) {
+        return false;
+    }
+    QStringList candidates;
+    candidates << (instanceRoot + QStringLiteral("/storage_publications/")
+        + QString::fromStdString(artifact.objectId) + QLatin1Char('-')
+        + QString::fromStdString(artifact.specification.contentSha256)
+        + QStringLiteral(".bin"));
+    candidates << (instanceRoot
+        + QStringLiteral("/verified_assets/logos_palace_ui/")
+        + QString::fromStdString(artifact.specification.contentSha256)
+        + QStringLiteral(".png"));
+    // Also allow any verified_assets file named by content digest.
+    const QDir verifiedRoot(
+        instanceRoot + QStringLiteral("/verified_assets"));
+    if (verifiedRoot.exists()) {
+        const QFileInfoList matches = verifiedRoot.entryInfoList(
+            QStringList{
+                QString::fromStdString(
+                    artifact.specification.contentSha256),
+                QString::fromStdString(
+                    artifact.specification.contentSha256)
+                    + QStringLiteral(".*"),
+            },
+            QDir::Files,
+            QDir::Name);
+        for (const QFileInfo& match : matches)
+            candidates << match.absoluteFilePath();
+        // One-level nested packages (e.g. logos_palace_ui/).
+        const QFileInfoList subdirs = verifiedRoot.entryInfoList(
+            QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QFileInfo& subdir : subdirs) {
+            const QDir nested(subdir.absoluteFilePath());
+            const QFileInfoList nestedMatches = nested.entryInfoList(
+                QStringList{
+                    QString::fromStdString(
+                        artifact.specification.contentSha256)
+                        + QStringLiteral(".*"),
+                },
+                QDir::Files,
+                QDir::Name);
+            for (const QFileInfo& match : nestedMatches)
+                candidates << match.absoluteFilePath();
+        }
+    }
+    for (const QString& candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (!info.exists() || info.isSymLink() || !info.isFile())
+            continue;
+        if (static_cast<std::uint64_t>(info.size())
+            != artifact.specification.byteLength) {
+            continue;
+        }
+        QFile input(candidate);
+        if (!input.open(QIODevice::ReadOnly))
+            continue;
+        const QByteArray encoded = input.read(
+            static_cast<qint64>(artifact.specification.byteLength) + 1);
+        input.close();
+        if (encoded.size()
+            != static_cast<qint64>(
+                artifact.specification.byteLength)) {
+            continue;
+        }
+        const std::string candidateBytes = encoded.toStdString();
+        if (palace::crypto::sha256Hex(candidateBytes)
+            != artifact.specification.contentSha256) {
+            continue;
+        }
+        bytes = candidateBytes;
+        return true;
+    }
+    return false;
+}
+
+bool PalaceCoreImpl::completeStorageMvpNetworkFetchFromMaterializedBytes(
+    const palace::StorageCatalogOperation& operation,
+    const std::string& bytes)
+{
+    const auto* artifact =
+        m_storageMvpBundle.artifact(operation.objectId);
+    if (artifact == nullptr
+        || !palace::isCanonicalStorageCid(operation.cid)
+        || bytes.size() != artifact->specification.byteLength
+        || palace::crypto::sha256Hex(bytes)
+            != artifact->specification.contentSha256) {
+        return false;
+    }
+
+    palace::StorageCatalogDownloadAcknowledgementV2 acknowledgement;
+    acknowledgement.protocol = "logos.storage.download";
+    acknowledgement.version = 2U;
+    acknowledgement.accepted = true;
+    acknowledgement.operationId = operation.operationId;
+    acknowledgement.cid = operation.cid;
+    const palace::StorageCatalogTransition acknowledged =
+        m_storageCatalog.downloadAcknowledged(acknowledgement);
+    if (!acknowledged.accepted)
+        return false;
+
+    if (!m_storageMvpBundle.acceptFetchedBytes(
+            operation.objectId, bytes)) {
+        return false;
+    }
+
+    const bool pngAsset =
+        artifact->type
+            == palace::PalaceStorageMvpArtifactType::BackgroundPng
+        || artifact->type
+            == palace::PalaceStorageMvpArtifactType::PropPng;
+    if (pngAsset) {
+        const palace::VerifiedAsset verified =
+            m_verifiedAssetStore
+            ? m_verifiedAssetStore->stagePngBytes(bytes)
+            : palace::VerifiedAsset{};
+        const std::string roomId =
+            operation.objectId == "background-atrium"
+            ? "atrium"
+            : operation.objectId == "background-lounge"
+                ? "lounge" : std::string{};
+        if (!verified.accepted
+            || verified.handle
+                != artifact->specification.contentSha256) {
+            return false;
+        }
+        if (!roomId.empty()) {
+            m_storageMvpPendingRoomBackgrounds[roomId] =
+                verified.handle;
+        }
+    }
+
+    palace::StorageCatalogDownloadTerminalV2 catalogTerminal;
+    catalogTerminal.protocol = "logos.storage.download";
+    catalogTerminal.version = 2U;
+    catalogTerminal.operationId = operation.operationId;
+    catalogTerminal.cid = operation.cid;
+    catalogTerminal.outcome =
+        palace::StorageCatalogDownloadOutcome::Succeeded;
+    const palace::StorageCatalogTransition completed =
+        m_storageCatalog.downloadFinished(catalogTerminal, bytes);
+    if (!completed.accepted)
+        return false;
+
+    m_storageMvpFetchedObjects.insert(operation.objectId);
+    if (m_storageMvpFetchedObjects.size()
+        == m_storageMvpBundle.artifactCount()) {
+        if (!m_storageMvpBundle.fetchedContentValid()
+            || !promoteStorageMvpBackgrounds()) {
+            m_storageMvpFailures["backgrounds"] =
+                "verified-background-resolution";
+            m_storageMvpMode = "degraded";
+            return false;
+        }
+        m_storageMvpMode = "verified";
+        persistStorageMvpCatalogIfFinalized();
+        refreshDeliveryAllowedProps();
+        std::string recoveryReason;
+        recoverFinalizedPalaceVmTurn(recoveryReason);
+        return true;
+    }
+    return scheduleNextStorageMvpFetch();
+}
+
 bool PalaceCoreImpl::startStorageMvpCatalogDownload(
     const palace::StorageCatalogOperation& operation,
     bool localOnly,
@@ -8661,27 +8834,41 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
         storageDownloadPath(operation.operationId);
     if (path.empty())
         return false;
+    // Co-located materialize+mark: never call downloadToUrlV2 at all.
+    // After block copy, native exists reports cache source (localOnly=true);
+    // downloadToUrlV2(local=true) still hangs after writing exact bytes
+    // (IyK2mOBL: verified=0 stuck with storage-1-1.bin complete). Complete
+    // from harness-copied storage_publications / verified_assets instead.
+    if (purpose == StorageMvpTransferPurpose::NetworkFetch
+        && m_storageMvpColocatedMaterialized) {
+        const auto* artifact =
+            m_storageMvpBundle.artifact(operation.objectId);
+        std::string bytes;
+        if (artifact == nullptr
+            || !loadColocatedMaterializedObjectBytes(*artifact, bytes)
+            || !completeStorageMvpNetworkFetchFromMaterializedBytes(
+                operation, bytes)) {
+            return false;
+        }
+        return true;
+    }
     // Peer network path: never use downloadToUrlV2(local=false) — it hangs
     // after accept on co-located meshes (network-fetch-timeout). Prefer local
-    // verification when blocks were materialized or fetch()/exists succeeds.
+    // verification when fetch()/exists succeeds.
     bool useLocalVerification = localOnly;
     if (!localOnly
         && purpose == StorageMvpTransferPurpose::NetworkFetch) {
-        if (m_storageMvpColocatedMaterialized) {
-            useLocalVerification = true;
-        } else {
-            (void)modules().storage_module.fetch(operation.cid);
-            for (int probe = 0; probe < 6; ++probe) {
-                const StdLogosResult exists =
-                    modules().storage_module.exists(operation.cid);
-                if (exists.success
-                    && exists.value.is_boolean()
-                    && exists.value.get<bool>()) {
-                    useLocalVerification = true;
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        (void)modules().storage_module.fetch(operation.cid);
+        for (int probe = 0; probe < 6; ++probe) {
+            const StdLogosResult exists =
+                modules().storage_module.exists(operation.cid);
+            if (exists.success
+                && exists.value.is_boolean()
+                && exists.value.get<bool>()) {
+                useLocalVerification = true;
+                break;
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         if (!useLocalVerification)
             return false;

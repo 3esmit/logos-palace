@@ -547,6 +547,26 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.IyK2mOBL @ ddd1db7: mark+local verify still hung downloadToUrlV2(local=
+  // true) after cache source (native_available=8); complete from known bytes.
+  Object.freeze({
+    gitCommit: "ddd1db7f6cb20a028d1389b4f0729a56e7662939",
+    snapshotNarHash:
+      "sha256-SmUwa7IN6/dQA+I08/ySz46eamJYX7douWUWkwOufu4=",
+    snapshotNarSize: 7295320,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "efac57a1b20ce950daca5640a716b31bc2161d476050be1ad2e9a6aa8a36be00",
+    compiledReportSha256:
+      "4bc0f2a1da72b0fce5ee557e6832b799616b4ce764bf169f4229da7b3ed4fab7",
+    gate3ReportSha256:
+      "fc7eb27b939634f3f86881b914aec5a7a759609492845223e397391c647fa083",
+    gate3Failure:
+      "fetch exact MVP bundle on b timed out after 600000 ms: state=fetching;published=8;verified=0;total=8;retention=missing;retention_round=0;source=cache;native_available=8;native_total=8;catalog=bG9nb3MtcGFsYWNlLW12cC1zdG9yYWdlLWNhdGFsb2ctdjEKdmVyc2lvbj0xCnJvb3Q9cGFsYWNlLTEKb2JqZWN0cz04Cm9iamVjdD1iYWNrZ3JvdW5kLWF0cml1bTtiYWNrZ3JvdW5kX3BuZztpbWFnZS9wbmc7ekR2WlJ3emt3UDNVdzRxd2RNNHJ6RXZOVFU4b0ExQlF1SndjTndxeE1LZ3JVdWJBU3k4ZDsxMTc2OTE2O2Y4MjdiNjVlZmVjZDVhNjI",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
