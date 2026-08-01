@@ -58,6 +58,18 @@ bool isSessionId(const std::string& value)
             });
 }
 
+bool isNonzeroLowerHexAccountId(const std::string& value)
+{
+    return value.size() == 64U
+        && value != std::string(64U, '0')
+        && std::all_of(
+            value.begin(), value.end(),
+            [](const unsigned char character) {
+                return (character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f');
+            });
+}
+
 bool isIdentifier(const std::string& value)
 {
     if (value.empty() || value.size() > 64U
@@ -176,7 +188,8 @@ bool AssetAuthoringCatalog::ready() const
 }
 
 AssetAuthoringResult AssetAuthoringCatalog::begin(
-    const std::string& label)
+    const std::string& label,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
@@ -190,6 +203,11 @@ AssetAuthoringResult AssetAuthoringCatalog::begin(
 
     Session session;
     session.label = label;
+    const AssetAuthoringResult creatorBound =
+        bindDraftCreatorForAcceptedMutation(
+            draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     if (!m_sessions.emplace(sessionId, std::move(session)).second)
         return reject("asset-session-id");
     AssetAuthoringResult result =
@@ -201,7 +219,8 @@ AssetAuthoringResult AssetAuthoringCatalog::begin(
 AssetAuthoringResult AssetAuthoringCatalog::append(
     const std::string& sessionId,
     std::uint64_t sequence,
-    const std::string& canonicalBase64)
+    const std::string& canonicalBase64,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
@@ -222,6 +241,11 @@ AssetAuthoringResult AssetAuthoringCatalog::append(
         return reject("asset-too-large");
     }
 
+    const AssetAuthoringResult creatorBound =
+        bindDraftCreatorForAcceptedMutation(
+            draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     found->second.bytes.append(
         decoded.constData(),
         static_cast<std::size_t>(decoded.size()));
@@ -235,7 +259,8 @@ AssetAuthoringResult AssetAuthoringCatalog::append(
 }
 
 AssetAuthoringResult AssetAuthoringCatalog::commit(
-    const std::string& sessionId)
+    const std::string& sessionId,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready || !m_verifiedAssets || !m_store)
         return reject("asset-state-unavailable");
@@ -271,6 +296,11 @@ AssetAuthoringResult AssetAuthoringCatalog::commit(
                    != found->second.bytes.size()) {
         return reject("asset-existing-metadata");
     }
+    const AssetAuthoringResult creatorBound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     if (!persist(candidate))
         return reject("asset-state-persistence");
 
@@ -287,23 +317,39 @@ AssetAuthoringResult AssetAuthoringCatalog::commit(
 }
 
 AssetAuthoringResult AssetAuthoringCatalog::cancel(
-    const std::string& sessionId)
+    const std::string& sessionId,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
     if (!isSessionId(sessionId))
         return reject("asset-session-invalid");
-    if (m_sessions.erase(sessionId) != 1U)
+    const auto found = m_sessions.find(sessionId);
+    if (found == m_sessions.end())
         return reject("asset-session-unknown");
+    const AssetAuthoringResult creatorBound =
+        bindDraftCreatorForAcceptedMutation(
+            draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
+    m_sessions.erase(found);
     AssetAuthoringResult result =
         accept("asset-session-cancelled");
     result.sessionId = sessionId;
     return result;
 }
 
+AssetAuthoringResult AssetAuthoringCatalog::bindDraftCreator(
+    const std::string& accountId)
+{
+    return bindDraftCreatorForAcceptedMutation(
+        std::optional<std::string>{accountId});
+}
+
 AssetAuthoringResult AssetAuthoringCatalog::review(
     const std::string& handle,
-    const std::string& decision)
+    const std::string& decision,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
@@ -325,6 +371,11 @@ AssetAuthoringResult AssetAuthoringCatalog::review(
 
     AssetAuthoringStateV1 candidate = m_state;
     candidate.assets.at(handle).reviewState = reviewState;
+    const AssetAuthoringResult creatorBound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     if (!persist(candidate))
         return reject("asset-state-persistence");
     return accept(reviewState);
@@ -361,7 +412,8 @@ AssetAuthoringResult AssetAuthoringCatalog::recordPublishedCid(
 
 AssetAuthoringResult AssetAuthoringCatalog::assign(
     const std::string& roomId,
-    const std::string& handle)
+    const std::string& handle,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
@@ -384,6 +436,11 @@ AssetAuthoringResult AssetAuthoringCatalog::assign(
 
     AssetAuthoringStateV1 candidate = m_state;
     candidate.roomAssignments[roomId] = handle;
+    const AssetAuthoringResult creatorBound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     if (!persist(candidate))
         return reject("asset-state-persistence");
     return accept("background-assigned");
@@ -394,7 +451,8 @@ AssetAuthoringResult AssetAuthoringCatalog::assignProp(
     const std::string& handle,
     std::uint32_t anchorX,
     std::uint32_t anchorY,
-    const std::string& layer)
+    const std::string& layer,
+    const std::optional<std::string>& draftCreatorAccountId)
 {
     if (!m_ready)
         return reject("asset-state-unavailable");
@@ -433,6 +491,11 @@ AssetAuthoringResult AssetAuthoringCatalog::assignProp(
 
     AssetAuthoringStateV1 candidate = m_state;
     candidate.propAssignment = std::move(assignment);
+    const AssetAuthoringResult creatorBound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
     if (!persist(candidate))
         return reject("asset-state-persistence");
     return accept("prop-assigned");
@@ -440,19 +503,32 @@ AssetAuthoringResult AssetAuthoringCatalog::assignProp(
 
 bool AssetAuthoringCatalog::lockAssignments()
 {
+    return lockAssignments(std::nullopt).accepted;
+}
+
+AssetAuthoringResult AssetAuthoringCatalog::lockAssignments(
+    const std::optional<std::string>& draftCreatorAccountId)
+{
     if (!m_ready
         || m_state.roomAssignments.size() != 2U
         || m_state.roomAssignments.find("atrium")
             == m_state.roomAssignments.end()
         || m_state.roomAssignments.find("lounge")
             == m_state.roomAssignments.end()) {
-        return false;
+        return reject("asset-assignment-incomplete");
     }
     if (m_state.bundleLocked)
-        return true;
+        return accept("asset-assignments-locked");
     AssetAuthoringStateV1 candidate = m_state;
     candidate.bundleLocked = true;
-    return persist(candidate);
+    const AssetAuthoringResult creatorBound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!creatorBound.accepted)
+        return creatorBound;
+    if (!persist(candidate))
+        return reject("asset-state-persistence");
+    return accept("asset-assignments-locked");
 }
 
 std::string AssetAuthoringCatalog::handleForRoom(
@@ -489,9 +565,55 @@ AssetAuthoringCatalog::state() const
     return m_state;
 }
 
+const std::optional<std::string>&
+AssetAuthoringCatalog::draftCreatorAccountId() const
+{
+    return m_state.draftCreatorAccountId;
+}
+
 std::size_t AssetAuthoringCatalog::sessionCount() const
 {
     return m_sessions.size();
+}
+
+AssetAuthoringResult AssetAuthoringCatalog::applyDraftCreatorBinding(
+    AssetAuthoringStateV1& candidate,
+    const std::optional<std::string>& draftCreatorAccountId) const
+{
+    if (!draftCreatorAccountId.has_value())
+        return accept("draft-creator-unchanged");
+    if (!isNonzeroLowerHexAccountId(*draftCreatorAccountId))
+        return reject("draft-creator-invalid");
+    if (candidate.draftCreatorAccountId
+        == draftCreatorAccountId) {
+        return accept("draft-creator-bound");
+    }
+    if (candidate.draftCreatorAccountId.has_value())
+        return reject("draft-creator-mismatch");
+    candidate.draftCreatorAccountId = draftCreatorAccountId;
+    return accept("draft-creator-bound");
+}
+
+AssetAuthoringResult
+AssetAuthoringCatalog::bindDraftCreatorForAcceptedMutation(
+    const std::optional<std::string>& draftCreatorAccountId)
+{
+    if (!m_ready || !m_store)
+        return reject("asset-state-unavailable");
+
+    AssetAuthoringStateV1 candidate = m_state;
+    const AssetAuthoringResult bound =
+        applyDraftCreatorBinding(
+            candidate, draftCreatorAccountId);
+    if (!bound.accepted)
+        return bound;
+    if (candidate.draftCreatorAccountId
+        == m_state.draftCreatorAccountId) {
+        return bound;
+    }
+    if (!persist(candidate))
+        return reject("asset-state-persistence");
+    return bound;
 }
 
 bool AssetAuthoringCatalog::persist(

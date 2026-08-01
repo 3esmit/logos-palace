@@ -206,6 +206,67 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
   assert.match(mainQml, /text: "Set Lounge"/);
 });
 
+test("asset authoring capability stays sourced from Core owner status", () => {
+  assert.match(
+    coreImpl,
+    /std::string PalaceCoreImpl::assetAuthoringCapabilityStatus\(\)/,
+  );
+  assert.match(
+    coreImpl,
+    /currentAssetAuthoringAuthorityStatus\(false\)/,
+  );
+  assert.match(
+    coreImpl,
+    /can_author_assets=/,
+  );
+  assert.match(
+    uiRep,
+    /PROP\(QString assetAuthoringCapabilityState="authority=unavailable;can_author_assets=0;reason=core-unavailable" READONLY\)/,
+  );
+  assert.match(
+    backendCpp,
+    /setAssetAuthoringCapabilityState\(\s*modules\(\)\.palace_core\.assetAuthoringCapabilityStatus\(\)\);/,
+  );
+  assert.match(
+    mainQml,
+    /readonly property bool canManageAssets:[\s\S]{0,220}assetAuthoringCapabilityState,\s*"can_author_assets"\)\s*=== "1"/,
+  );
+  assert.match(mainQml, /function assetAuthoringReadOnlyMessage\(\)/);
+  assert.match(mainQml, /function rejectAssetAuthoringReadOnly\(\)/);
+  assert.match(
+    mainQml,
+    /reviewAsset\(handle,\s*decision\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /assignRoomBackground\(roomId,\s*handle\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /selectAssetFile\(\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /gate3PublishBundle\(\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /gate3PublishPng\(handle\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /ToolTip\.text:\s*root\.assetAuthoringReadOnlyMessage\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /enabled:\s*root\.ready[\s\S]{0,160}root\.canManageAssets[\s\S]{0,160}!root\.assetImportRunning/,
+  );
+  assert.match(
+    backendCpp,
+    /setActivePropAsset\([\s\S]{0,240}refreshAssetAuthoringCapabilityState\(\);/,
+  );
+});
+
 test("backend stops poll timers on teardown", () => {
   assert.match(backendH, /~LogosPalaceUiBackend\(\)/);
   assert.match(backendCpp, /stopPollingTimers/);
@@ -319,4 +380,31 @@ test("LEZ moderation controls reflect Core finalized capability only", () => {
   assert.match(trashBlock, /visible:\s*root\.canBanProp/);
   assert.match(trashBlock, /enabled:\s*root\.canBanProp/);
   assert.doesNotMatch(assetsBlock, /canBan(User|Prop)/);
+});
+
+test("moderation roster scrolls inside fixed operator panel", () => {
+  const panelOffset = mainQml.indexOf('objectName: "palaceModerationPanel"');
+  const rosterOffset = mainQml.indexOf('objectName: "palaceModerationRoster"');
+  const propOffset = mainQml.indexOf(
+    'objectName: "palaceBanAssignedPropButton"',
+  );
+  const statusOffset = mainQml.indexOf('objectName: "palaceModerationStatus"');
+  assert.ok(panelOffset >= 0 && rosterOffset >= 0);
+  assert.ok(panelOffset < rosterOffset);
+  assert.ok(rosterOffset < propOffset);
+  assert.ok(propOffset < statusOffset);
+  const rosterBlock = mainQml.slice(rosterOffset, rosterOffset + 900);
+  assert.match(rosterBlock, /Flickable/);
+  assert.match(
+    rosterBlock,
+    /contentHeight:\s*moderationRosterContent\.implicitHeight/,
+  );
+  assert.match(
+    rosterBlock,
+    /flickableDirection:\s*Flickable\.VerticalFlick/,
+  );
+  assert.match(
+    rosterBlock,
+    /Repeater\s*\{[\s\S]{0,180}model:\s*root\.participants\.length/,
+  );
 });

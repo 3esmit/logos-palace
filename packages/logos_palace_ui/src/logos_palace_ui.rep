@@ -56,6 +56,7 @@ class LogosPalaceUi
     PROP(QString deliverySessionStatus="state=unavailable" READONLY)
     PROP(QString storageStatus="storage=unavailable" READONLY)
     PROP(QString assetAuthoringState="{\"version\":1,\"count\":0,\"sessionCount\":0,\"bundleLocked\":false,\"roomAssignments\":{\"atrium\":\"\",\"lounge\":\"\"},\"propAssignment\":null,\"assets\":[]}" READONLY)
+    PROP(QString assetAuthoringCapabilityState="authority=unavailable;can_author_assets=0;reason=core-unavailable" READONLY)
     PROP(QString activePropAsset="{\"version\":1,\"available\":false}" READONLY)
     PROP(QString lezState="wallet=closed;ready=0" READONLY)
     PROP(QString identityState="identity=none" READONLY)

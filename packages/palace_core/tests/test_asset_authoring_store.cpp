@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 
 #include "palace_asset_authoring_store.h"
+#include "palace_sha256.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -87,6 +88,12 @@ palace::AssetAuthoringStateV1 lockedRoomState()
     return state;
 }
 
+QString recordPath(const Fixture& fixture)
+{
+    return fixture.instanceRoot
+        + QStringLiteral("/asset-authoring-v1");
+}
+
 } // namespace
 
 LOGOS_TEST(asset_authoring_store_is_atomic_owner_only_and_sealed)
@@ -99,9 +106,7 @@ LOGOS_TEST(asset_authoring_store_is_atomic_owner_only_and_sealed)
         store.save(empty)
         == palace::AssetAuthoringStoreStatus::Saved);
 
-    const QString path =
-        fixture.instanceRoot
-        + QStringLiteral("/asset-authoring-v1");
+    const QString path = recordPath(fixture);
     const QFileInfo record(path);
     LOGOS_ASSERT_TRUE(record.isFile());
     LOGOS_ASSERT_FALSE(record.isSymLink());
@@ -134,9 +139,7 @@ LOGOS_TEST(asset_authoring_store_is_atomic_owner_only_and_sealed)
 LOGOS_TEST(asset_authoring_store_rejects_symlink)
 {
     Fixture fixture;
-    const QString path =
-        fixture.instanceRoot
-        + QStringLiteral("/asset-authoring-v1");
+    const QString path = recordPath(fixture);
     const QString target =
         fixture.instanceRoot + QStringLiteral("/target");
     QFile targetFile(target);
@@ -217,4 +220,63 @@ LOGOS_TEST(asset_authoring_store_rejects_invalid_generic_state)
         store.save(state)
         == palace::AssetAuthoringStoreStatus::
             InvalidArgument);
+}
+
+LOGOS_TEST(asset_authoring_store_persists_draft_creator)
+{
+    Fixture fixture;
+    palace::AssetAuthoringStore store(
+        fixture.instanceRoot.toStdString());
+    palace::AssetAuthoringStateV1 source = lockedRoomState();
+    source.bundleLocked = false;
+    source.roomAssignments.clear();
+    source.draftCreatorAccountId = std::string(64U, 'b');
+    LOGOS_ASSERT_TRUE(
+        store.save(source)
+        == palace::AssetAuthoringStoreStatus::Saved);
+
+    palace::AssetAuthoringStateV1 restored;
+    LOGOS_ASSERT_TRUE(
+        store.load(restored)
+        == palace::AssetAuthoringStoreStatus::Loaded);
+    LOGOS_ASSERT_TRUE(restored.draftCreatorAccountId.has_value());
+    LOGOS_ASSERT_EQ(
+        *restored.draftCreatorAccountId,
+        std::string(64U, 'b'));
+}
+
+LOGOS_TEST(asset_authoring_store_loads_legacy_v1_without_draft_creator)
+{
+    Fixture fixture;
+    const std::string body =
+        "logos-palace-asset-authoring-v1\n"
+        "version=1\n"
+        "locked=0\n"
+        "assets=0\n"
+        "assignment=atrium;-\n"
+        "assignment=lounge;-\n"
+        "prop=-\n";
+    const std::string encoded =
+        body + "checksum=" + palace::crypto::sha256Hex(body) + '\n';
+    QFile output(recordPath(fixture));
+    LOGOS_ASSERT_TRUE(output.open(QIODevice::WriteOnly));
+    LOGOS_ASSERT_EQ(
+        output.write(
+            encoded.data(),
+            static_cast<qint64>(encoded.size())),
+        static_cast<qint64>(encoded.size()));
+    output.close();
+    LOGOS_ASSERT_TRUE(
+        output.setPermissions(
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner));
+
+    palace::AssetAuthoringStore store(
+        fixture.instanceRoot.toStdString());
+    palace::AssetAuthoringStateV1 restored;
+    LOGOS_ASSERT_TRUE(
+        store.load(restored)
+        == palace::AssetAuthoringStoreStatus::Loaded);
+    LOGOS_ASSERT_FALSE(restored.draftCreatorAccountId.has_value());
+    LOGOS_ASSERT_TRUE(restored.assets.empty());
 }

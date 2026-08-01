@@ -106,6 +106,7 @@ private:
     void refreshDeliveryState();
     void refreshDeliveryNodeEvidence();
     void refreshStorageState();
+    void refreshAssetAuthoringCapabilityState();
     void refreshLezState();
     void refreshPalaceState();
     void refreshModerationState();

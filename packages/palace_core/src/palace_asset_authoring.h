@@ -34,6 +34,7 @@ struct AssetAuthoringStateV1 {
     std::map<std::string, AssetAuthoringAssetV1> assets;
     std::map<std::string, std::string> roomAssignments;
     std::optional<AssetAuthoringPropAssignmentV1> propAssignment;
+    std::optional<std::string> draftCreatorAccountId;
     bool bundleLocked = false;
 };
 
@@ -69,32 +70,56 @@ public:
                     const VerifiedAssetStore& verifiedAssets);
     bool ready() const;
 
-    AssetAuthoringResult begin(const std::string& label);
+    AssetAuthoringResult begin(
+        const std::string& label,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
     AssetAuthoringResult append(const std::string& sessionId,
                                 std::uint64_t sequence,
-                                const std::string& canonicalBase64);
-    AssetAuthoringResult commit(const std::string& sessionId);
-    AssetAuthoringResult cancel(const std::string& sessionId);
-    AssetAuthoringResult review(const std::string& handle,
-                                const std::string& decision);
+                                const std::string& canonicalBase64,
+                                const std::optional<std::string>&
+                                    draftCreatorAccountId = std::nullopt);
+    AssetAuthoringResult commit(
+        const std::string& sessionId,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
+    AssetAuthoringResult cancel(
+        const std::string& sessionId,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
+    AssetAuthoringResult bindDraftCreator(
+        const std::string& accountId);
+    AssetAuthoringResult review(
+        const std::string& handle,
+        const std::string& decision,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
     AssetAuthoringResult recordPublishedCid(
         const std::string& handle,
         const std::string& cid);
-    AssetAuthoringResult assign(const std::string& roomId,
-                                const std::string& handle);
+    AssetAuthoringResult assign(
+        const std::string& roomId,
+        const std::string& handle,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
     AssetAuthoringResult assignProp(
         const std::string& propId,
         const std::string& handle,
         std::uint32_t anchorX,
         std::uint32_t anchorY,
-        const std::string& layer);
+        const std::string& layer,
+        const std::optional<std::string>& draftCreatorAccountId =
+            std::nullopt);
     bool lockAssignments();
+    AssetAuthoringResult lockAssignments(
+        const std::optional<std::string>& draftCreatorAccountId);
 
     std::string handleForRoom(const std::string& roomId) const;
     const AssetAuthoringAssetV1* asset(
         const std::string& handle) const;
     std::vector<AssetAuthoringAssetV1> assets() const;
     const AssetAuthoringStateV1& state() const;
+    const std::optional<std::string>& draftCreatorAccountId() const;
     std::size_t sessionCount() const;
 
 private:
@@ -105,6 +130,11 @@ private:
     };
 
     bool persist(const AssetAuthoringStateV1& candidate);
+    AssetAuthoringResult applyDraftCreatorBinding(
+        AssetAuthoringStateV1& candidate,
+        const std::optional<std::string>& draftCreatorAccountId) const;
+    AssetAuthoringResult bindDraftCreatorForAcceptedMutation(
+        const std::optional<std::string>& draftCreatorAccountId);
     std::string nextSessionId() const;
 
     const VerifiedAssetStore* m_verifiedAssets = nullptr;

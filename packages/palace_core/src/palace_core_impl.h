@@ -80,6 +80,13 @@ struct PalaceLezTrackedSubmissionRecoveryResultV1 {
     PalaceLezSubmissionIntentV1 committedIntent;
 };
 
+struct AssetAuthoringDraftAuthorityDecisionV1 {
+    bool accepted = false;
+    bool canAuthorAssets = false;
+    bool needsDraftCreatorBinding = false;
+    std::string reason;
+};
+
 inline bool samePalaceLezRecoveryPlanV1(
     const PalaceLezTransactionPlanV3& first,
     const PalaceLezTransactionPlanV3& second)
@@ -103,6 +110,48 @@ inline bool canonicalPalaceLezTransactionHashV1(
                 return (character >= '0' && character <= '9')
                     || (character >= 'a' && character <= 'f');
             });
+}
+
+inline AssetAuthoringDraftAuthorityDecisionV1
+ensureDraftAssetAuthoringAuthorityV1(
+    AssetAuthoringCatalog& catalog,
+    const std::string& actorAccountIdHex)
+{
+    if (!catalog.ready()) {
+        return {
+            false,
+            false,
+            false,
+            "asset-state-unavailable",
+        };
+    }
+    if (!canonicalPalaceLezTransactionHashV1(actorAccountIdHex)
+        || actorAccountIdHex == std::string(64U, '0')) {
+        return {
+            false,
+            false,
+            false,
+            "identity-account-invalid",
+        };
+    }
+    const auto& draftCreator = catalog.draftCreatorAccountId();
+    if (draftCreator.has_value()) {
+        const bool authorized =
+            *draftCreator == actorAccountIdHex;
+        return {
+            authorized,
+            authorized,
+            false,
+            authorized ? std::string("authorized")
+                       : std::string("draft-creator-mismatch"),
+        };
+    }
+    return {
+        true,
+        true,
+        true,
+        "draft-creator-unclaimed",
+    };
 }
 
 // A tracked coordinator entry is recovery evidence only after the complete
@@ -384,6 +433,9 @@ public:
     // Read-only capability state derived from the same finalized LEZ authority
     // preflight used by banUser/banProp. It never trusts QML or delivery hints.
     std::string moderationCapabilityStatus() const;
+    // Read-only capability state for local MVP asset authoring. Draft mode is
+    // local-only; finalized mode requires the current Palace root owner.
+    std::string assetAuthoringCapabilityStatus();
     // `actionId` is a canonical decimal u64 shared with the guest. Zero is
     // reserved for Palace initialization; later actions are positive.
     std::string submitIntent(const std::string& actionId);
@@ -543,6 +595,16 @@ private:
             eligibleGrants;
     };
 
+    struct AssetAuthoringAuthorityStatus {
+        bool accepted = false;
+        bool canAuthorAssets = false;
+        std::string authority = "unavailable";
+        std::string reason = "asset-state-unavailable";
+        // Draft claims are carried to the concrete mutation boundary. This
+        // status probe never persists them.
+        std::optional<std::string> draftCreatorAccountIdToBind;
+    };
+
     bool persistProjection();
     void persistActionJournal();
     void persistDeliverySessionLocked();
@@ -643,6 +705,11 @@ private:
     finalizedHumanModerationAuthority(
         const HumanModerationContext& context,
         std::uint32_t requiredCapability) const;
+    AssetAuthoringAuthorityStatus currentAssetAuthoringAuthorityStatus(
+        bool includeDraftCreatorBinding);
+    bool currentFinalizedAssetAuthoringRoot(
+        palace::PalaceLezRootRecordV3& root,
+        std::string& reason) const;
     bool repairTrackedPalaceSubmissionIntent(
         const palace::PalaceLezTransactionPlanV3& requestedPlan,
         std::string& transactionHash,

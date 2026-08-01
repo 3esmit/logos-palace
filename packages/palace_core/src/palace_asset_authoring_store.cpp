@@ -19,7 +19,8 @@ namespace palace {
 namespace {
 
 constexpr char kFileName[] = "asset-authoring-v1";
-constexpr char kHeader[] = "logos-palace-asset-authoring-v1";
+constexpr char kHeaderV1[] = "logos-palace-asset-authoring-v1";
+constexpr char kHeaderV2[] = "logos-palace-asset-authoring-v2";
 constexpr qsizetype kMaximumRecordBytes = 128 * 1024;
 constexpr std::uint32_t kMaximumDimension = 4096U;
 constexpr std::uint64_t kMaximumPixels = 16U * 1024U * 1024U;
@@ -40,6 +41,12 @@ bool isLowerHex64(const std::string& value)
                 return (character >= '0' && character <= '9')
                     || (character >= 'a' && character <= 'f');
             });
+}
+
+bool isNonzeroLowerHex64(const std::string& value)
+{
+    return isLowerHex64(value)
+        && value != std::string(64U, '0');
 }
 
 bool validLabel(const std::string& label)
@@ -173,6 +180,11 @@ bool validate(const AssetAuthoringStateV1& state)
         || state.roomAssignments.size() > 2U) {
         return false;
     }
+    if (state.draftCreatorAccountId.has_value()
+        && !isNonzeroLowerHex64(
+            *state.draftCreatorAccountId)) {
+        return false;
+    }
     for (const auto& [handle, asset] : state.assets) {
         if (handle != asset.handle
             || !isLowerHex64(handle)
@@ -234,9 +246,14 @@ std::string serialize(const AssetAuthoringStateV1& state)
     if (!validate(state))
         return {};
     std::ostringstream body;
-    body << kHeader << '\n'
-         << "version=1\n"
+    body << kHeaderV2 << '\n'
+         << "version=2\n"
          << "locked=" << (state.bundleLocked ? 1 : 0) << '\n'
+         << "draft_creator="
+         << (state.draftCreatorAccountId.has_value()
+                 ? *state.draftCreatorAccountId
+                 : std::string("-"))
+         << '\n'
          << "assets=" << state.assets.size() << '\n';
     for (const auto& [handle, asset] : state.assets) {
         body << "asset=" << handle
@@ -282,20 +299,32 @@ bool parse(
 {
     const std::vector<std::string> recordLines = lines(encoded);
     if (recordLines.size() < 8U
-        || recordLines[0] != kHeader
-        || recordLines[1] != "version=1"
-        || (recordLines[2] != "locked=0"
-            && recordLines[2] != "locked=1")
-        || recordLines[3].rfind("assets=", 0U) != 0U
         || recordLines.back().rfind("checksum=", 0U) != 0U) {
         return false;
     }
+    const bool version1 =
+        recordLines[0] == kHeaderV1
+        && recordLines[1] == "version=1";
+    const bool version2 =
+        recordLines[0] == kHeaderV2
+        && recordLines[1] == "version=2";
+    if ((!version1 && !version2)
+        || (recordLines[2] != "locked=0"
+            && recordLines[2] != "locked=1")) {
+        return false;
+    }
+    const std::size_t assetsLineIndex =
+        version2 ? 4U : 3U;
+    if (recordLines[assetsLineIndex].rfind("assets=", 0U) != 0U)
+        return false;
     std::uint64_t assetCount = 0U;
     if (!parseUnsigned(
-            recordLines[3].substr(7U), assetCount)
+            recordLines[assetsLineIndex].substr(7U),
+            assetCount)
         || assetCount
             > AssetAuthoringCatalog::MaximumAssets
-        || recordLines.size() != assetCount + 8U) {
+        || recordLines.size()
+            != assetCount + (version2 ? 9U : 8U)) {
         return false;
     }
     const std::size_t checksumOffset =
@@ -309,9 +338,19 @@ bool parse(
 
     AssetAuthoringStateV1 candidate;
     candidate.bundleLocked = recordLines[2] == "locked=1";
+    if (version2) {
+        if (recordLines[3].rfind("draft_creator=", 0U) != 0U) {
+            return false;
+        }
+        const std::string encodedCreator =
+            recordLines[3].substr(14U);
+        if (encodedCreator != "-")
+            candidate.draftCreatorAccountId = encodedCreator;
+    }
     for (std::uint64_t index = 0U;
          index < assetCount; ++index) {
-        const std::string& line = recordLines[index + 4U];
+        const std::string& line =
+            recordLines[index + assetsLineIndex + 1U];
         if (line.rfind("asset=", 0U) != 0U)
             return false;
         const std::vector<std::string> fields =
@@ -341,7 +380,7 @@ bool parse(
     }
     for (std::size_t offset = 0U; offset < 2U; ++offset) {
         const std::string& line =
-            recordLines[assetCount + 4U + offset];
+            recordLines[assetCount + assetsLineIndex + 1U + offset];
         if (line.rfind("assignment=", 0U) != 0U)
             return false;
         const std::vector<std::string> fields =
@@ -354,7 +393,7 @@ bool parse(
             candidate.roomAssignments.emplace(fields[0], fields[1]);
     }
     const std::string& propLine =
-        recordLines[assetCount + 6U];
+        recordLines[assetCount + assetsLineIndex + 3U];
     if (propLine == "prop=-") {
         candidate.propAssignment.reset();
     } else {

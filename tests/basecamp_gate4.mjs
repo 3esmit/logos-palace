@@ -1095,6 +1095,45 @@ async function invoke(
   return evidence;
 }
 
+async function verifyFinalizedAssetAuthoringCoreAuthority(
+  ownerWorker,
+  nonOwnerWorker,
+) {
+  if (!ownerWorker || !nonOwnerWorker) {
+    throw new Error(
+      "finalized asset-authoring authority workers are unavailable",
+    );
+  }
+  const unknownHandle = "0".repeat(64);
+  const [owner, nonOwner] = await Promise.all([
+    invoke(
+      ownerWorker,
+      "assetAuthoringCoreProbe",
+      [unknownHandle],
+      undefined,
+      30_000,
+    ),
+    invoke(
+      nonOwnerWorker,
+      "assetAuthoringCoreProbe",
+      [unknownHandle],
+      undefined,
+      30_000,
+    ),
+  ]);
+  if (
+    owner.receipt !== "rejected=asset-unknown"
+    || nonOwner.receipt
+      !== "rejected=asset-authoring-root-owner-required"
+  ) {
+    throw new Error(
+      "finalized asset-authoring Core authority differs: "
+        + `owner=${JSON.stringify(owner.receipt)} `
+        + `non-owner=${JSON.stringify(nonOwner.receipt)}`,
+    );
+  }
+}
+
 function parseRevisions() {
   const encoded = process.env.PALACE_GATE4_DEPENDENCY_REVISIONS;
   if (!encoded) return {};
@@ -6803,6 +6842,10 @@ try {
       await checkpointReport();
     }
     report.storage.initial.status = "passed";
+    await verifyFinalizedAssetAuthoringCoreAuthority(
+      workers.get("a"),
+      workers.get("b"),
+    );
   }
   const expectedActivePropProjection =
     catalog.assetAuthoringEvidence.activePropProjection;

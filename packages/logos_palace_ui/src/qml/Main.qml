@@ -19,6 +19,9 @@ Item {
     readonly property string assetAuthoringState: backend
         ? backend.assetAuthoringState
         : "{\"version\":1,\"count\":0,\"sessionCount\":0,\"bundleLocked\":false,\"roomAssignments\":{\"atrium\":\"\",\"lounge\":\"\"},\"propAssignment\":null,\"assets\":[]}"
+    readonly property string assetAuthoringCapabilityState: backend
+        ? backend.assetAuthoringCapabilityState
+        : "authority=unavailable;can_author_assets=0;reason=core-unavailable"
     readonly property string activePropAssetState: backend
         ? backend.activePropAsset
         : "{\"version\":1,\"available\":false}"
@@ -146,6 +149,10 @@ Item {
     readonly property string availablePropId:
         activePropAsset.available === true
         ? String(activePropAsset.propId) : ""
+    readonly property bool canManageAssets: ready
+        && encodedStatusValue(
+            assetAuthoringCapabilityState, "can_author_assets")
+            === "1"
     // Human moderation is an admin-only LEZ command. Never infer it from
     // display identity or room state; Core derives it from finalized authority.
     readonly property bool canBanUser: ready
@@ -650,6 +657,8 @@ Item {
     function gate3PublishPng(handle) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(
             backend.publishVerifiedPng(String(handle)), null)
     }
@@ -661,9 +670,30 @@ Item {
             backend.publicationStatus(String(handle)), null)
     }
 
+    function assetAuthoringReadOnlyMessage() {
+        if (encodedStatusValue(
+                assetAuthoringCapabilityState, "authority")
+                === "finalized") {
+            return "Read-only. Only Palace owner can approve, upload, or assign assets."
+        }
+        return "Read-only. Only current draft creator can change assets."
+    }
+
+    function rejectAssetAuthoringReadOnly() {
+        invocationError =
+            "rejected=asset-authoring-read-only;reason="
+            + encodedStatusValue(
+                assetAuthoringCapabilityState, "reason")
+        watchedActionReceipt = ""
+        ++invocationSequence
+        return invocationError
+    }
+
     function reviewAsset(handle, decision) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(
             backend.reviewAsset(
                 String(handle), String(decision)),
@@ -673,6 +703,8 @@ Item {
     function publishAsset(handle) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(
             backend.publishAsset(String(handle)),
             null)
@@ -681,6 +713,8 @@ Item {
     function assignRoomBackground(roomId, handle) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(
             backend.assignRoomBackground(
                 String(roomId), String(handle)),
@@ -690,6 +724,8 @@ Item {
     function assignPropAsset(propId, handle, anchorX, anchorY, layer) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(
             backend.assignPropAsset(
                 String(propId),
@@ -757,6 +793,8 @@ Item {
     function reviewAndPublishAsset(handle) {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         invocationError = ""
         logos.watch(
             backend.reviewAsset(String(handle), "approve"),
@@ -1168,6 +1206,8 @@ Item {
     function selectAssetFile() {
         if (!ready || !backend || assetImportRunning)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         if (typeof userFiles === "undefined") {
             invocationError = "rejected=selected-file-bridge-unavailable"
             ++invocationSequence
@@ -1200,6 +1240,8 @@ Item {
     function gate3PublishBundle() {
         if (!ready || !backend)
             return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
         return watchAction(backend.publishMvpStorageBundle(), null)
     }
 
@@ -1610,6 +1652,8 @@ Item {
                         text: "Assets"
                         font.pixelSize: 10
                         enabled: root.ready
+                        ToolTip.visible: hovered && !root.canManageAssets
+                        ToolTip.text: root.assetAuthoringReadOnlyMessage()
                         onClicked: root.backgroundModerationOpen = true
                     }
                     Button {
@@ -2278,8 +2322,9 @@ Item {
             anchors.topMargin: 42
             width: 176
             height: Math.min(
-                200, 56 + root.participants.length * 28
-                + (root.availablePropId.length > 0 ? 28 : 0))
+                248, 108
+                + (root.availablePropId.length > 0 ? 28 : 0)
+                + Math.min(root.participants.length, 32) * 2)
             radius: 2
             color: "#f5f5f5"
             border.color: "#404040"
@@ -2298,43 +2343,64 @@ Item {
                     font.pixelSize: 11
                 }
 
-                Repeater {
-                    model: root.participants.length
+                Flickable {
+                    objectName: "palaceModerationRoster"
+                    width: 164
+                    height: Math.max(
+                        24,
+                        parent.height
+                        - 52
+                        - (root.availablePropId.length > 0 ? 28 : 0))
+                    contentWidth: width
+                    contentHeight: moderationRosterContent.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    flickableDirection: Flickable.VerticalFlick
 
-                    delegate: Row {
-                        required property int index
-                        property var participant:
-                            root.participants[index] || ({})
-                        property string participantName:
-                            String(participant.displayName
-                                   || participant.userId || "Unknown")
-                        property string participantUserId:
-                            String(participant.userId || "")
-                        width: 164
-                        height: 24
-                        spacing: 4
+                    Column {
+                        id: moderationRosterContent
+                        width: parent.width
+                        spacing: 3
 
-                        Text {
-                            width: 96
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: parent.participantName
-                            elide: Text.ElideRight
-                            color: "#000000"
-                            font.pixelSize: 10
-                        }
+                        Repeater {
+                            model: root.participants.length
 
-                        Button {
-                            objectName: "palaceBanUserButton"
-                            property string subjectUserId:
-                                parent.participantUserId
-                            width: 56
-                            height: 22
-                            text: "Ban"
-                            font.pixelSize: 9
-                            visible: root.canBanUser
-                            enabled: root.canBanUser
-                                && subjectUserId.length === 64
-                            onClicked: root.gate4BanUser(subjectUserId)
+                            delegate: Row {
+                                required property int index
+                                property var participant:
+                                    root.participants[index] || ({})
+                                property string participantName:
+                                    String(participant.displayName
+                                           || participant.userId || "Unknown")
+                                property string participantUserId:
+                                    String(participant.userId || "")
+                                width: 164
+                                height: 24
+                                spacing: 4
+
+                                Text {
+                                    width: 96
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: parent.participantName
+                                    elide: Text.ElideRight
+                                    color: "#000000"
+                                    font.pixelSize: 10
+                                }
+
+                                Button {
+                                    objectName: "palaceBanUserButton"
+                                    property string subjectUserId:
+                                        parent.participantUserId
+                                    width: 56
+                                    height: 22
+                                    text: "Ban"
+                                    font.pixelSize: 9
+                                    visible: root.canBanUser
+                                    enabled: root.canBanUser
+                                        && subjectUserId.length === 64
+                                    onClicked: root.gate4BanUser(subjectUserId)
+                                }
+                            }
                         }
                     }
                 }
@@ -2416,7 +2482,9 @@ Item {
                                 + " staged PNG"
                                 + (root.authoringAssets.length === 1
                                    ? "" : "s")
-                                + " · approve, upload, then assign"
+                                + (root.canManageAssets
+                                   ? " · approve, upload, then assign"
+                                   : " · read-only catalog")
                             color: "#c9b78e"
                             font.pixelSize: 11
                         }
@@ -2426,7 +2494,9 @@ Item {
                         objectName: "palaceAssetSelectFile"
                         text: root.assetImportRunning
                             ? "Importing…" : "Add PNG…"
-                        enabled: root.ready && !root.assetImportRunning
+                        enabled: root.ready
+                            && root.canManageAssets
+                            && !root.assetImportRunning
                         onClicked: root.selectAssetFile()
                     }
 
@@ -2451,6 +2521,7 @@ Item {
                         objectName: "palaceAssetPropId"
                         Layout.preferredWidth: 110
                         placeholderText: "prop ID"
+                        enabled: root.canManageAssets
                         text: root.propDraftId
                         onTextEdited: root.propDraftId = text
                     }
@@ -2460,6 +2531,7 @@ Item {
                         Layout.preferredWidth: 76
                         placeholderText: "anchor X"
                         inputMethodHints: Qt.ImhDigitsOnly
+                        enabled: root.canManageAssets
                         text: root.propDraftAnchorX
                         onTextEdited: root.propDraftAnchorX = text
                     }
@@ -2469,6 +2541,7 @@ Item {
                         Layout.preferredWidth: 76
                         placeholderText: "anchor Y"
                         inputMethodHints: Qt.ImhDigitsOnly
+                        enabled: root.canManageAssets
                         text: root.propDraftAnchorY
                         onTextEdited: root.propDraftAnchorY = text
                     }
@@ -2477,17 +2550,22 @@ Item {
                         objectName: "palaceAssetPropLayer"
                         Layout.preferredWidth: 92
                         placeholderText: "layer"
+                        enabled: root.canManageAssets
                         text: root.propDraftLayer
                         onTextEdited: root.propDraftLayer = text
                     }
 
                     Text {
                         Layout.fillWidth: true
-                        text: root.propDraftReady()
-                            ? "Ready to assign"
-                            : "Enter metadata before assigning a prop"
-                        color: root.propDraftReady()
-                            ? "#a7e3a0" : "#8f826a"
+                        text: root.canManageAssets
+                            ? (root.propDraftReady()
+                               ? "Ready to assign"
+                               : "Enter metadata before assigning a prop")
+                            : root.assetAuthoringReadOnlyMessage()
+                        color: root.canManageAssets
+                            ? (root.propDraftReady()
+                               ? "#a7e3a0" : "#8f826a")
+                            : "#d8a18f"
                         elide: Text.ElideRight
                         font.pixelSize: 10
                     }
@@ -2662,6 +2740,7 @@ Item {
                                                 ? "Uploaded"
                                                 : "Approve & upload"
                                             enabled: root.ready
+                                                && root.canManageAssets
                                                 && backgroundCard
                                                     .publicationState
                                                     !== "published"
@@ -2679,6 +2758,7 @@ Item {
                                             Layout.minimumWidth: 84
                                             text: "Reject"
                                             enabled: root.ready
+                                                && root.canManageAssets
                                                 && backgroundCard
                                                     .publicationState
                                                     !== "published"
@@ -2700,6 +2780,7 @@ Item {
                                             Layout.minimumWidth: 96
                                             text: "Set Atrium"
                                             enabled: root.ready
+                                                && root.canManageAssets
                                                 && backgroundCard
                                                     .publicationState
                                                     === "published"
@@ -2719,6 +2800,7 @@ Item {
                                             Layout.minimumWidth: 96
                                             text: "Set prop"
                                             enabled: root.ready
+                                                && root.canManageAssets
                                                 && backgroundCard
                                                     .publicationState
                                                     === "published"
@@ -2744,6 +2826,7 @@ Item {
                                             Layout.minimumWidth: 96
                                             text: "Set Lounge"
                                             enabled: root.ready
+                                                && root.canManageAssets
                                                 && backgroundCard
                                                     .publicationState
                                                     === "published"
@@ -2769,11 +2852,15 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: root.lastActionReceipt.length > 0
-                        ? root.lastActionReceipt
-                        : "Draft assignment becomes authority when Palace creation finalizes."
-                    color: root.lastActionReceipt.indexOf("rejected=") === 0
-                        ? "#ff9c8f" : "#a7e3a0"
+                    text: root.canManageAssets
+                        ? (root.lastActionReceipt.length > 0
+                           ? root.lastActionReceipt
+                           : "Draft assignment becomes authority when Palace creation finalizes.")
+                        : root.assetAuthoringReadOnlyMessage()
+                    color: root.canManageAssets
+                        ? (root.lastActionReceipt.indexOf("rejected=") === 0
+                           ? "#ff9c8f" : "#a7e3a0")
+                        : "#d8a18f"
                     elide: Text.ElideRight
                     font.pixelSize: 10
                 }

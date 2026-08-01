@@ -1371,6 +1371,8 @@ async function importSelectedAsset(params) {
   throw new Error("asset picker import did not complete");
 }
 
+const assetAuthoringCoreProbeHandle = "0".repeat(64);
+
 const allowedFunctions = new Set([
   "gate1EnterRoom",
   "gate2Start",
@@ -1383,6 +1385,7 @@ const allowedFunctions = new Set([
   "gate3FetchPng",
   "gate3AssetStatus",
   "gate3PublishPng",
+  "assetAuthoringCoreProbe",
   "gate3PublicationStatus",
   "publishAsset",
   "gate3PublishBundle",
@@ -1463,6 +1466,12 @@ async function invoke(params) {
   if (!allowedFunctions.has(name) || !Array.isArray(args)) {
     throw new Error(`unsupported Palace invocation: ${name}`);
   }
+  if (
+    name === "assetAuthoringCoreProbe"
+    && (args.length !== 1 || args[0] !== assetAuthoringCoreProbeHandle)
+  ) {
+    throw new Error("asset authoring Core probe handle is invalid");
+  }
   const receiptProperty = name === "acceptanceApplicationRoundTrip"
     ? "acceptanceRoundTripResponse"
     : name.startsWith("gate5")
@@ -1474,8 +1483,11 @@ async function invoke(params) {
   if (!Number.isSafeInteger(beforeSequence) || beforeSequence < 0) {
     throw new Error("Palace invocation sequence is unavailable");
   }
-  const expression =
-    `${name}(${args.map((argument) => JSON.stringify(argument)).join(",")})`;
+  // Exercise the backend/Core authorization boundary with a fixed unknown
+  // handle. It cannot publish or otherwise change the authored catalog.
+  const expression = name === "assetAuthoringCoreProbe"
+    ? `watchAction(backend.publishVerifiedPng(${JSON.stringify(args[0])}), null)`
+    : `${name}(${args.map((argument) => JSON.stringify(argument)).join(",")})`;
   const startedAtUnixMs = Date.now();
   const startedAt = performance.now();
   const evaluated = await evaluate(expression);

@@ -5118,6 +5118,11 @@ std::string PalaceCoreImpl::assetStatus(const std::string& derivativeCid) const
 std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
 {
     drainStorageCallbacks();
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     if (!isContextReady() || !m_verifiedAssetStore
         || !m_storageSession.running()) {
         return "rejected=storage-not-running";
@@ -5145,9 +5150,20 @@ std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
         == std::numeric_limits<std::uint64_t>::max()) {
         return "rejected=storage-publication-id-exhausted";
     }
+    const std::uint64_t nextStoragePublicationId =
+        m_nextStoragePublicationId + 1U;
     const std::string operationId =
         "palace-publish-"
-        + std::to_string(++m_nextStoragePublicationId);
+        + std::to_string(nextStoragePublicationId);
+    if (authority.draftCreatorAccountIdToBind.has_value()) {
+        const palace::AssetAuthoringResult creatorBound =
+            m_assetAuthoring.bindDraftCreator(
+                *authority.draftCreatorAccountIdToBind);
+        if (!creatorBound.accepted) {
+            return "rejected=asset-authoring-"
+                + creatorBound.reason;
+        }
+    }
     const palace::StorageModuleSessionTransition upload =
         m_storageSession.beginUpload(
             operationId,
@@ -5156,6 +5172,7 @@ std::string PalaceCoreImpl::publishVerifiedPng(const std::string& handle)
             65536U);
     if (!upload.accepted)
         return "rejected=storage-upload;" + upload.reason;
+    m_nextStoragePublicationId = nextStoragePublicationId;
     m_storagePublicationByOperation.emplace(operationId, handle);
     m_publicationStatus[handle] = "publishing";
     executeStorageCommands(upload.commands);
@@ -5176,8 +5193,14 @@ std::string PalaceCoreImpl::publicationStatus(const std::string& handle) const
 std::string PalaceCoreImpl::beginAssetStage(
     const std::string& label)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
-        m_assetAuthoring.begin(label);
+        m_assetAuthoring.begin(
+            label, authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;session=" + result.sessionId
@@ -5194,9 +5217,17 @@ std::string PalaceCoreImpl::appendAssetStageChunk(
     std::uint64_t sequence,
     const std::string& canonicalBase64)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
         m_assetAuthoring.append(
-            sessionId, sequence, canonicalBase64);
+            sessionId,
+            sequence,
+            canonicalBase64,
+            authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;session=" + result.sessionId
@@ -5207,8 +5238,14 @@ std::string PalaceCoreImpl::appendAssetStageChunk(
 std::string PalaceCoreImpl::commitAssetStage(
     const std::string& sessionId)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
-        m_assetAuthoring.commit(sessionId);
+        m_assetAuthoring.commit(
+            sessionId, authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;handle=" + result.handle
@@ -5220,8 +5257,14 @@ std::string PalaceCoreImpl::commitAssetStage(
 std::string PalaceCoreImpl::cancelAssetStage(
     const std::string& sessionId)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
-        m_assetAuthoring.cancel(sessionId);
+        m_assetAuthoring.cancel(
+            sessionId, authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;session=" + result.sessionId
@@ -5380,6 +5423,11 @@ std::string PalaceCoreImpl::reviewAsset(
     const std::string& handle,
     const std::string& decision)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const auto publication =
         m_publicationStatus.find(handle);
     const bool publicationLocked =
@@ -5398,7 +5446,10 @@ std::string PalaceCoreImpl::reviewAsset(
         return "rejected=asset-review-locked";
     }
     const palace::AssetAuthoringResult result =
-        m_assetAuthoring.review(handle, decision);
+        m_assetAuthoring.review(
+            handle,
+            decision,
+            authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;handle=" + handle
@@ -5408,6 +5459,11 @@ std::string PalaceCoreImpl::reviewAsset(
 std::string PalaceCoreImpl::publishAsset(
     const std::string& handle)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringAssetV1* asset =
         m_assetAuthoring.asset(handle);
     if (asset == nullptr)
@@ -5421,8 +5477,16 @@ std::string PalaceCoreImpl::assignRoomBackground(
     const std::string& roomId,
     const std::string& handle)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
-        m_assetAuthoring.assign(roomId, handle);
+        m_assetAuthoring.assign(
+            roomId,
+            handle,
+            authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;room=" + roomId + ";handle=" + handle;
@@ -5435,9 +5499,19 @@ std::string PalaceCoreImpl::assignPropAsset(
     std::uint32_t anchorY,
     const std::string& layer)
 {
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     const palace::AssetAuthoringResult result =
         m_assetAuthoring.assignProp(
-            propId, handle, anchorX, anchorY, layer);
+            propId,
+            handle,
+            anchorX,
+            anchorY,
+            layer,
+            authority.draftCreatorAccountIdToBind);
     if (!result.accepted)
         return "rejected=" + result.reason;
     return "ok;propId=" + propId
@@ -5450,6 +5524,11 @@ std::string PalaceCoreImpl::assignPropAsset(
 std::string PalaceCoreImpl::publishMvpStorageBundle()
 {
     drainStorageCallbacks();
+    const AssetAuthoringAuthorityStatus authority =
+        currentAssetAuthoringAuthorityStatus(true);
+    if (!authority.canAuthorAssets) {
+        return "rejected=asset-authoring-" + authority.reason;
+    }
     if (!isContextReady() || !m_storageSession.running()
         || !m_storageCatalog.hasConfiguration()) {
         return "rejected=storage-not-running";
@@ -5467,8 +5546,11 @@ std::string PalaceCoreImpl::publishMvpStorageBundle()
         m_storageMvpResolvedRoomBackgrounds.clear();
         if (!initializeStorageMvpBundle())
             return "rejected=storage-bundle-assets";
-        if (!m_assetAuthoring.lockAssignments())
-            return "rejected=asset-state-persistence";
+        const palace::AssetAuthoringResult assignmentsLocked =
+            m_assetAuthoring.lockAssignments(
+                authority.draftCreatorAccountIdToBind);
+        if (!assignmentsLocked.accepted)
+            return "rejected=" + assignmentsLocked.reason;
         m_storageMvpMode = "publishing";
     }
     scheduleStorageMvpPublications();
@@ -5966,6 +6048,134 @@ std::string PalaceCoreImpl::moderationStatus() const
         + ";target=" + target + ";ban_id=" + banIdHex
         + ";durable="
         + palace::actionStatusName(status.durableStage);
+}
+
+std::string PalaceCoreImpl::assetAuthoringCapabilityStatus()
+{
+    const AssetAuthoringAuthorityStatus status =
+        currentAssetAuthoringAuthorityStatus(false);
+    return "authority=" + status.authority
+        + ";can_author_assets="
+        + std::string(status.canAuthorAssets ? "1" : "0")
+        + ";reason=" + status.reason;
+}
+
+PalaceCoreImpl::AssetAuthoringAuthorityStatus
+PalaceCoreImpl::currentAssetAuthoringAuthorityStatus(
+    bool includeDraftCreatorBinding)
+{
+    AssetAuthoringAuthorityStatus status;
+    if (!m_assetAuthoring.ready()) {
+        status.reason = "asset-state-unavailable";
+        return status;
+    }
+    if (!m_deliveryIdentity.valid()) {
+        status.reason = "identity-required";
+        return status;
+    }
+    const std::string actorAccountIdHex =
+        m_deliveryIdentity.accountId();
+    if (!isNonzeroLowerHexAccountId(actorAccountIdHex)) {
+        status.reason = "identity-account-invalid";
+        return status;
+    }
+
+    const bool finalizedAuthorityApplied =
+        m_lezAuthorityReady
+        && m_lezOpenHistory.has_value()
+        && m_lezOpenHistory->authorityApplied
+        && m_lezOpenHistory->palaceIdHex
+            == m_deliveryAuthority.palaceId();
+    if (finalizedAuthorityApplied) {
+        if (m_deliveryAuthority.deliveryKeyFor(
+                actorAccountIdHex,
+                m_deliveryIdentity.deliveryKeyEpoch())
+            != m_deliveryIdentity.publicKey()) {
+            status.reason = "finalized-identity-required";
+            return status;
+        }
+
+        palace::PalaceLezRootRecordV3 root;
+        if (!currentFinalizedAssetAuthoringRoot(
+                root, status.reason)) {
+            return status;
+        }
+        status.authority = "finalized";
+        status.accepted = true;
+        status.canAuthorAssets =
+            palace::PalaceLezCodec::bytes32Hex(root.owner)
+            == actorAccountIdHex;
+        status.reason = status.canAuthorAssets
+            ? "authorized" : "root-owner-required";
+        return status;
+    }
+
+    status.authority = "draft";
+    const palace::core_detail::AssetAuthoringDraftAuthorityDecisionV1
+        decision =
+            palace::core_detail::
+                ensureDraftAssetAuthoringAuthorityV1(
+                    m_assetAuthoring,
+                    actorAccountIdHex);
+    status.accepted = decision.accepted;
+    status.canAuthorAssets = decision.canAuthorAssets;
+    status.reason = decision.reason;
+    if (includeDraftCreatorBinding
+        && decision.needsDraftCreatorBinding) {
+        status.draftCreatorAccountIdToBind = actorAccountIdHex;
+    }
+    return status;
+}
+
+bool PalaceCoreImpl::currentFinalizedAssetAuthoringRoot(
+    palace::PalaceLezRootRecordV3& root,
+    std::string& reason) const
+{
+    if (!m_lezAuthorityReady
+        || !m_lezOpenHistory.has_value()
+        || !m_lezOpenHistory->authorityApplied
+        || m_lezOpenHistory->palaceIdHex
+            != m_deliveryAuthority.palaceId()) {
+        reason = "finalized-authority-required";
+        return false;
+    }
+
+    bool found = false;
+    for (const palace::PalaceLezFinalizedAuthorityAccountV1&
+         stored : m_lezAuthorityBundle.accounts) {
+        const palace::PalaceLezPublicAccountV3 decoded =
+            palace::PalaceLezCodec::decodePublicAccount(
+                stored.responseJson,
+                m_lezAuthorityBundle.scope.programIdHex);
+        if (!decoded.accepted) {
+            reason = "authority-account-invalid";
+            return false;
+        }
+        if (stored.accountIdHex
+            != m_lezAuthorityBundle.scope.rootAccountIdHex) {
+            continue;
+        }
+        const auto* decodedRoot =
+            std::get_if<palace::PalaceLezRootRecordV3>(
+                &decoded.record);
+        if (decodedRoot == nullptr || found) {
+            reason = "root-invalid";
+            return false;
+        }
+        root = *decodedRoot;
+        found = true;
+    }
+    if (!found
+        || root.lastOrderedActionId
+            != m_lezAuthorityBundle.checkpoint
+                   .lastOrderedActionId
+        || palace::PalaceLezCodec::bytes32Hex(root.palaceId)
+            != m_lezOpenHistory->palaceIdHex) {
+        reason = "root-checkpoint-mismatch";
+        return false;
+    }
+    reason = "authorized";
+    return true;
 }
 
 PalaceCoreImpl::HumanModerationContext

@@ -7,10 +7,12 @@
 #include <QTemporaryDir>
 
 #include "palace_asset_authoring.h"
+#include "palace_core_impl.h"
 #include "palace_sha256.h"
 #include "palace_verified_asset_store.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,20 @@ std::string base64(const std::string& bytes)
                static_cast<qsizetype>(bytes.size()))
         .toBase64()
         .toStdString();
+}
+
+std::string legacyV1EmptyRecord()
+{
+    const std::string body =
+        "logos-palace-asset-authoring-v1\n"
+        "version=1\n"
+        "locked=0\n"
+        "assets=0\n"
+        "assignment=atrium;-\n"
+        "assignment=lounge;-\n"
+        "prop=-\n";
+    return body + "checksum="
+        + palace::crypto::sha256Hex(body) + '\n';
 }
 
 std::uint8_t hexNibble(char value)
@@ -471,6 +487,151 @@ LOGOS_TEST(asset_authoring_duplicate_commit_is_idempotent)
     LOGOS_ASSERT_EQ(
         fixture.catalog.asset(first.handle)->reviewState,
         std::string("approved"));
+}
+
+LOGOS_TEST(asset_authoring_binds_draft_creator_once_and_persists)
+{
+    Fixture fixture;
+    const std::string actor = std::string(64U, 'a');
+    const std::string other = std::string(64U, 'b');
+
+    const palace::AssetAuthoringResult bound =
+        fixture.catalog.bindDraftCreator(actor);
+    LOGOS_ASSERT_TRUE(bound.accepted);
+    LOGOS_ASSERT_TRUE(
+        fixture.catalog.draftCreatorAccountId().has_value());
+    LOGOS_ASSERT_EQ(
+        *fixture.catalog.draftCreatorAccountId(),
+        actor);
+    LOGOS_ASSERT_TRUE(
+        fixture.catalog.bindDraftCreator(actor).accepted);
+
+    const palace::AssetAuthoringResult rejected =
+        fixture.catalog.bindDraftCreator(other);
+    LOGOS_ASSERT_FALSE(rejected.accepted);
+    LOGOS_ASSERT_EQ(
+        rejected.reason,
+        std::string("draft-creator-mismatch"));
+
+    palace::AssetAuthoringCatalog restarted;
+    LOGOS_ASSERT_TRUE(restarted.initialize(
+        fixture.instanceRoot.toStdString(),
+        fixture.verified));
+    LOGOS_ASSERT_TRUE(
+        restarted.draftCreatorAccountId().has_value());
+    LOGOS_ASSERT_EQ(
+        *restarted.draftCreatorAccountId(),
+        actor);
+}
+
+LOGOS_TEST(asset_authoring_legacy_v1_draft_binds_only_after_valid_mutation)
+{
+    Fixture fixture;
+    QFile output(
+        fixture.instanceRoot + QStringLiteral("/asset-authoring-v1"));
+    const std::string legacy = legacyV1EmptyRecord();
+    LOGOS_ASSERT_TRUE(output.open(QIODevice::WriteOnly));
+    LOGOS_ASSERT_EQ(
+        output.write(
+            legacy.data(),
+            static_cast<qint64>(legacy.size())),
+        static_cast<qint64>(legacy.size()));
+    output.close();
+    LOGOS_ASSERT_TRUE(
+        output.setPermissions(
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner));
+
+    palace::AssetAuthoringCatalog legacyCatalog;
+    LOGOS_ASSERT_TRUE(legacyCatalog.initialize(
+        fixture.instanceRoot.toStdString(),
+        fixture.verified));
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.draftCreatorAccountId().has_value());
+
+    const auto statusBefore =
+        palace::core_detail::ensureDraftAssetAuthoringAuthorityV1(
+            legacyCatalog,
+            std::string(64U, 'a'));
+    LOGOS_ASSERT_TRUE(statusBefore.accepted);
+    LOGOS_ASSERT_TRUE(statusBefore.canAuthorAssets);
+    LOGOS_ASSERT_TRUE(statusBefore.needsDraftCreatorBinding);
+    LOGOS_ASSERT_EQ(
+        statusBefore.reason,
+        std::string("draft-creator-unclaimed"));
+
+    const std::optional<std::string> actorA{
+        std::string(64U, 'a')};
+    const std::optional<std::string> actorB{
+        std::string(64U, 'b')};
+
+    palace::AssetAuthoringCatalog unavailableCatalog;
+    const palace::AssetAuthoringResult unavailable =
+        unavailableCatalog.begin("valid label", actorA);
+    LOGOS_ASSERT_FALSE(unavailable.accepted);
+    LOGOS_ASSERT_EQ(
+        unavailable.reason,
+        std::string("asset-state-unavailable"));
+    LOGOS_ASSERT_FALSE(
+        unavailableCatalog.draftCreatorAccountId().has_value());
+
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.begin("", actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.append(
+            "not-a-session", 0U, base64("chunk"), actorA)
+            .accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.commit("not-a-session", actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.cancel("not-a-session", actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.review(
+            std::string(64U, 'c'), "approve", actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.assign(
+            "atrium", std::string(64U, 'c'), actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.assignProp(
+            "invalid prop",
+            std::string(64U, 'c'),
+            0U,
+            0U,
+            "layer",
+            actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.lockAssignments(actorA).accepted);
+    LOGOS_ASSERT_FALSE(
+        legacyCatalog.draftCreatorAccountId().has_value());
+
+    const palace::AssetAuthoringResult begun =
+        legacyCatalog.begin("first valid mutation", actorB);
+    LOGOS_ASSERT_TRUE(begun.accepted);
+    LOGOS_ASSERT_TRUE(
+        legacyCatalog.draftCreatorAccountId().has_value());
+    LOGOS_ASSERT_EQ(
+        *legacyCatalog.draftCreatorAccountId(),
+        *actorB);
+
+    palace::AssetAuthoringCatalog restarted;
+    LOGOS_ASSERT_TRUE(restarted.initialize(
+        fixture.instanceRoot.toStdString(), fixture.verified));
+    LOGOS_ASSERT_TRUE(
+        restarted.draftCreatorAccountId().has_value());
+    LOGOS_ASSERT_EQ(
+        *restarted.draftCreatorAccountId(),
+        *actorB);
+
+    const auto rejected =
+        palace::core_detail::ensureDraftAssetAuthoringAuthorityV1(
+            restarted,
+            *actorA);
+    LOGOS_ASSERT_FALSE(rejected.accepted);
+    LOGOS_ASSERT_FALSE(rejected.canAuthorAssets);
+    LOGOS_ASSERT_FALSE(rejected.needsDraftCreatorBinding);
+    LOGOS_ASSERT_EQ(
+        rejected.reason,
+        std::string("draft-creator-mismatch"));
 }
 
 LOGOS_TEST(asset_authoring_rejects_invalid_png_at_commit)

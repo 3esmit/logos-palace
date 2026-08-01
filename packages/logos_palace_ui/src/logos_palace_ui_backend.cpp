@@ -110,6 +110,7 @@ void LogosPalaceUiBackend::onContextReady()
     refreshDeliveryState();
     refreshDeliveryNodeEvidence();
     refreshStorageState();
+    refreshAssetAuthoringCapabilityState();
     refreshLezState();
     refreshPalaceState();
     refreshModerationState();
@@ -121,6 +122,7 @@ void LogosPalaceUiBackend::onContextReady()
         connect(m_deliveryPollTimer, &QTimer::timeout, this, [this]() {
             refreshDeliveryState();
             refreshStorageState();
+            refreshAssetAuthoringCapabilityState();
             refreshLezState();
             refreshPalaceState();
             refreshModerationState();
@@ -926,10 +928,19 @@ void LogosPalaceUiBackend::refreshStorageState()
         modules().palace_core.assetAuthoringCatalog());
     setActivePropAsset(
         modules().palace_core.activePropAsset());
+    refreshAssetAuthoringCapabilityState();
     // Storage verification completes asynchronously. Refresh the visible
     // projection after each storage poll so a restored visitor replaces the
     // placeholder only after the exact room graph resolves.
     refreshRoomProjection();
+}
+
+void LogosPalaceUiBackend::refreshAssetAuthoringCapabilityState()
+{
+    if (!isContextReady())
+        return;
+    setAssetAuthoringCapabilityState(
+        modules().palace_core.assetAuthoringCapabilityStatus());
 }
 
 void LogosPalaceUiBackend::refreshLezState()
