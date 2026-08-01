@@ -2868,10 +2868,10 @@ try {
     report.storageConfigs = configs;
     await checkpointReport();
   }
-  if (!report.storageStartup.b) {
-    report.storageStartup.b = await startStorage(provider, configs.b);
-    await checkpointReport();
-  }
+  // A resumed Gate 3 creates a new provider worker. Persisted receipts prove
+  // the former worker's startup only, never this worker's live Storage state.
+  report.storageStartup.b = await startStorage(provider, configs.b);
+  await checkpointReport();
   if (productionIdentityMode) {
     const providerEndpoint = await readStoragePeerEndpoint(provider);
     report.storagePeerEndpoints.b = {

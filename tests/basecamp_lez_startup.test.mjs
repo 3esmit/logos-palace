@@ -120,6 +120,33 @@ test("storage startup accepts an action receipt or live storage state", async ()
   assert.match(gate3, /"gate3StartStorage",[\s\S]{0,180}currentStorageStateExpectation/);
 });
 
+test("Gate 3 resume restarts Storage for its fresh provider worker", async () => {
+  const gate3 = await readFile(gate3Path, "utf8");
+  const providerBootstrapStart = gate3.indexOf(
+    "  // After creator publication, bring provider B onto the private mesh so it",
+  );
+  const providerStart = gate3.indexOf(
+    "report.storageStartup.b = await startStorage(",
+    providerBootstrapStart,
+  );
+  const providerEndpoint = gate3.indexOf(
+    "const providerEndpoint = await readStoragePeerEndpoint(provider);",
+    providerStart,
+  );
+  assert.notEqual(providerBootstrapStart, -1);
+  assert.notEqual(providerStart, -1);
+  assert.notEqual(providerEndpoint, -1);
+  const providerBootstrap = gate3.slice(
+    providerBootstrapStart,
+    providerEndpoint,
+  );
+  assert.match(
+    providerBootstrap,
+    /report\.storageStartup\.b = await startStorage\(\s*provider,\s*configs\.b,?\s*\);\s*await checkpointReport\(\);/,
+  );
+  assert.doesNotMatch(providerBootstrap, /if \(!report\.storageStartup\.b\)/);
+});
+
 test("Gate 4 invocations are authorized by the Palace worker", async () => {
   const [worker, gate4] = await Promise.all([
     readFile(workerPath, "utf8"),
