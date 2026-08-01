@@ -289,3 +289,36 @@ export function validateGate2SpeechSettlement({
     sequenceEvidence,
   };
 }
+
+export function buildGate2PostRestartProjection({
+  beforeRestart,
+  restartSpeechByUser,
+  rebuiltMotionByUser,
+}) {
+  const previous = required(beforeRestart, "pre-restart projection");
+  const speech = required(restartSpeechByUser, "restart speech");
+  const motion = required(rebuiltMotionByUser, "rebuilt motion");
+  const participantIds = Object.keys(previous).sort();
+  if (
+    participantIds.length === 0
+    || JSON.stringify(Object.keys(speech).sort()) !== JSON.stringify(participantIds)
+    || JSON.stringify(Object.keys(motion).sort()) !== JSON.stringify(participantIds)
+  ) {
+    throw new Error("restart participant sets differ");
+  }
+  return Object.fromEntries(participantIds.map((userId) => {
+    const prior = required(previous[userId], `pre-restart ${userId}`);
+    const rebuilt = required(motion[userId], `rebuilt ${userId} motion`);
+    const x = nonnegativeInteger(rebuilt.x, `rebuilt ${userId} x`);
+    const y = nonnegativeInteger(rebuilt.y, `rebuilt ${userId} y`);
+    if (x > 10_000 || y > 10_000 || typeof speech[userId] !== "string") {
+      throw new Error(`invalid restart state for ${userId}`);
+    }
+    return [userId, {
+      ...prior,
+      speech: speech[userId],
+      x,
+      y,
+    }];
+  }));
+}

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildGate2PostRestartProjection,
   validateGate2SettlementBoundary,
   validateGate2SpeechSettlement,
 } from "./basecamp_gate2_settlement.mjs";
@@ -205,4 +206,42 @@ test("rejects unsettled correlation or rejection drift", () => {
       /not settled|rejected_other changed/,
     );
   }
+});
+
+test("rebuilds post-restart motion from the restart actions", () => {
+  const result = buildGate2PostRestartProjection({
+    beforeRestart: {
+      alice: { displayName: "Alice", speech: "before", x: 5000, y: 6306, props: [] },
+      bob: { displayName: "Bob", speech: "before", x: 3400, y: 4500, props: [] },
+      carol: { displayName: "Carol", speech: "before", x: 5600, y: 6700, props: [] },
+    },
+    restartSpeechByUser: {
+      alice: "restart-a",
+      bob: "restart-b",
+      carol: "restart-c",
+    },
+    rebuiltMotionByUser: {
+      alice: { x: 1200, y: 2300 },
+      bob: { x: 3400, y: 4500 },
+      carol: { x: 5600, y: 6700 },
+    },
+  });
+  assert.deepEqual(result.alice, {
+    displayName: "Alice",
+    speech: "restart-a",
+    x: 1200,
+    y: 2300,
+    props: [],
+  });
+});
+
+test("rejects a restart projection without every rebuilt motion", () => {
+  assert.throws(
+    () => buildGate2PostRestartProjection({
+      beforeRestart: { alice: { displayName: "Alice" } },
+      restartSpeechByUser: { alice: "restart-a" },
+      rebuiltMotionByUser: {},
+    }),
+    /participant sets differ/,
+  );
 });

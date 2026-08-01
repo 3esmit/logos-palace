@@ -31,6 +31,7 @@ import {
   waitForDirectChildExit,
 } from "./basecamp_direct_child.mjs";
 import {
+  buildGate2PostRestartProjection,
   validateGate2SettlementBoundary,
   validateGate2SpeechSettlement,
 } from "./basecamp_gate2_settlement.mjs";
@@ -2101,23 +2102,16 @@ try {
     );
     rebuildReceipts.push({ label, name, args, receipt: rebuilt.receipt });
   }
-  const postRestartExpected = {
-    alice: {
-      ...actionExpected.alice,
-      speech: restartMessages.alice,
-    },
-    bob: {
-      displayName: "Bob",
-      speech: restartMessages.bob,
-      x: 3400,
-      y: 4500,
-      props: [],
-    },
-    carol: {
-      ...actionExpected.carol,
-      speech: restartMessages.carol,
-    },
-  };
+  const postRestartExpected = buildGate2PostRestartProjection({
+    beforeRestart: actionExpected,
+    restartSpeechByUser: restartMessages,
+    rebuiltMotionByUser: Object.fromEntries(
+      rebuildCalls.map(([label, _name, [x, y]]) => [
+        profiles[label].userId,
+        { x, y },
+      ]),
+    ),
+  });
   const postRestartSnapshots = Object.fromEntries(
     await Promise.all(
       labels.map(async (label) => [
