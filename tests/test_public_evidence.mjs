@@ -1978,7 +1978,7 @@ async function fixture() {
             },
             {
               protocol: "tcp4",
-              address: "0.0.0.0",
+              address: "127.0.0.1",
               port: 34002,
               ownerPid: 108,
               ownerRole: "core-module-host",

@@ -6345,9 +6345,15 @@ try {
         storageConfigs[label],
         `process listener Storage config ${label}`,
       );
+      const storageListenAddress = storageConfig["listen-ip"];
+      if (storageListenAddress !== "127.0.0.1") {
+        throw new Error(
+          `process listener Storage address is invalid for ${label}`,
+        );
+      }
       listeners.push({
         protocol: "tcp4",
-        address: "0.0.0.0",
+        address: storageListenAddress,
         port: storageConfig["listen-port"],
         ownerRole: "core-module-host",
         moduleName: "storage_module",

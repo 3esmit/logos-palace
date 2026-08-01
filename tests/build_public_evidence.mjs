@@ -1953,7 +1953,7 @@ function publicProcessProof(gate4) {
         && listener.moduleName === "delivery_module"
       ) || (
         listener.purpose === "storage-transport"
-        && listener.address === "0.0.0.0"
+        && listener.address === "127.0.0.1"
         && listener.ownerRole === "core-module-host"
         && listener.moduleName === "storage_module"
       );

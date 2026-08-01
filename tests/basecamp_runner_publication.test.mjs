@@ -637,8 +637,17 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
   assert.match(runner, /def valid_private_storage_config:/);
   assert.match(runner, /\.\["listen-ip"\]\s*==\s*"127\.0\.0\.1"/);
   assert.match(runner, /\.nat\s*==\s*"none"/);
+  assert.match(
+    runner,
+    /\.purpose == "storage-transport"[\s\S]{0,180}\.address == "127\.0\.0\.1"/,
+  );
   assert.match(runner, /no-bootstrap-node/);
   assert.match(runner, /bootstrap-node/);
+  assert.match(
+    runner,
+    /contains\("action=" \+ \$door_action_id\)/,
+  );
+  assert.doesNotMatch(runner, /contains\("action=10"\)/);
   assert.match(runner, /storageTopology:\s*"private-loopback-bootstrap-mesh"/);
   assert.match(gate4, /storageTopology:\s*"private-loopback-bootstrap-mesh"/);
   assert.doesNotMatch(gate4, /storageNetworkId/);

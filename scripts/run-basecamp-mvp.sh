@@ -2811,7 +2811,8 @@ gate_report_passes() {
                 == $gate4.identities[$label].display
               and (
                 $gate4.restart[$label].checkpoint.status.receipt
-                | type == "string" and contains("action=10")
+                | type == "string"
+                  and contains("action=" + $door_action_id)
               )
           )
           and .processModel.standalonePalaceServer == false
@@ -3406,7 +3407,7 @@ gate_report_passes() {
                       and .moduleName == "delivery_module")
                     or
                     (.purpose == "storage-transport"
-                      and .address == "0.0.0.0"
+                      and .address == "127.0.0.1"
                       and .ownerRole == "core-module-host"
                       and .moduleName == "storage_module")
                   )
