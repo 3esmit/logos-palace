@@ -6,8 +6,9 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
-#include <set>
 #include <optional>
+#include <set>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -8642,8 +8643,28 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
         storageDownloadPath(operation.operationId);
     if (path.empty())
         return false;
+    // Peer network path: prefer storage_module.fetch() to pull blocks into
+    // the local repo, then complete with localOnly verification. Direct
+    // downloadToUrlV2(local=false) has been observed to hang after accept
+    // even when the DHT table already lists the provider peer.
+    bool useLocalVerification = localOnly;
+    if (!localOnly
+        && purpose == StorageMvpTransferPurpose::NetworkFetch) {
+        (void)modules().storage_module.fetch(operation.cid);
+        for (int probe = 0; probe < 40; ++probe) {
+            const StdLogosResult exists =
+                modules().storage_module.exists(operation.cid);
+            if (exists.success
+                && exists.value.is_boolean()
+                && exists.value.get<bool>()) {
+                useLocalVerification = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+    }
     const palace::StorageModuleSessionTransition dispatched =
-        localOnly
+        useLocalVerification
         ? m_storageSession.beginLocalVerification(
               operation.operationId,
               operation.cid,
