@@ -245,6 +245,39 @@ void populate(
     coordinator.interrupt();
 }
 
+palace::PalaceLezTransactionPlanV3 initializePlan()
+{
+    palace::PalaceLezInitializeV3 initialize;
+    initialize.palaceId = bytes(0x10U);
+    initialize.title = "Palace";
+    initialize.activeManifestCid = "bafypalacemanifest";
+    initialize.ownerProfile = {
+        "Alice",
+        bytes(0x22U),
+        1U,
+        std::nullopt,
+    };
+    initialize.ownerGrantId = bytes(0x11U);
+    initialize.entryRoomId = bytes(0x31U);
+    initialize.entryRoom = {
+        "Atrium",
+        "bafyatrium",
+        "bafyatriumscript",
+        palace::PalaceLezVmProfileV3::IptScraeMvpV1,
+    };
+    initialize.secondaryRoomId = bytes(0x32U);
+    initialize.secondaryRoom = {
+        "Lounge",
+        "bafylounge",
+        "bafyloungescript",
+        palace::PalaceLezVmProfileV3::IptScraeMvpV1,
+    };
+    return palace::PalaceLezCodec::buildTransaction(
+        kProgramId,
+        kSigner,
+        palace::PalaceLezInstructionV3{initialize});
+}
+
 std::vector<std::uint8_t> readBytes(const fs::path& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -530,6 +563,80 @@ LOGOS_TEST(
     LOGOS_ASSERT_EQ(
         verifiedIntent.transactionHash,
         tracked.transactionHash);
+}
+
+LOGOS_TEST(
+    core_lez_recovers_initialize_after_accept_to_journal_crash) {
+    palace::PalaceLezTransactionCoordinator coordinator;
+    const palace::PalaceLezNetworkFingerprint network = fingerprint();
+    LOGOS_ASSERT_TRUE(
+        coordinator.configureNetworkFingerprint(network, network).accepted);
+    LOGOS_ASSERT_TRUE(coordinator.activate());
+
+    const palace::PalaceLezTransactionPlanV3 plan = initializePlan();
+    LOGOS_ASSERT_TRUE(plan.accepted);
+    const std::string transactionHash = hash(152U);
+    const std::string expectedRootDataSha256Hex(64U, 'a');
+    LOGOS_ASSERT_TRUE(
+        coordinator.registerSubmission(
+            plan,
+            "{\"success\":true,\"tx_hash\":\"" + transactionHash
+                + "\",\"secrets\":[],\"error\":\"\"}",
+            expectedRootDataSha256Hex).accepted);
+
+    palace::ActionJournal queued;
+    LOGOS_ASSERT_TRUE(queued.createDraft("0"));
+    LOGOS_ASSERT_TRUE(queued.queue("0"));
+    palace::PalaceLezSubmissionIntentV1 intent;
+    intent.actionId = "0";
+    intent.phase = palace::PalaceLezSubmissionIntentPhase::
+        MayHaveBeenSubmitted;
+    intent.minimumFinalizedBlockExclusive = 41U;
+    intent.plan = plan;
+    intent.expectedRootDataSha256Hex = expectedRootDataSha256Hex;
+
+    const auto recovered =
+        palace::core_detail::recoverTrackedPalaceSubmissionV1(
+            "0",
+            plan,
+            intent,
+            coordinator.transactions(),
+            queued);
+    LOGOS_ASSERT_TRUE(recovered.accepted);
+    LOGOS_ASSERT_EQ(
+        recovered.transactionHash,
+        transactionHash);
+    LOGOS_ASSERT_TRUE(
+        recovered.repairedJournal.status("0").durableStage
+        == palace::DurableActionStage::SubmittedToLez);
+    LOGOS_ASSERT_TRUE(
+        recovered.committedIntent.phase
+        == palace::PalaceLezSubmissionIntentPhase::Committed);
+    LOGOS_ASSERT_EQ(
+        recovered.committedIntent.transactionHash,
+        transactionHash);
+
+    const palace::PalaceLezTransactionPlanV3 invalidPlan =
+        palace::PalaceLezCodec::buildTransaction(
+            kProgramId,
+            kSigner,
+            palace::PalaceLezInstructionV3{
+                palace::PalaceLezRevokeCapabilityV3{
+                    7U, bytes(0x12U)}});
+    LOGOS_ASSERT_TRUE(invalidPlan.accepted);
+    palace::PalaceLezSubmissionIntentV1 invalidIntent = intent;
+    invalidIntent.plan = invalidPlan;
+    const auto invalid =
+        palace::core_detail::recoverTrackedPalaceSubmissionV1(
+            "0",
+            invalidPlan,
+            invalidIntent,
+            {},
+            queued);
+    LOGOS_ASSERT_FALSE(invalid.accepted);
+    LOGOS_ASSERT_EQ(
+        invalid.reason,
+        std::string("tracked-submission-action-invalid"));
 }
 
 LOGOS_TEST(

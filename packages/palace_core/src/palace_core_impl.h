@@ -192,9 +192,19 @@ recoverTrackedPalaceSubmissionV1(
         };
     }
 
+    const PalaceLezWireInstruction decoded =
+        PalaceLezCodec::decodeInstruction(
+            intent.plan.instructionWords);
     std::uint64_t orderedActionId = 0U;
-    if (!PalaceLezCodec::parseOrderedActionId(
-            actionId, orderedActionId)) {
+    const bool initializesPalace =
+        decoded.accepted
+        && std::holds_alternative<PalaceLezInitializeV3>(
+            decoded.instruction.payload);
+    if (!decoded.accepted
+        || (initializesPalace
+            ? actionId != "0"
+            : !PalaceLezCodec::parseOrderedActionId(
+                actionId, orderedActionId))) {
         return {
             false,
             "tracked-submission-action-invalid",
@@ -203,6 +213,8 @@ recoverTrackedPalaceSubmissionV1(
             {},
         };
     }
+    if (initializesPalace)
+        orderedActionId = 0U;
 
     const PalaceLezTrackedTransaction* exact = nullptr;
     for (const PalaceLezTrackedTransaction& tracked : transactions) {
