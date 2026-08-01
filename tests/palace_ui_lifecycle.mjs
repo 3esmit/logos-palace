@@ -16,14 +16,27 @@ export function clampNonNegative(value) {
  * roomX/roomY layout so clicking an avatar position is stable round-trip.
  */
 export function canvasPixelsToProtocol(pixelX, pixelY, canvasWidth, canvasHeight) {
+  const horizontalInset = 100;
+  const topInset = 104;
+  const verticalInset = 270;
   const width = Number(canvasWidth);
   const height = Number(canvasHeight);
   const x = Number(pixelX);
   const y = Number(pixelY);
-  const usableWidth = Math.max(1, (Number.isFinite(width) ? width : 0) - 180);
-  const usableHeight = Math.max(1, (Number.isFinite(height) ? height : 0) - 330);
-  const protocolX = Number.isFinite(x) ? ((x - 90) * 10000) / usableWidth : 0;
-  const protocolY = Number.isFinite(y) ? ((y - 110) * 10000) / usableHeight : 0;
+  const usableWidth = Math.max(
+    1,
+    (Number.isFinite(width) ? width : 0) - horizontalInset * 2,
+  );
+  const usableHeight = Math.max(
+    1,
+    (Number.isFinite(height) ? height : 0) - verticalInset,
+  );
+  const protocolX = Number.isFinite(x)
+    ? ((x - horizontalInset) * 10000) / usableWidth
+    : 0;
+  const protocolY = Number.isFinite(y)
+    ? ((y - topInset) * 10000) / usableHeight
+    : 0;
   return {
     x: Math.max(0, Math.min(10000, Math.round(protocolX))),
     y: Math.max(0, Math.min(10000, Math.round(protocolY))),

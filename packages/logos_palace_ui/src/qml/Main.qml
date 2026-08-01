@@ -188,11 +188,18 @@ Item {
     property string localWornPropId: ""
     // PalaceChat-style prop bag / operator list visibility.
     property bool propBagOpen: false
-    property bool userListOpen: true
+    property bool userListOpen: false
     property bool roomListOpen: false
-    readonly property int roomCanvasHorizontalInset: 90
-    readonly property int roomCanvasTopInset: 110
-    readonly property int roomCanvasVerticalInset: 330
+    // Keep whole avatars, their capped speech cards, and the in-scene door
+    // inside the clipped room while using the formerly empty lower canvas.
+    readonly property int roomCanvasHorizontalInset: 100
+    readonly property int roomCanvasTopInset: 104
+    readonly property int roomCanvasBottomInset: 166
+    readonly property int roomCanvasVerticalInset:
+        roomCanvasTopInset + roomCanvasBottomInset
+    readonly property int roomCanvasSpeechMaximumHeight: 64
+    readonly property int roomCanvasDoorHeight: 72
+    readonly property int roomCanvasDoorBottomMargin: 24
 
     function gateFrameTimingStart(sampleCount) {
         if (sampleCount !== gateFrameTimingSampleTarget
@@ -1744,9 +1751,11 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.bottom: remoteAvatar.top
                             anchors.bottomMargin: 9
-                            width: Math.min(190, Math.max(
+                            width: Math.min(184, Math.max(
                                 88, remoteSpeechText.implicitWidth + 24))
-                            height: remoteSpeechText.implicitHeight + 16
+                            height: Math.min(
+                                root.roomCanvasSpeechMaximumHeight,
+                                remoteSpeechText.implicitHeight + 16)
                             radius: 12
                             color: "#fff8e7"
                             border.color: "#8c7145"
@@ -1758,12 +1767,16 @@ Item {
                                 property string participantUserId:
                                     participantDelegate.participantUserId
                                 anchors.centerIn: parent
-                                width: Math.min(164, implicitWidth)
+                                width: Math.min(158, implicitWidth)
+                                height: Math.min(
+                                    root.roomCanvasSpeechMaximumHeight - 16,
+                                    implicitHeight)
                                 text: participantDelegate.participantSpeech
                                 color: "#2b2016"
                                 font.pixelSize: 13
                                 wrapMode: Text.Wrap
                                 horizontalAlignment: Text.AlignHCenter
+                                clip: true
                             }
                         }
 
@@ -1940,18 +1953,67 @@ Item {
 
             // In-scene door affordance (diegetic navigation).
             Button {
+                id: roomDoor
                 objectName: "palaceRoomDoor"
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
-                anchors.bottomMargin: 10
+                anchors.bottomMargin: root.roomCanvasDoorBottomMargin
+                width: 154
+                height: root.roomCanvasDoorHeight
                 text: root.roomTitle !== "Atrium"
                     ? "Door to Atrium"
                     : (root.gate5DoorBlocked
                        ? "Door finalizing…" : "Door to Lounge")
+                font.bold: true
+                font.pixelSize: 12
                 enabled: root.ready
                     && (root.roomTitle !== "Atrium"
                         || !root.gate5DoorBlocked)
                 z: 10
+                ToolTip.visible: hovered
+                ToolTip.text: text
+
+                background: Rectangle {
+                    radius: 5
+                    color: roomDoor.down ? "#74421f" : "#9a6030"
+                    border.color: "#f3cf8a"
+                    border.width: 2
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 28
+                        height: parent.height - 12
+                        radius: 2
+                        color: "#4d2918"
+                        border.color: "#e3b76a"
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 29
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 5
+                        height: 5
+                        radius: 3
+                        color: "#f9db79"
+                    }
+                }
+
+                contentItem: Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 44
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: roomDoor.text
+                    color: "#fff8e7"
+                    font: roomDoor.font
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
                 onClicked: root.selectFixedRoom(
                     root.roomTitle === "Atrium" ? "lounge" : "atrium")
             }
@@ -2470,10 +2532,14 @@ Item {
                                     Array.isArray(asset.propAssignments)
                                     ? asset.propAssignments : []
                                 property bool previewCounted: false
+                                // Two wide cards keep all three assignment
+                                // actions readable; four narrow cards elide
+                                // their labels before they can be operated.
                                 property int cardWidth: Math.max(
-                                    200,
+                                    320,
                                     Math.floor(
-                                        (backgroundGrid.width - 30) / 4))
+                                        (backgroundGrid.width
+                                         - backgroundFlow.spacing) / 2))
                                 width: cardWidth
                                 height: 242
                                 radius: 8
@@ -2589,6 +2655,7 @@ Item {
                                                 "palaceAssetApprove-"
                                                 + backgroundCard.handle
                                             Layout.fillWidth: true
+                                            Layout.minimumWidth: 156
                                             text: backgroundCard
                                                     .publicationState
                                                     === "published"
@@ -2609,6 +2676,7 @@ Item {
                                             objectName:
                                                 "palaceAssetReject-"
                                                 + backgroundCard.handle
+                                            Layout.minimumWidth: 84
                                             text: "Reject"
                                             enabled: root.ready
                                                 && backgroundCard
@@ -2629,6 +2697,7 @@ Item {
                                                 "palaceBackgroundAssignAtrium-"
                                                 + backgroundCard.handle
                                             Layout.fillWidth: true
+                                            Layout.minimumWidth: 96
                                             text: "Set Atrium"
                                             enabled: root.ready
                                                 && backgroundCard
@@ -2647,6 +2716,7 @@ Item {
                                                 "palaceAssetAssignProp-"
                                                 + backgroundCard.handle
                                             Layout.fillWidth: true
+                                            Layout.minimumWidth: 96
                                             text: "Set prop"
                                             enabled: root.ready
                                                 && backgroundCard
@@ -2671,6 +2741,7 @@ Item {
                                                 "palaceBackgroundAssignLounge-"
                                                 + backgroundCard.handle
                                             Layout.fillWidth: true
+                                            Layout.minimumWidth: 96
                                             text: "Set Lounge"
                                             enabled: root.ready
                                                 && backgroundCard

@@ -87,11 +87,11 @@ test("orphan stage sessions are cancelled only when unmatched", () => {
 });
 
 test("canvas clicks map to bounded Palace protocol coordinates", () => {
-  assert.deepEqual(canvasPixelsToProtocol(90, 110, 1000, 800), {
+  assert.deepEqual(canvasPixelsToProtocol(100, 104, 1000, 800), {
     x: 0,
     y: 0,
   });
-  assert.deepEqual(canvasPixelsToProtocol(910, 580, 1000, 800), {
+  assert.deepEqual(canvasPixelsToProtocol(900, 634, 1000, 800), {
     x: 10000,
     y: 10000,
   });
@@ -144,10 +144,20 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
   const moveSurfaceOffset = mainQml.indexOf('objectName: "palaceRoomMoveSurface"');
   const participantOffset = mainQml.indexOf('objectName: "palaceParticipants"');
   const doorOffset = mainQml.indexOf('objectName: "palaceRoomDoor"');
+  const doorBlock = mainQml.slice(
+    doorOffset,
+    mainQml.indexOf("onClicked:", doorOffset),
+  );
   assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < participantOffset);
   assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < doorOffset);
 
   assert.match(mainQml, /property bool roomListOpen:\s*false/);
+  assert.match(mainQml, /property bool userListOpen:\s*false/);
+  assert.match(mainQml, /readonly property int roomCanvasBottomInset:\s*166/);
+  assert.match(
+    mainQml,
+    /roomCanvasVerticalInset:\s*\n\s*roomCanvasTopInset \+ roomCanvasBottomInset/,
+  );
   assert.match(mainQml, /objectName:\s*"palaceRoomListPanel"/);
   assert.match(mainQml, /objectName:\s*"palaceRoomListAtrium"/);
   assert.match(mainQml, /objectName:\s*"palaceRoomListLounge"/);
@@ -176,6 +186,24 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
     mainQml,
     /objectName:\s*"palaceToolboxRooms"[\s\S]{0,420}root\.roomListOpen\s*=\s*!root\.roomListOpen/,
   );
+  assert.match(
+    mainQml,
+    /id: roomDoor[\s\S]{0,160}objectName:\s*"palaceRoomDoor"/,
+  );
+  assert.match(
+    doorBlock,
+    /anchors\.bottomMargin:\s*root\.roomCanvasDoorBottomMargin/,
+  );
+  assert.match(
+    doorBlock,
+    /background:\s*Rectangle[\s\S]*contentItem:\s*Text/,
+  );
+  assert.match(
+    mainQml,
+    /property int cardWidth:\s*Math\.max\(\s*320,/,
+  );
+  assert.match(mainQml, /text: "Set Atrium"/);
+  assert.match(mainQml, /text: "Set Lounge"/);
 });
 
 test("backend stops poll timers on teardown", () => {
