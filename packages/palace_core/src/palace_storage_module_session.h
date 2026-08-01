@@ -69,6 +69,10 @@ enum class StorageTransferOutcome : std::uint8_t {
 struct StorageModuleSessionConfigV1 {
     // Passed only to the exact `initialize` nodeAction. Never persisted here.
     std::string initializationConfig;
+    // When true, this session observes and uses an already-running node owned
+    // by another visible control surface. It never initializes, starts, or
+    // stops that node, and therefore has no initialization config.
+    bool externallyManaged = false;
     // Printable stable prefix unique to this host process/session.
     std::string operationIdPrefix;
     std::size_t maxPendingTransfers = 128U;

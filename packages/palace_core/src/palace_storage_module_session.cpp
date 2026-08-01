@@ -212,10 +212,13 @@ bool validNodeAcknowledgementShape(
 
 bool validConfig(const StorageModuleSessionConfigV1& config)
 {
-    return !config.initializationConfig.empty()
-        && config.initializationConfig.size()
-            <= kMaximumInitializationConfigBytes
-        && config.initializationConfig.find('\0') == std::string::npos
+    const bool validInitializationConfig = config.externallyManaged
+        ? config.initializationConfig.empty()
+        : (!config.initializationConfig.empty()
+           && config.initializationConfig.size()
+               <= kMaximumInitializationConfigBytes
+           && config.initializationConfig.find('\0') == std::string::npos);
+    return validInitializationConfig
         && isSafeIdentifier(config.operationIdPrefix, 48U)
         && config.maxPendingTransfers > 0U
         && config.maxPendingTransfers
@@ -392,7 +395,8 @@ StorageModuleSessionTransition PalaceStorageModuleSession::start()
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_configured)
         return transitionLocked(false, "session-not-configured");
-    if (m_state == StorageModuleSessionState::Running
+    if (!m_config.externallyManaged
+        && m_state == StorageModuleSessionState::Running
         && !m_recoveryStopRequired) {
         return transitionLocked(true, "already-running");
     }
@@ -438,6 +442,17 @@ StorageModuleSessionTransition PalaceStorageModuleSession::interrupt(
         transitionLocked(true, recoverable
             ? "recoverable-interrupt" : "interrupted");
     failAllTransfersLocked("session-interrupted", transition);
+
+    if (m_config.externallyManaged) {
+        // This session has no ownership of node lifecycle. A Palace restart or
+        // callback fault must not stop a Storage node operated by Logos
+        // Control; a later explicit attach will re-query its state.
+        m_targetRunning = false;
+        m_recoveryRestart = false;
+        m_recoveryStopRequired = false;
+        m_state = StorageModuleSessionState::Offline;
+        return transition;
+    }
 
     m_targetRunning = recoverable;
     m_recoveryRestart = recoverable;
@@ -592,7 +607,28 @@ void PalaceStorageModuleSession::advanceLifecycleLocked(
     if (m_snapshot->pendingOperation.has_value()
         || !isStableNodeState(m_snapshot->state)) {
         m_state = StorageModuleSessionState::ReconciliationRequired;
-        transition.reason = "unowned-lifecycle-operation";
+        transition.reason = m_config.externallyManaged
+            ? "external-node-transitioning"
+            : "unowned-lifecycle-operation";
+        return;
+    }
+
+    // An externally managed node belongs to Logos Control (or another
+    // explicit operator surface). Palace may attach only after it is already
+    // running; it must never mutate the node lifecycle or infer a config.
+    if (m_config.externallyManaged) {
+        m_recoveryRestart = false;
+        m_recoveryStopRequired = false;
+        if (m_targetRunning
+            && m_snapshot->state == StorageNodeState::Running) {
+            m_state = StorageModuleSessionState::Running;
+            return;
+        }
+        m_targetRunning = false;
+        m_state = m_snapshot->state == StorageNodeState::Stopped
+            ? StorageModuleSessionState::Stopped
+            : StorageModuleSessionState::Offline;
+        transition.reason = "external-node-not-running";
         return;
     }
 
@@ -694,6 +730,17 @@ StorageModuleSessionTransition PalaceStorageModuleSession::nodeStatusResult(
         m_state = StorageModuleSessionState::ReconciliationRequired;
         transition.accepted = false;
         transition.reason = "stale-node-status";
+        if (m_config.externallyManaged) {
+            // A restarted externally owned node can reuse an instance ID
+            // while its lifecycle counters reset. Forget the old attachment
+            // so an explicit retry can establish the new current status.
+            failAllTransfersLocked("stale-node-status", transition);
+            m_lifecycleOperation.reset();
+            m_snapshot.reset();
+            m_targetRunning = false;
+            m_recoveryRestart = false;
+            m_recoveryStopRequired = false;
+        }
         return transition;
     }
 
@@ -886,6 +933,20 @@ void PalaceStorageModuleSession::enterRecoveryLocked(
     bool restart)
 {
     failAllTransfersLocked(reason, transition);
+    if (m_config.externallyManaged) {
+        // A lifecycle callback cannot prove that the operator-owned node is
+        // still the instance Palace attached to. Never keep the cached
+        // running state or issue a lifecycle command; a later explicit
+        // attach must query the current node status again.
+        m_lifecycleOperation.reset();
+        m_snapshot.reset();
+        m_targetRunning = false;
+        m_recoveryRestart = false;
+        m_recoveryStopRequired = false;
+        m_state = StorageModuleSessionState::ReconciliationRequired;
+        transition.reason = reason;
+        return;
+    }
     m_targetRunning = restart;
     m_recoveryRestart = restart;
     m_recoveryStopRequired = restart;

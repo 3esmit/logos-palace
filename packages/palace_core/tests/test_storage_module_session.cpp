@@ -22,6 +22,15 @@ palace::StorageModuleSessionConfigV1 config()
     return value;
 }
 
+palace::StorageModuleSessionConfigV1 externallyManagedConfig()
+{
+    palace::StorageModuleSessionConfigV1 value = config();
+    value.initializationConfig.clear();
+    value.externallyManaged = true;
+    value.operationIdPrefix = "palace-external";
+    return value;
+}
+
 std::string cid(char suffix)
 {
     std::vector<std::uint8_t> bytes = {0x01U, 0x55U, 0x12U, 0x20U};
@@ -334,6 +343,149 @@ LOGOS_TEST(storage_module_session_initializes_and_starts_once_with_synchronous_c
     const auto duplicateStart = session.start();
     LOGOS_ASSERT_TRUE(duplicateStart.accepted);
     LOGOS_ASSERT_TRUE(duplicateStart.commands.empty());
+}
+
+LOGOS_TEST(storage_module_session_external_attach_retries_current_status_without_lifecycle_mutation) {
+    palace::PalaceStorageModuleSession session;
+    LOGOS_ASSERT_TRUE(session.configure(externallyManagedConfig()));
+    const auto requested = session.start();
+    LOGOS_ASSERT_TRUE(requested.accepted);
+    LOGOS_ASSERT_EQ(requested.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(requested.commands.front().kind),
+        static_cast<int>(palace::StorageModuleCommandKind::QueryNodeStatus));
+
+    const auto stopped = session.nodeStatusResult(
+        requested.commands.front().commandId,
+        true,
+        snapshot(palace::StorageNodeState::Stopped, 1U, 1U));
+    LOGOS_ASSERT_TRUE(stopped.accepted);
+    LOGOS_ASSERT_EQ(stopped.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_FALSE(session.running());
+
+    const auto retry = session.start();
+    LOGOS_ASSERT_TRUE(retry.accepted);
+    LOGOS_ASSERT_EQ(retry.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(retry.commands.front().kind),
+        static_cast<int>(palace::StorageModuleCommandKind::QueryNodeStatus));
+    const auto attached = session.nodeStatusResult(
+        retry.commands.front().commandId,
+        true,
+        snapshot(palace::StorageNodeState::Running, 3U, 7U));
+    LOGOS_ASSERT_TRUE(attached.accepted);
+    LOGOS_ASSERT_EQ(attached.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_TRUE(session.running());
+
+    // A repeated explicit attach is a freshness check, not an already-running
+    // shortcut. Once queried, a stopped node must no longer be usable.
+    const auto recheck = session.start();
+    LOGOS_ASSERT_TRUE(recheck.accepted);
+    LOGOS_ASSERT_EQ(recheck.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(recheck.commands.front().kind),
+        static_cast<int>(palace::StorageModuleCommandKind::QueryNodeStatus));
+    LOGOS_ASSERT_FALSE(session.running());
+    const auto stoppedAfterRecheck = session.nodeStatusResult(
+        recheck.commands.front().commandId,
+        true,
+        snapshot(palace::StorageNodeState::Stopped, 3U, 8U));
+    LOGOS_ASSERT_TRUE(stoppedAfterRecheck.accepted);
+    LOGOS_ASSERT_EQ(
+        stoppedAfterRecheck.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_FALSE(session.running());
+
+    const auto interrupted = session.interrupt(true);
+    LOGOS_ASSERT_TRUE(interrupted.accepted);
+    LOGOS_ASSERT_EQ(interrupted.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_FALSE(session.running());
+}
+
+LOGOS_TEST(storage_module_session_external_attach_rechecks_replaced_or_restarted_node) {
+    palace::PalaceStorageModuleSession session;
+    LOGOS_ASSERT_TRUE(session.configure(externallyManagedConfig()));
+
+    const auto initial = session.start();
+    LOGOS_ASSERT_EQ(initial.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_TRUE(session.nodeStatusResult(
+        initial.commands.front().commandId,
+        true,
+        snapshot(
+            palace::StorageNodeState::Running,
+            4U,
+            10U,
+            "storage-instance-1")).accepted);
+    LOGOS_ASSERT_TRUE(session.running());
+
+    // A replacement is only usable after the explicit query observes its
+    // current state. Do not retain the old instance's running state.
+    const auto replacement = session.start();
+    LOGOS_ASSERT_EQ(replacement.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(replacement.commands.front().kind),
+        static_cast<int>(palace::StorageModuleCommandKind::QueryNodeStatus));
+    LOGOS_ASSERT_FALSE(session.running());
+    const auto replacementStopped = session.nodeStatusResult(
+        replacement.commands.front().commandId,
+        true,
+        snapshot(
+            palace::StorageNodeState::Stopped,
+            0U,
+            0U,
+            "storage-instance-2"));
+    LOGOS_ASSERT_TRUE(replacementStopped.accepted);
+    LOGOS_ASSERT_EQ(
+        replacementStopped.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_FALSE(session.running());
+
+    const auto attachReplacement = session.start();
+    LOGOS_ASSERT_EQ(
+        attachReplacement.commands.size(), static_cast<std::size_t>(1));
+    const auto replacementRunning = session.nodeStatusResult(
+        attachReplacement.commands.front().commandId,
+        true,
+        snapshot(
+            palace::StorageNodeState::Running,
+            1U,
+            1U,
+            "storage-instance-2"));
+    LOGOS_ASSERT_TRUE(replacementRunning.accepted);
+    LOGOS_ASSERT_EQ(
+        replacementRunning.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_TRUE(session.running());
+
+    // A restart may reset counters without changing the instance identifier.
+    // Reject the stale answer and forget it, then permit one explicit retry.
+    const auto restart = session.start();
+    LOGOS_ASSERT_EQ(restart.commands.size(), static_cast<std::size_t>(1));
+    const auto staleRestart = session.nodeStatusResult(
+        restart.commands.front().commandId,
+        true,
+        snapshot(
+            palace::StorageNodeState::Stopped,
+            0U,
+            0U,
+            "storage-instance-2"));
+    LOGOS_ASSERT_FALSE(staleRestart.accepted);
+    LOGOS_ASSERT_EQ(staleRestart.reason, std::string("stale-node-status"));
+    LOGOS_ASSERT_EQ(staleRestart.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_FALSE(session.running());
+
+    const auto retryAfterRestart = session.start();
+    LOGOS_ASSERT_EQ(
+        retryAfterRestart.commands.size(), static_cast<std::size_t>(1));
+    const auto restartedRunning = session.nodeStatusResult(
+        retryAfterRestart.commands.front().commandId,
+        true,
+        snapshot(
+            palace::StorageNodeState::Running,
+            1U,
+            1U,
+            "storage-instance-2"));
+    LOGOS_ASSERT_TRUE(restartedRunning.accepted);
+    LOGOS_ASSERT_EQ(
+        restartedRunning.commands.size(), static_cast<std::size_t>(0));
+    LOGOS_ASSERT_TRUE(session.running());
 }
 
 LOGOS_TEST(storage_module_session_accepts_settled_before_accepted_and_rejects_duplicates) {
