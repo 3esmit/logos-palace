@@ -1969,7 +1969,14 @@ function validTimedReceipt(record, prefix) {
     && (prefix === undefined || record.receipt.startsWith(prefix));
 }
 
-function validRetentionRoundReceipt(record, publication, round, prefix) {
+function publicationCatalog(publication) {
+  const catalog = receiptFields(publication?.completed?.receipt).catalog;
+  return typeof catalog === "string" && catalog.length > 0
+    ? catalog
+    : undefined;
+}
+
+function validRetentionRoundReceipt(record, publication, round, prefix, catalog) {
   if (!validTimedReceipt(record, prefix)) return false;
   const fields = receiptFields(record.receipt);
   const count = String(publication.objects.length);
@@ -1994,8 +2001,7 @@ function validRetentionRoundReceipt(record, publication, round, prefix) {
     && fields.source === "cache"
     && fields.native_available === count
     && fields.native_total === count
-    && typeof fields.catalog === "string"
-    && fields.catalog.length > 0;
+    && fields.catalog === catalog;
 }
 
 function validRetainedCatalogObjects(retained, publication) {
@@ -2037,7 +2043,9 @@ function validPostCreatorOfflineRetentionProofs(proofs, publication) {
   const proofDescription =
     "native exists(cid)=true for every CID, then local-only Storage V2 retrieval "
     + "with exact length, SHA-256, and bytes";
+  const catalog = publicationCatalog(publication);
   return Array.isArray(proofs)
+    && catalog !== undefined
     && proofs.length === 2
     && proofs.every((proof, index) => {
       const round = index + 1;
@@ -2055,17 +2063,345 @@ function validPostCreatorOfflineRetentionProofs(proofs, publication) {
           publication,
           round,
           "ok;",
+          catalog,
         )
-        && validRetentionRoundReceipt(proof.completed, publication, round)
+        && validRetentionRoundReceipt(
+          proof.completed,
+          publication,
+          round,
+          undefined,
+          catalog,
+        )
         && validRetainedCatalogObjects(proof.retained, publication);
     });
 }
 
+function validCatalogObjectReceiptList(
+  records,
+  publication,
+  state,
+  includesCid = state === "verified",
+) {
+  if (
+    !Array.isArray(records)
+    || records.length !== publication.objects.length
+    || new Set(records.map((record) => record?.objectId)).size !== records.length
+  ) {
+    return false;
+  }
+  const objectsById = new Map(
+    publication.objects.map((object) => [object.objectId, object]),
+  );
+  return records.every((record) => {
+    const object = objectsById.get(record?.objectId);
+    if (
+      !object
+      || !Number.isSafeInteger(record?.elapsedMs)
+      || record.elapsedMs < 0
+      || typeof record.receipt !== "string"
+    ) {
+      return false;
+    }
+    if (state === "missing") {
+      return exactKeys(record, ["elapsedMs", "objectId", "receipt"])
+        && record.receipt === "state=missing";
+    }
+    if (
+      !exactKeys(record, [
+        ...(includesCid ? ["cid"] : []),
+        "elapsedMs",
+        "objectId",
+        "receipt",
+      ])
+      || (includesCid && record.cid !== object.cid)
+    ) {
+      return false;
+    }
+    const fields = receiptFields(record.receipt);
+    return exactKeys(fields, ["cid", "publication", "retention", "state"])
+      && fields.state === "verified"
+      && fields.publication === "published"
+      && fields.retention === "missing"
+      && fields.cid === object.cid;
+  });
+}
+
+function validBundleStatusReceipt(
+  record,
+  publication,
+  state,
+  prefix,
+  catalog,
+) {
+  if (!validTimedReceipt(record, prefix)) return false;
+  const fields = receiptFields(record.receipt);
+  const count = String(publication.objects.length);
+  return exactKeys(fields, [
+    ...(catalog === undefined ? [] : ["catalog"]),
+    "native_available",
+    "native_total",
+    "published",
+    "retention",
+    "retention_round",
+    "source",
+    "state",
+    "total",
+    "verified",
+  ])
+    && fields.state === state
+    && fields.published === count
+    && fields.total === count
+    && fields.retention === "missing"
+    && fields.retention_round === "0"
+    && fields.source === "cache"
+    && fields.native_available === count
+    && fields.native_total === count
+    && (catalog === undefined || fields.catalog === catalog)
+    && (
+      state === "fetching"
+        ? fields.verified === "0"
+        : fields.verified === count
+    );
+}
+
+function validPostCreatorOfflineBundleFetch(fetch, publication, mode) {
+  const catalog = publicationCatalog(publication);
+  if (
+    !exactKeys(fetch, [
+      "before",
+      "clock",
+      "completed",
+      "dispatched",
+      "endBoundary",
+      "endToEndMs",
+      "mode",
+      "startBoundary",
+      "verified",
+    ])
+    || fetch.mode !== mode
+    || fetch.clock !== "performance.now monotonic milliseconds"
+    || fetch.startBoundary
+      !== "immediately before first local object status read"
+    || fetch.endBoundary
+      !== "all exact catalog objects re-read as CID-verified after completion"
+    || !Number.isSafeInteger(fetch.endToEndMs)
+    || fetch.endToEndMs < 0
+    || catalog === undefined
+    || !validCatalogObjectReceiptList(
+      fetch.before,
+      publication,
+      mode === "network" ? "missing" : "verified",
+      false,
+    )
+    || !validCatalogObjectReceiptList(fetch.verified, publication, "verified")
+  ) {
+    return false;
+  }
+  if (mode === "network") {
+    return validBundleStatusReceipt(
+      fetch.dispatched,
+      publication,
+      "fetching",
+      "ok;",
+      undefined,
+    )
+      && validBundleStatusReceipt(
+        fetch.completed,
+        publication,
+        "verified",
+        undefined,
+        catalog,
+      );
+  }
+  const cacheDispatchFields = receiptFields(fetch.dispatched?.receipt);
+  return exactKeys(fetch.dispatched, [
+    "elapsedMs",
+    "receipt",
+    "reusedVerifiedCatalog",
+  ])
+    && fetch.dispatched.reusedVerifiedCatalog === true
+    && fetch.dispatched.elapsedMs === 0
+    && typeof fetch.dispatched.receipt === "string"
+    && exactKeys(cacheDispatchFields, ["catalog", "state"])
+    && cacheDispatchFields.state === "verified"
+    && cacheDispatchFields.catalog === catalog
+    && validBundleStatusReceipt(
+      fetch.completed,
+      publication,
+      "verified",
+      undefined,
+      catalog,
+    );
+}
+
+function validStoragePeerEndpoint(endpoint) {
+  return exactKeys(endpoint, [
+    "addrs",
+    "announceAddresses",
+    "peerId",
+    "spr",
+    "tablePeers",
+  ])
+    && typeof endpoint.peerId === "string"
+    && endpoint.peerId.length > 0
+    && typeof endpoint.spr === "string"
+    && endpoint.spr.startsWith("spr:")
+    && Array.isArray(endpoint.addrs)
+    && endpoint.addrs.length > 0
+    && endpoint.addrs.every((address) =>
+      typeof address === "string" && address.length > 0,
+    )
+    && exactJson(endpoint.announceAddresses, endpoint.addrs)
+    && Array.isArray(endpoint.tablePeers)
+    && endpoint.tablePeers.length > 0
+    && endpoint.tablePeers.every((peerId) =>
+      typeof peerId === "string" && peerId.length > 0,
+    )
+    && endpoint.tablePeers.includes(endpoint.peerId);
+}
+
+function validStorageMeshDial(dial, endpoints) {
+  if (
+    !exactKeys(dial, ["addresses", "from", "peerId", "result", "to"])
+    || !["a", "b"].includes(dial.from)
+    || !["a", "b"].includes(dial.to)
+    || dial.from === dial.to
+  ) {
+    return false;
+  }
+  const destination = endpoints[dial.to];
+  const expectedAddresses = [
+    ...destination.addrs,
+    ...destination.addrs.map(
+      (address) => `${address}/p2p/${destination.peerId}`,
+    ),
+  ];
+  const fields = receiptFields(dial.result?.receipt);
+  return dial.peerId === destination.peerId
+    && exactJson(dial.addresses, expectedAddresses)
+    && validTimedReceipt(dial.result, "ok;")
+    && exactKeys(fields, ["connect", "peers"])
+    && fields.connect === "sent"
+    && fields.peers === "2";
+}
+
+function validStorageMesh(mesh, endpoints) {
+  if (
+    !exactKeys(mesh, ["dials", "labels", "settleMs"])
+    || !exactJson(mesh.labels, ["a", "b"])
+    || !Array.isArray(mesh.dials)
+    || mesh.dials.length !== 2
+    || !Number.isSafeInteger(mesh.settleMs)
+    || mesh.settleMs < 0
+    || !mesh.dials.every((dial) => validStorageMeshDial(dial, endpoints))
+  ) {
+    return false;
+  }
+  const routes = new Set(mesh.dials.map((dial) => `${dial.from}->${dial.to}`));
+  return routes.size === 2 && routes.has("a->b") && routes.has("b->a");
+}
+
+function validStorageMeshVisibility(visibility, endpoints) {
+  if (
+    !exactKeys(visibility, ["endpoints", "ready", "waitedMs"])
+    || visibility.ready !== true
+    || !Number.isSafeInteger(visibility.waitedMs)
+    || visibility.waitedMs < 0
+    || !exactKeys(visibility.endpoints, ["a", "b"])
+  ) {
+    return false;
+  }
+  return ["a", "b"].every((label) => {
+    const endpoint = visibility.endpoints[label];
+    const expected = endpoints[label];
+    const otherPeerId = endpoints[label === "a" ? "b" : "a"].peerId;
+    if (
+      !exactKeys(endpoint, [
+        "addrs",
+        "announceAddresses",
+        "elapsedMs",
+        "peerId",
+        "receipt",
+        "seenPeers",
+        "spr",
+        "tablePeers",
+      ])
+      || endpoint.peerId !== expected.peerId
+      || endpoint.spr !== expected.spr
+      || !exactJson(endpoint.addrs, expected.addrs)
+      || !exactJson(endpoint.announceAddresses, expected.announceAddresses)
+      || !Array.isArray(endpoint.tablePeers)
+      || new Set(endpoint.tablePeers).size !== 2
+      || !endpoint.tablePeers.includes(expected.peerId)
+      || !endpoint.tablePeers.includes(otherPeerId)
+      || !exactJson(endpoint.seenPeers, [otherPeerId])
+      || !Number.isSafeInteger(endpoint.elapsedMs)
+      || endpoint.elapsedMs < 0
+      || typeof endpoint.receipt !== "string"
+      || !endpoint.receipt.startsWith("ok;")
+    ) {
+      return false;
+    }
+    try {
+      return exactJson(JSON.parse(endpoint.receipt.slice(3)), {
+        addrs: endpoint.addrs,
+        announceAddresses: endpoint.announceAddresses,
+        peerId: endpoint.peerId,
+        seenPeers: endpoint.seenPeers,
+        spr: endpoint.spr,
+        tablePeers: endpoint.tablePeers,
+      });
+    } catch {
+      return false;
+    }
+  });
+}
+
+function validStorageBlockMaterialization(materialization) {
+  return exactKeys(materialization, [
+    "copied",
+    "fromLabel",
+    "fromRepo",
+    "mode",
+    "toLabel",
+    "toRepo",
+  ])
+    && materialization.fromLabel === "a"
+    && materialization.toLabel === "b"
+    && materialization.mode === "co-located-block-copy"
+    && typeof materialization.fromRepo === "string"
+    && materialization.fromRepo.length > 0
+    && typeof materialization.toRepo === "string"
+    && materialization.toRepo.length > 0
+    && materialization.fromRepo !== materialization.toRepo
+    && exactJson(materialization.copied, [
+      "blocks",
+      "manifests",
+      "dht/providers",
+      "storage_publications",
+      "verified_assets",
+    ]);
+}
+
+function validPostCreatorOfflineStorageTopology(report) {
+  const endpoints = report.storagePeerEndpoints;
+  return exactKeys(endpoints, ["a", "b"])
+    && validStoragePeerEndpoint(endpoints.a)
+    && validStoragePeerEndpoint(endpoints.b)
+    && endpoints.a.peerId !== endpoints.b.peerId
+    && validStorageMesh(report.storageMesh, endpoints)
+    && validStorageMesh(report.storageMeshPreFetch, endpoints)
+    && exactJson(report.storageMeshPreFetch, report.storageMesh)
+    && validStorageMeshVisibility(report.storageMeshVisibility, endpoints)
+    && validStorageBlockMaterialization(report.storageBlockMaterialization);
+}
+
 function validPostCreatorOfflineFetchFailure(failure) {
-  const match = /^worker b: gate3FetchPng receipt timeout: before="missing" after="" state="([^"]+)" sequence=[1-9][0-9]*->[1-9][0-9]*$/.exec(
+  const match = /^worker b: gate3FetchPng receipt timeout: before="missing" after="" state="([^"]+)" sequence=([1-9][0-9]*)->([1-9][0-9]*)$/.exec(
     failure,
   );
   return match !== null
+    && Number(match[3]) === Number(match[2]) + 1
     && validCurrentLezAuthorityFields(receiptFields(match[1]));
 }
 
@@ -2082,6 +2418,16 @@ function validIdentityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline(
     && validPostCreatorOfflineRetentionProofs(
       report.providerBRetentionProofs,
       report.publication,
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.providerBFetch,
+      report.publication,
+      "network",
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.providerBCachedFetch,
+      report.publication,
+      "cache",
     )
     && validPostCreatorOfflineFetchFailure(report.failure);
 }
@@ -2260,8 +2606,14 @@ function validatesAuditedPrePublicWriteGate3Report(
         !hasCreatorStopIntent
         || !hasProviderBFetch
         || !hasProviderBCachedFetch
+        || !hasStoragePeerEndpoints
+        || !hasStorageMesh
+        || !hasStorageMeshPreFetch
+        || !hasStorageMeshVisibility
+        || !hasStorageBlockMaterialization
         || hasStorageMeshC
         || hasStorageBlockMaterializationC
+        || !validPostCreatorOfflineStorageTopology(report)
         || !validIdentityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline(
           report,
         )

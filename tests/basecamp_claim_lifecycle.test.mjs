@@ -364,9 +364,117 @@ function sealedBundleRetainedAfterCreatorOfflineGate3Report(predecessor) {
       elapsedMs: 1,
     })),
   });
-  report.providerBFetch = {};
-  report.providerBCachedFetch = {};
+  const bundleReceipt = (state) =>
+    `state=${state};published=5;verified=${state === "fetching" ? 0 : 5};`
+    + "total=5;retention=missing;retention_round=0;source=cache;"
+    + "native_available=5;native_total=5"
+    + (state === "fetching" ? "" : ";catalog=fixture");
+  const verified = (includesCid = true) => objects.map((object) => ({
+    objectId: object.objectId,
+    ...(includesCid ? { cid: object.cid } : {}),
+    receipt:
+      `state=verified;publication=published;retention=missing;cid=${object.cid}`,
+    elapsedMs: 1,
+  }));
+  const fetch = (mode) => ({
+    mode,
+    clock: "performance.now monotonic milliseconds",
+    startBoundary: "immediately before first local object status read",
+    endBoundary:
+      "all exact catalog objects re-read as CID-verified after completion",
+    before: mode === "network"
+      ? objects.map((object) => ({
+          objectId: object.objectId,
+          receipt: "state=missing",
+          elapsedMs: 1,
+        }))
+      : verified(false),
+    dispatched: mode === "network"
+      ? { receipt: `ok;${bundleReceipt("fetching")}`, elapsedMs: 1 }
+      : {
+          receipt: "ok;state=verified;catalog=fixture",
+          elapsedMs: 0,
+          reusedVerifiedCatalog: true,
+        },
+    completed: { receipt: bundleReceipt("verified"), elapsedMs: 1 },
+    verified: verified(),
+    endToEndMs: 1,
+  });
+  report.providerBFetch = fetch("network");
+  report.providerBCachedFetch = fetch("cache");
   report.providerBRetentionProofs = [retention(1), retention(2)];
+  const storagePeerEndpoints = {
+    a: {
+      peerId: "peer-a",
+      spr: "spr:peer-a",
+      addrs: ["/ip4/127.0.0.1/tcp/41001"],
+      announceAddresses: ["/ip4/127.0.0.1/tcp/41001"],
+      tablePeers: ["peer-a"],
+    },
+    b: {
+      peerId: "peer-b",
+      spr: "spr:peer-b",
+      addrs: ["/ip4/127.0.0.1/tcp/41002"],
+      announceAddresses: ["/ip4/127.0.0.1/tcp/41002"],
+      tablePeers: ["peer-b", "peer-a"],
+    },
+  };
+  const meshDial = (from, to) => ({
+    from,
+    to,
+    peerId: storagePeerEndpoints[to].peerId,
+    addresses: [
+      storagePeerEndpoints[to].addrs[0],
+      `${storagePeerEndpoints[to].addrs[0]}/p2p/${storagePeerEndpoints[to].peerId}`,
+    ],
+    result: { receipt: "ok;connect=sent;peers=2", elapsedMs: 1 },
+  });
+  const storageMesh = {
+    labels: ["a", "b"],
+    dials: [meshDial("a", "b"), meshDial("b", "a")],
+    settleMs: 1,
+  };
+  const visibleEndpoint = (label, otherLabel) => {
+    const source = storagePeerEndpoints[label];
+    const observation = {
+      addrs: source.addrs,
+      announceAddresses: source.announceAddresses,
+      peerId: source.peerId,
+      seenPeers: [storagePeerEndpoints[otherLabel].peerId],
+      spr: source.spr,
+      tablePeers: [source.peerId, storagePeerEndpoints[otherLabel].peerId],
+    };
+    return {
+      ...observation,
+      receipt: `ok;${JSON.stringify(observation)}`,
+      elapsedMs: 1,
+    };
+  };
+  report.storagePeerEndpoints = storagePeerEndpoints;
+  report.storageMesh = storageMesh;
+  report.storageMeshPreFetch = JSON.parse(JSON.stringify(storageMesh));
+  report.storageMeshVisibility = {
+    ready: true,
+    endpoints: {
+      a: visibleEndpoint("a", "b"),
+      b: visibleEndpoint("b", "a"),
+    },
+    waitedMs: 1,
+  };
+  report.storageBlockMaterialization = {
+    fromRepo: "/fixture/a/repo",
+    toRepo: "/fixture/b/repo",
+    fromLabel: "a",
+    toLabel: "b",
+    mode: "co-located-block-copy",
+    copied: [
+      "blocks",
+      "manifests",
+      "dht/providers",
+      "storage_publications",
+      "verified_assets",
+    ],
+  };
   report.creatorStopIntent = {
     checkpointed: true,
     pid: report.startup.a.basecampPid,
