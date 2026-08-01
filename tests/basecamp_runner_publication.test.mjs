@@ -760,6 +760,32 @@ test("Gate 3 binds external admin-selected assets to Storage and pixels", async 
     coreImpl,
     /publish-failed;reason=content-verification/,
   );
+  const materializedFetchStart = coreImpl.indexOf(
+    "if (m_storageMvpColocatedMaterialized)",
+  );
+  const materializedFetchEnd = coreImpl.indexOf(
+    "const palace::StorageModuleSessionTransition fetch =",
+    materializedFetchStart,
+  );
+  assert.notEqual(materializedFetchStart, -1);
+  assert.notEqual(materializedFetchEnd, -1);
+  const materializedFetch = coreImpl.slice(
+    materializedFetchStart,
+    materializedFetchEnd,
+  );
+  assert.match(materializedFetch, /fetchedPngArtifactForCid/);
+  assert.match(
+    materializedFetch,
+    /if \(!verified\.accepted\)[\s\S]*?return m_assetStatus\[reference\.derivativeCid\];/,
+  );
+  const degradeStart = gate3.indexOf("async function degradePng(worker, asset)");
+  const degradeEnd = gate3.indexOf("async function ensureAssetStateProof", degradeStart);
+  assert.notEqual(degradeStart, -1);
+  assert.notEqual(degradeEnd, -1);
+  assert.match(
+    gate3.slice(degradeStart, degradeEnd),
+    /\{ prefix: "degraded;reason=" \}/,
+  );
 
   const publicSources = [
     runner,

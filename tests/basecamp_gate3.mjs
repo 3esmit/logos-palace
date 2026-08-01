@@ -2258,7 +2258,7 @@ async function degradePng(worker, asset) {
       asset.width,
       asset.height,
     ],
-    undefined,
+    { prefix: "degraded;reason=" },
     true,
   );
   failOnRejected(dispatched.receipt, `degraded state ${asset.role}`);

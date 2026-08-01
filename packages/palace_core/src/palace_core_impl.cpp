@@ -5078,6 +5078,8 @@ std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
             m_assetStatus[reference.derivativeCid] = verified.accepted
                 ? "verified;handle=" + verified.handle
                 : "degraded;reason=" + verified.reason;
+            if (!verified.accepted)
+                return m_assetStatus[reference.derivativeCid];
             return "ok;asset=fetching;operation="
                 + pending->operationId;
         }
