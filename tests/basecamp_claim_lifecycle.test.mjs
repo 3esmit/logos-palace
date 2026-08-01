@@ -618,6 +618,7 @@ function completedGate3StrictEvidenceRejectionReport(predecessor) {
 }
 
 function preRootWriteGate4FailureReport(audit) {
+  const cleanupFailed = audit.cleanupStatus === "failed";
   return {
     schema: "logos.palace.basecamp-gate4-6-report",
     version: 2,
@@ -644,14 +645,15 @@ function preRootWriteGate4FailureReport(audit) {
     },
     failureEvidence: {},
     restart: {},
-    cleanup: {
-      status: "failed",
-      failures: [audit.terminalFailure],
-    },
-    failures: [
-      { phase: "initial-start", message: audit.initialFailure },
-      { phase: "terminal-cleanup", message: audit.terminalFailure },
-    ],
+    cleanup: cleanupFailed
+      ? { status: "failed", failures: [audit.terminalFailure] }
+      : { status: "passed", failures: [] },
+    failures: cleanupFailed
+      ? [
+          { phase: "initial-start", message: audit.initialFailure },
+          { phase: "terminal-cleanup", message: audit.terminalFailure },
+        ]
+      : [{ phase: "initial-start", message: audit.initialFailure }],
     release: {
       programDeployment: { status: "passed" },
       rootAccountBeforeWrites: { status: "passed", state: "uninitialized" },
@@ -875,6 +877,7 @@ async function fixture({
     gate3ReportSha256: "f".repeat(64),
     gate4ReportSha256: "1".repeat(64),
     gate4ScopeSha256: "2".repeat(64),
+    cleanupStatus: "failed",
     initialFailure: "fixture startup guard rejected unrelated process",
     terminalFailure: "fixture cleanup rejected unrelated process",
     retirementStatus: "audited-pre-root-write-gate4-harness-failure",
@@ -1605,10 +1608,68 @@ test("rolls forward the exact audited Gate 4 pre-root-write harness failure", as
       "audited-pre-root-write-gate4-harness-failure",
     );
     assert.equal(evidence.proof.rootAccount, "uninitialized");
+    assert.deepEqual(
+      JSON.parse((await lifecycle.execute("retired-runs")).output),
+      [predecessorRun],
+    );
     assert.equal(
       (await lifecycle.execute("state")).output,
       "active-pre-gate3",
     );
+  });
+});
+
+test("rolls forward an audited Gate 4 listener-boundary failure with clean cleanup", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    preRootWriteGate4Audit,
+    lifecycle,
+  }) => {
+    preRootWriteGate4Audit.cleanupStatus = "passed";
+    delete preRootWriteGate4Audit.terminalFailure;
+    preRootWriteGate4Audit.initialFailure =
+      "Basecamp TCP listener inventory is not exact";
+    preRootWriteGate4Audit.retirementStatus =
+      "audited-pre-root-write-gate4-listener-boundary-failure";
+    await writeAuditedPreRootWriteGate4Artifacts({
+      predecessorRun,
+      predecessorClaim,
+      preRootWriteGate4Audit,
+    });
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-root-write-gate4-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(
+      certificate.status,
+      "audited-pre-root-write-gate4-listener-boundary-failure",
+    );
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.status, "retired-pre-root-write-gate4");
+    assert.equal(
+      evidence.proof.gate4Artifacts,
+      "audited-pre-root-write-gate4-listener-boundary-failure",
+    );
+    assert.deepEqual(
+      JSON.parse((await lifecycle.execute("retired-runs")).output),
+      [predecessorRun],
+    );
+    assert.equal((await lifecycle.execute("state")).output, "active-pre-gate3");
   });
 });
 
@@ -1763,10 +1824,41 @@ test("pins the exact audited Gate 4 pre-root-write harness failure", () => {
         "4237d6f870c8c523124af9e1ac8662521fb39413957eb96b8e3ab137ffab64ef",
       gate4ScopeSha256:
         "2e054c6085f0f80bc7f0a0eba4864a91343952e99dd2085b5fe352c782512c61",
+      cleanupStatus: "failed",
       initialFailure: "process 2 has invalid group/session",
       terminalFailure:
         "a-initial cleanup rejected: process 2 has invalid topology during cleanup",
       retirementStatus: "audited-pre-root-write-gate4-harness-failure",
+    },
+  );
+});
+
+test("pins the exact audited Gate 4 listener-boundary failure", () => {
+  assert.deepEqual(
+    auditedPreRootWriteGate4HarnessFailures.find((audit) =>
+      audit.gitCommit === "7da4b91c06610d34df1c7019caa74e746757143b"
+    ),
+    {
+      gitCommit: "7da4b91c06610d34df1c7019caa74e746757143b",
+      snapshotNarHash:
+        "sha256-nX2AEV56IKlqB06qNP6fCaoNBd7liagD1gocQYM0D+c=",
+      snapshotNarSize: 7447840,
+      snapshotRunnerSha256:
+        "135facfee7b336eee5960a6a59d231558e08cb9634e82541bc0b8db334a6558e",
+      runtimeManifestSha256:
+        "ed6a6f1c61e253f8137001035caa71c7a2df749ce48a41f60f037aa5da1a32d3",
+      compiledReportSha256:
+        "638e6e8b079d7158c609b6ee4a5763634824b205bfbfdf4d3a82b64e3a05e35e",
+      gate3ReportSha256:
+        "ef948bbbdd6168e09f238330f65801a989a4d32bb6958d98f793deff29c9d84e",
+      gate4ReportSha256:
+        "f3af4dbc8ce87af6b3cd2d18005732b6eb2654504cb0372157190a16ff82ed3e",
+      gate4ScopeSha256:
+        "a4731abc488b2a97ed19185a100045d723aa776af0d8621739e97209605604e1",
+      cleanupStatus: "passed",
+      initialFailure: "Basecamp TCP listener inventory is not exact",
+      retirementStatus:
+        "audited-pre-root-write-gate4-listener-boundary-failure",
     },
   );
 });

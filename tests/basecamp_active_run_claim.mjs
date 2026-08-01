@@ -49,6 +49,7 @@ const commands = new Set([
   "enter-gate3",
   "complete",
   "state",
+  "retired-runs",
   "completion",
 ]);
 if (
@@ -67,7 +68,7 @@ if (
 ) {
   throw new Error(
     "usage: node tests/basecamp_active_run_claim.mjs "
-    + "<acquire-or-roll-forward|verify|enter-gate3|complete|state|completion> "
+    + "<acquire-or-roll-forward|verify|enter-gate3|complete|state|retired-runs|completion> "
     + "<run-dir> <snapshot> <gc-root> <git-commit> <snapshot-nar-hash> "
     + "<snapshot-nar-size> <snapshot-runner-sha256> <runtime-manifest> "
     + "<runtime-manifest-sha256> <process-scope-slice> <process-scope-prefix>",

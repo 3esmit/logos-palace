@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 function bounded(bytes, maximum, description) {
   if (bytes.length <= 0 || bytes.length > maximum) {
@@ -199,11 +199,23 @@ export async function ownedProcessIdentityExists({
 }
 
 export function ownedBasecampUserDir(argv, basecamp, userDirs) {
-  if (
-    !Array.isArray(argv)
-    || argv.length === 0
-    || resolve(argv[0]) !== resolve(basecamp)
-  ) {
+  if (!Array.isArray(argv) || argv.length === 0) {
+    return undefined;
+  }
+  const expectedWrapper = resolve(basecamp);
+  const expectedRuntime = join(
+    dirname(expectedWrapper),
+    ".LogosBasecamp.elf",
+  );
+  const wrapperInvocation = resolve(argv[0]) === expectedWrapper;
+  const directRuntimeInvocation = resolve(argv[0]) === expectedRuntime;
+  const loaderInvocation =
+    /^ld(?:-[a-z0-9_-]+)?-linux[^/]*\.so(?:\.[0-9]+)*$/i.test(
+      basename(argv[0]),
+    )
+    && argv.length > 1
+    && resolve(argv[1]) === expectedRuntime;
+  if (!wrapperInvocation && !directRuntimeInvocation && !loaderInvocation) {
     return undefined;
   }
   const indexes = argv.flatMap(

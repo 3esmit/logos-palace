@@ -705,10 +705,36 @@ export const auditedPreRootWriteGate4HarnessFailures = Object.freeze([
       "4237d6f870c8c523124af9e1ac8662521fb39413957eb96b8e3ab137ffab64ef",
     gate4ScopeSha256:
       "2e054c6085f0f80bc7f0a0eba4864a91343952e99dd2085b5fe352c782512c61",
+    cleanupStatus: "failed",
     initialFailure: "process 2 has invalid group/session",
     terminalFailure:
       "a-initial cleanup rejected: process 2 has invalid topology during cleanup",
     retirementStatus: "audited-pre-root-write-gate4-harness-failure",
+  }),
+  // run.sDTZ3601 @ 7da4b91: Gate 4 rejected the Qt inspector's wildcard
+  // listener before any Palace-root action. The process scope cleaned exactly;
+  // the corrected Basecamp dependency is consumed by the successor run.
+  Object.freeze({
+    gitCommit: "7da4b91c06610d34df1c7019caa74e746757143b",
+    snapshotNarHash:
+      "sha256-nX2AEV56IKlqB06qNP6fCaoNBd7liagD1gocQYM0D+c=",
+    snapshotNarSize: 7_447_840,
+    snapshotRunnerSha256:
+      "135facfee7b336eee5960a6a59d231558e08cb9634e82541bc0b8db334a6558e",
+    runtimeManifestSha256:
+      "ed6a6f1c61e253f8137001035caa71c7a2df749ce48a41f60f037aa5da1a32d3",
+    compiledReportSha256:
+      "638e6e8b079d7158c609b6ee4a5763634824b205bfbfdf4d3a82b64e3a05e35e",
+    gate3ReportSha256:
+      "ef948bbbdd6168e09f238330f65801a989a4d32bb6958d98f793deff29c9d84e",
+    gate4ReportSha256:
+      "f3af4dbc8ce87af6b3cd2d18005732b6eb2654504cb0372157190a16ff82ed3e",
+    gate4ScopeSha256:
+      "a4731abc488b2a97ed19185a100045d723aa776af0d8621739e97209605604e1",
+    cleanupStatus: "passed",
+    initialFailure: "Basecamp TCP listener inventory is not exact",
+    retirementStatus:
+      "audited-pre-root-write-gate4-listener-boundary-failure",
   }),
 ]);
 
@@ -778,8 +804,10 @@ function validPrePublicWriteAudits(audits) {
 }
 
 function validPreRootWriteGate4Audit(audit) {
+  const cleanupFailed = audit?.cleanupStatus === "failed";
   return exactKeys(audit, [
     "compiledReportSha256",
+    "cleanupStatus",
     "gate3ReportSha256",
     "gate4ReportSha256",
     "gate4ScopeSha256",
@@ -790,7 +818,7 @@ function validPreRootWriteGate4Audit(audit) {
     "snapshotNarHash",
     "snapshotNarSize",
     "snapshotRunnerSha256",
-    "terminalFailure",
+    ...(cleanupFailed ? ["terminalFailure"] : []),
   ])
     && sourceCommitPattern.test(audit.gitCommit)
     && narHashPattern.test(audit.snapshotNarHash)
@@ -802,13 +830,20 @@ function validPreRootWriteGate4Audit(audit) {
     && sha256Pattern.test(audit.gate3ReportSha256)
     && sha256Pattern.test(audit.gate4ReportSha256)
     && sha256Pattern.test(audit.gate4ScopeSha256)
+    && ["failed", "passed"].includes(audit.cleanupStatus)
     && typeof audit.initialFailure === "string"
     && audit.initialFailure.length > 0
     && audit.initialFailure.length <= 1024
-    && typeof audit.terminalFailure === "string"
-    && audit.terminalFailure.length > 0
-    && audit.terminalFailure.length <= 1024
-    && audit.retirementStatus === "audited-pre-root-write-gate4-harness-failure";
+    && (!cleanupFailed
+      || (
+        typeof audit.terminalFailure === "string"
+        && audit.terminalFailure.length > 0
+        && audit.terminalFailure.length <= 1024
+      ))
+    && [
+      "audited-pre-root-write-gate4-harness-failure",
+      "audited-pre-root-write-gate4-listener-boundary-failure",
+    ].includes(audit.retirementStatus);
 }
 
 function validPreRootWriteGate4Audits(audits) {
@@ -3332,6 +3367,16 @@ function validPreRootWriteGate4FailureReport(report, audit) {
   const root = report?.release?.rootAccountBeforeWrites;
   const revalidation = report?.release?.revalidation;
   const scope = report?.release?.gate3Preflight;
+  const cleanupFailed = audit.cleanupStatus === "failed";
+  const expectedCleanup = cleanupFailed
+    ? { status: "failed", failures: [audit.terminalFailure] }
+    : { status: "passed", failures: [] };
+  const expectedFailures = cleanupFailed
+    ? [
+        { phase: "initial-start", message: audit.initialFailure },
+        { phase: "terminal-cleanup", message: audit.terminalFailure },
+      ]
+    : [{ phase: "initial-start", message: audit.initialFailure }];
   return report !== null
     && typeof report === "object"
     && report.schema === "logos.palace.basecamp-gate4-6-report"
@@ -3359,14 +3404,8 @@ function validPreRootWriteGate4FailureReport(report, audit) {
     })
     && exactJson(report.failureEvidence, {})
     && exactJson(report.restart, {})
-    && exactJson(report.cleanup, {
-      status: "failed",
-      failures: [audit.terminalFailure],
-    })
-    && exactJson(report.failures, [
-      { phase: "initial-start", message: audit.initialFailure },
-      { phase: "terminal-cleanup", message: audit.terminalFailure },
-    ])
+    && exactJson(report.cleanup, expectedCleanup)
+    && exactJson(report.failures, expectedFailures)
     && report.release?.programDeployment?.status === "passed"
     && root?.status === "passed"
     && root.state === "uninitialized"
@@ -4389,6 +4428,40 @@ export function createClaimLifecycle({
     return validateRollForwardChain(claim);
   }
 
+  async function retiredRunDirectories(claim) {
+    const directories = [];
+    let current = claim;
+    let depth = 0;
+    while (Object.hasOwn(current, "rollForward")) {
+      if (depth >= 64) {
+        throw new Error("active-run roll-forward chain exceeds depth bound");
+      }
+      const archivePath = join(
+        current.runDirectory,
+        current.rollForward.retiredClaimArchive,
+      );
+      const archive = await parseSecureJson(
+        archivePath,
+        uid,
+        64 * 1024,
+        "retired active-run claim archive",
+      );
+      if (archive.sha256 !== current.rollForward.retiredClaimArchiveSha256) {
+        throw new Error("retired active-run claim archive digest differs");
+      }
+      const predecessor = archive.value?.version === 1
+        ? validateLegacyClaim(archive.value, legacyAudit)
+        : validateV2Claim(
+            archive.value,
+            validateCommonIdentity(commonFromClaim(archive.value)),
+          );
+      directories.push(predecessor.runDirectory);
+      current = predecessor;
+      depth += 1;
+    }
+    return directories;
+  }
+
   return {
     async execute(command) {
       if (command === "acquire-or-roll-forward") {
@@ -4399,6 +4472,12 @@ export function createClaimLifecycle({
       let claim = await exactCurrentClaim();
       if (command === "state") {
         return { claim, output: claim.status };
+      }
+      if (command === "retired-runs") {
+        return {
+          claim,
+          output: JSON.stringify(await retiredRunDirectories(claim)),
+        };
       }
       if (command === "enter-gate3") {
         await assertReleaseLockHeld();

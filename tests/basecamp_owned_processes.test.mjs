@@ -40,8 +40,10 @@ function procStat(pid, parentPid, processGroupId, sessionId, start = 12345) {
   }\n`;
 }
 
-test("matches only exact Basecamp and run-owned user directory", () => {
+test("matches exact Basecamp wrapper, runtime, or loader invocation", () => {
   const basecamp = "/nix/store/example/bin/LogosBasecamp";
+  const runtime = "/nix/store/example/bin/.LogosBasecamp.elf";
+  const loader = "/nix/store/glibc/lib/ld-linux-x86-64.so.2";
   const userDir = "/var/tmp/run/users/a";
   const owned = new Set([userDir]);
   assert.equal(
@@ -54,7 +56,44 @@ test("matches only exact Basecamp and run-owned user directory", () => {
   );
   assert.equal(
     ownedBasecampUserDir(
+      [runtime, "--user-dir", userDir, "-platform", "offscreen"],
+      basecamp,
+      owned,
+    ),
+    userDir,
+  );
+  assert.equal(
+    ownedBasecampUserDir(
+      [loader, runtime, "--user-dir", userDir, "-platform", "offscreen"],
+      basecamp,
+      owned,
+    ),
+    userDir,
+  );
+  assert.equal(
+    ownedBasecampUserDir(
       [basecamp, "--user-dir", "/var/tmp/other/users/a"],
+      basecamp,
+      owned,
+    ),
+    undefined,
+  );
+  assert.equal(
+    ownedBasecampUserDir(
+      [
+        loader,
+        "/nix/store/other/bin/.LogosBasecamp.elf",
+        "--user-dir",
+        userDir,
+      ],
+      basecamp,
+      owned,
+    ),
+    undefined,
+  );
+  assert.equal(
+    ownedBasecampUserDir(
+      ["/nix/store/other/bin/worker", runtime, "--user-dir", userDir],
       basecamp,
       owned,
     ),
@@ -95,6 +134,49 @@ test("discovers exact same-UID Basecamp PID and detached group", async () => {
       [{
         pid: 701,
         processGroupId: 701,
+        startTimeTicks: 12345,
+        userDir: "/var/tmp/run/users/a",
+      }],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rediscovers loader-launched Basecamp from its exact runtime artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "palace-proc-loader-"));
+  try {
+    const processDir = join(root, "702");
+    await mkdir(processDir);
+    await writeFile(
+      join(processDir, "status"),
+      "Name:\tld-linux-x86-64\nUid:\t1000\t1000\t1000\t1000\n",
+    );
+    await writeFile(
+      join(processDir, "cmdline"),
+      "/nix/store/glibc/lib/ld-linux-x86-64.so.2\0"
+      + "/nix/store/example/bin/.LogosBasecamp.elf\0--user-dir\0"
+      + "/var/tmp/run/users/a\0",
+    );
+    await writeFile(
+      join(processDir, "stat"),
+      procStat(702, 1, 702, 702),
+    );
+    await writeFile(
+      join(processDir, "cgroup"),
+      `0::${scopeCgroup}\n`,
+    );
+    assert.deepEqual(
+      await discoverOwnedBasecampProcesses({
+        basecamp: "/nix/store/example/bin/LogosBasecamp",
+        userDirs: new Set(["/var/tmp/run/users/a"]),
+        cgroupPath: scopeCgroup,
+        uid: 1000,
+        procRoot: root,
+      }),
+      [{
+        pid: 702,
+        processGroupId: 702,
         startTimeTicks: 12345,
         userDir: "/var/tmp/run/users/a",
       }],

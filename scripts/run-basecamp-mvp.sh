@@ -1518,6 +1518,37 @@ trap 'handle_runner_signal HUP' HUP
 trap 'handle_runner_signal INT' INT
 trap 'handle_runner_signal TERM' TERM
 
+retired_runs_json=""
+set +e
+retired_runs_json="$(
+  "${death_coupled_node[@]}" "${claim_tool}" retired-runs \
+    "${run_dir}" "${product_snapshot}" "${snapshot_gc_root}" \
+    "${source_commit}" "${snapshot_nar_hash}" "${snapshot_nar_size}" \
+    "${snapshot_runner_sha256}" "${runtime_manifest}" \
+    "${runtime_manifest_sha256}" \
+    "${process_scope_slice}" "${process_scope_prefix}"
+)"
+retired_runs_status=$?
+set -e
+if [ "${retired_runs_status}" -ne 0 ] \
+  || ! "${jq_bin}" -e '
+    type == "array"
+    and all(.[]; type == "string")
+  ' <<<"${retired_runs_json}" >/dev/null; then
+  invalidate_public_evidence
+  printf 'MVP retired-run claim chain could not be verified\n' >&2
+  exit 1
+fi
+mapfile -t retired_runs < <("${jq_bin}" -r '.[]' <<<"${retired_runs_json}")
+for retired_run in "${retired_runs[@]}"; do
+  if [ "$(dirname "${retired_run}")" != "${runs_root}" ] \
+    || [[ ! "$(basename "${retired_run}")" =~ ^run\.[A-Za-z0-9]{8}$ ]]; then
+    invalidate_public_evidence
+    printf 'MVP retired-run claim chain escaped the artifacts root\n' >&2
+    exit 1
+  fi
+done
+
 report_sha256() {
   local output
   output="$("${sha256_bin}" "$1")"
@@ -4837,6 +4868,16 @@ if [ "${resuming}" -eq 0 ]; then
   shopt -u nullglob
   for prior_run in "${prior_runs[@]}"; do
     if [ "${prior_run}" = "${run_dir}" ]; then
+      continue
+    fi
+    skip_prior_run=0
+    for retired_run in "${retired_runs[@]}"; do
+      if [ "${prior_run}" = "${retired_run}" ]; then
+        skip_prior_run=1
+        break
+      fi
+    done
+    if [ "${skip_prior_run}" -eq 1 ]; then
       continue
     fi
     prior_gate3="${prior_run}/gate3"

@@ -97,6 +97,33 @@ test("resume invalidates public evidence after lock attestation", async () => {
   assert.ok(lockAttestation < invalidation);
 });
 
+test("runner skips only the validated retired claim chain before new gates", async () => {
+  const source = await readFile(runnerPath, "utf8");
+  const chainStart = source.indexOf('retired_runs_json=""');
+  const chainEnd = source.indexOf("\nreport_sha256() {", chainStart);
+  assert.notEqual(chainStart, -1);
+  assert.notEqual(chainEnd, -1);
+  const chain = source.slice(chainStart, chainEnd);
+  ordered(chain, [
+    '"${claim_tool}" retired-runs',
+    'type == "array"',
+    'mapfile -t retired_runs',
+    'MVP retired-run claim chain escaped the artifacts root',
+  ]);
+
+  const priorLoopStart = source.indexOf('for prior_run in "${prior_runs[@]}"; do');
+  const priorLoopEnd = source.indexOf('\ngate0_dir="${run_dir}/gate0"', priorLoopStart);
+  assert.notEqual(priorLoopStart, -1);
+  assert.notEqual(priorLoopEnd, -1);
+  const priorLoop = source.slice(priorLoopStart, priorLoopEnd);
+  ordered(priorLoop, [
+    'for retired_run in "${retired_runs[@]}"; do',
+    'if [ "${prior_run}" = "${retired_run}" ]; then',
+    'if [ "${skip_prior_run}" -eq 1 ]; then',
+    'prior_gate3="${prior_run}/gate3"',
+  ]);
+});
+
 test("runner publishes only through completed-claim finalization", async () => {
   const source = await readFile(runnerPath, "utf8");
   assert.equal(
@@ -912,6 +939,52 @@ test("Gate 4 skips foreign process topology before strict inventory parsing", as
   assert.notEqual(foreignUidFilter, -1);
   assert.notEqual(topologyParse, -1);
   assert.ok(foreignUidFilter < topologyParse);
+});
+
+test("Gate 4 probes finalized Core asset-authoring authority with an inert handle", async () => {
+  const [gate4, worker] = await Promise.all([
+    readFile(gate4HarnessPath, "utf8"),
+    readFile(gate3WorkerPath, "utf8"),
+  ]);
+  assert.match(worker, /const assetAuthoringCoreProbeHandle = "0"\.repeat\(64\);/);
+  assert.match(worker, /"assetAuthoringCoreProbe"/);
+  assert.match(
+    worker,
+    /args\.length !== 1 \|\| args\[0\] !== assetAuthoringCoreProbeHandle/,
+  );
+  assert.match(
+    worker,
+    /watchAction\(backend\.publishVerifiedPng\(\$\{JSON\.stringify\(args\[0\]\)\}\), null\)/,
+  );
+
+  const checkpoint = gate4.indexOf('phase = "checkpoint-seven-all-clients";');
+  const storagePassed = gate4.indexOf(
+    'report.storage.initial.status = "passed";',
+  );
+  const probe = gate4.indexOf(
+    "await verifyFinalizedAssetAuthoringCoreAuthority(",
+  );
+  const delivery = gate4.indexOf('phase = "production-delivery";');
+  assert.ok(checkpoint < storagePassed);
+  assert.ok(storagePassed < probe);
+  assert.ok(probe < delivery);
+  const probeStart = gate4.indexOf(
+    "async function verifyFinalizedAssetAuthoringCoreAuthority(",
+  );
+  const probeEnd = gate4.indexOf("\nfunction parseRevisions()", probeStart);
+  assert.notEqual(probeStart, -1);
+  assert.notEqual(probeEnd, -1);
+  const probeBody = gate4.slice(
+    probeStart,
+    probeEnd,
+  );
+  assert.match(probeBody, /workers are unavailable/);
+  assert.match(probeBody, /"rejected=asset-unknown"/);
+  assert.match(
+    probeBody,
+    /"rejected=asset-authoring-root-owner-required"/,
+  );
+  assert.doesNotMatch(probeBody, /report\./);
 });
 
 test("Gate 4 approves and binds the exact LEZ dependency before work", async () => {
