@@ -916,6 +916,22 @@ test("Gate 3 requires receipts only for final room-background owners", async () 
   assert.equal(accepts(supersededReceipt), false);
 });
 
+test("Gate 4 rejects receipts for superseded room-background candidates", async () => {
+  const source = await readFile(gate4HarnessPath, "utf8");
+  const selectionStart = source.indexOf("  const finalRoomCandidates = {};");
+  const selectionEnd = source.indexOf(
+    "\n\n  const assignedFixtures =",
+    selectionStart,
+  );
+  assert.notEqual(selectionStart, -1);
+  assert.notEqual(selectionEnd, -1);
+  const selection = source.slice(selectionStart, selectionEnd);
+  assert.match(
+    selection,
+    /supersededRoomCandidate\s*\?\s*!assignmentMissingOrNull\s*:\s*!assignmentIsValid/,
+  );
+});
+
 test("Gate 4 provides the exact pidfd helper before worker startup", async () => {
   const source = await readFile(gate4RunnerPath, "utf8");
   ordered(source, [

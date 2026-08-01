@@ -1589,8 +1589,9 @@ function validateGate3AssetAuthoring(gate3, catalogById) {
                 + `layer=${actual.target.layer}`,
         );
     if (
-      !(supersededRoomCandidate && assignmentMissingOrNull)
-      && !assignmentIsValid
+      supersededRoomCandidate
+        ? !assignmentMissingOrNull
+        : !assignmentIsValid
     ) {
       throw new Error(
         `Gate 3 asset assignment is invalid: ${actual.assetId}`,
