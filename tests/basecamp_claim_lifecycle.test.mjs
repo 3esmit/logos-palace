@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import {
   auditedPrePublicWriteGate3Failures,
+  auditedPreRootWriteGate4HarnessFailures,
   createClaimLifecycle,
   releaseProgramId,
   releaseRootId,
@@ -616,9 +617,121 @@ function completedGate3StrictEvidenceRejectionReport(predecessor) {
   return report;
 }
 
+function preRootWriteGate4FailureReport(audit) {
+  return {
+    schema: "logos.palace.basecamp-gate4-6-report",
+    version: 2,
+    status: "failed",
+    fullGate4: "failed",
+    fullGate5: "failed",
+    fullGate6: "failed",
+    noPalaceServer: "failed",
+    actions: [],
+    actionJournals: {},
+    checkpoints: {},
+    storage: {},
+    delivery: {},
+    identities: {},
+    moderation: {},
+    gate5: {},
+    gate6: { resumeWithoutCreator: false },
+    screenshots: [],
+    uiEvidence: {
+      pending: [],
+      finalized: [],
+      degraded: [],
+      offline: [],
+    },
+    failureEvidence: {},
+    restart: {},
+    cleanup: {
+      status: "failed",
+      failures: [audit.terminalFailure],
+    },
+    failures: [
+      { phase: "initial-start", message: audit.initialFailure },
+      { phase: "terminal-cleanup", message: audit.terminalFailure },
+    ],
+    release: {
+      programDeployment: { status: "passed" },
+      rootAccountBeforeWrites: { status: "passed", state: "uninitialized" },
+      gate3Preflight: { status: "passed" },
+      revalidation: {
+        status: "passed",
+        gate3CompletedAtUnixMs: 10,
+        gate4CompletedAtUnixMs: 11,
+        gate3AgeAtRevalidationMs: 1,
+        exactDeploymentMatch: true,
+        exactRootAccountMatch: true,
+        rootAdvancedByGate4: false,
+      },
+    },
+  };
+}
+
+function preRootWriteGate4Scope() {
+  return {
+    schema: "logos.palace.basecamp-process-scope",
+    version: 1,
+    status: "cleaned",
+    commandExitStatus: 1,
+    cleanup: {
+      status: "passed",
+      initiallyPopulated: false,
+      residueKilled: false,
+      finalPopulated: false,
+      sliceInitiallyPopulated: false,
+      sliceResidueKilled: false,
+      sliceFinalPopulated: false,
+    },
+  };
+}
+
+async function writeAuditedPreRootWriteGate4Artifacts({
+  predecessorRun,
+  predecessorClaim,
+  preRootWriteGate4Audit,
+}) {
+  const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+  const compiled = failedReport(predecessorClaim.productSnapshot, "gate4");
+  await writeJson(compiledPath, compiled);
+
+  const gate3Directory = join(predecessorRun, "gate3");
+  await mkdir(gate3Directory, { mode: 0o700 });
+  const gate3Path = join(gate3Directory, "gate3-report.json");
+  await writeJson(
+    gate3Path,
+    completedGate3StrictEvidenceRejectionReport(predecessorClaim),
+  );
+
+  const gate4Directory = join(predecessorRun, "gate4");
+  await mkdir(gate4Directory, { mode: 0o700 });
+  const gate4Path = join(gate4Directory, "gate4-report.json");
+  await writeJson(
+    gate4Path,
+    preRootWriteGate4FailureReport(preRootWriteGate4Audit),
+  );
+  const scopePath = join(gate4Directory, "process-scope.json");
+  await writeJson(scopePath, preRootWriteGate4Scope());
+
+  preRootWriteGate4Audit.compiledReportSha256 = sha256(
+    await readFile(compiledPath),
+  );
+  preRootWriteGate4Audit.gate3ReportSha256 = sha256(
+    await readFile(gate3Path),
+  );
+  preRootWriteGate4Audit.gate4ReportSha256 = sha256(
+    await readFile(gate4Path),
+  );
+  preRootWriteGate4Audit.gate4ScopeSha256 = sha256(
+    await readFile(scopePath),
+  );
+}
+
 async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
+  additionalPreRootWriteGate4Audits = [],
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "palace-claim-lifecycle-"));
   const claimDirectory = join(root, "claims");
@@ -752,6 +865,20 @@ async function fixture({
     gate3Failure: "production LEZ a: rejected=lez-network-fingerprint",
     retirementStatus: "audited-fingerprint-rejection",
   };
+  const preRootWriteGate4Audit = {
+    gitCommit: predecessorCommon.gitCommit,
+    snapshotNarHash: predecessorCommon.snapshotNarHash,
+    snapshotNarSize: predecessorCommon.snapshotNarSize,
+    snapshotRunnerSha256: predecessorCommon.snapshotRunnerSha256,
+    runtimeManifestSha256: predecessorCommon.runtimeManifestSha256,
+    compiledReportSha256: sha256(await readFile(compiledPath)),
+    gate3ReportSha256: "f".repeat(64),
+    gate4ReportSha256: "1".repeat(64),
+    gate4ScopeSha256: "2".repeat(64),
+    initialFailure: "fixture startup guard rejected unrelated process",
+    terminalFailure: "fixture cleanup rejected unrelated process",
+    retirementStatus: "audited-pre-root-write-gate4-harness-failure",
+  };
   let timestamp = 1_700_000_001_000;
   let lockChecks = 0;
   let processScans = 0;
@@ -788,6 +915,10 @@ async function fixture({
       ...additionalPrePublicWriteAudits,
       prePublicWriteAudit,
     ],
+    preRootWriteGate4Audits: [
+      ...additionalPreRootWriteGate4Audits,
+      preRootWriteGate4Audit,
+    ],
   });
   return {
     root,
@@ -797,6 +928,7 @@ async function fixture({
     successorRun,
     predecessorClaim,
     prePublicWriteAudit,
+    preRootWriteGate4Audit,
     successorCommon,
     lifecycle,
     counters: {
@@ -1430,6 +1562,132 @@ test("rolls forward audited completed Gate 3 strict-evidence rejection before a 
   });
 });
 
+test("rolls forward the exact audited Gate 4 pre-root-write harness failure", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    preRootWriteGate4Audit,
+    lifecycle,
+  }) => {
+    await writeAuditedPreRootWriteGate4Artifacts({
+      predecessorRun,
+      predecessorClaim,
+      preRootWriteGate4Audit,
+    });
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-root-write-gate4-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(
+      certificate.status,
+      "audited-pre-root-write-gate4-harness-failure",
+    );
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.version, 3);
+    assert.equal(evidence.status, "retired-pre-root-write-gate4");
+    assert.equal(evidence.proof.gate3Artifacts, "passed");
+    assert.equal(
+      evidence.proof.gate4Artifacts,
+      "audited-pre-root-write-gate4-harness-failure",
+    );
+    assert.equal(evidence.proof.rootAccount, "uninitialized");
+    assert.equal(
+      (await lifecycle.execute("state")).output,
+      "active-pre-gate3",
+    );
+  });
+});
+
+test("rejects audited Gate 4 pre-root-write evidence after any action", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    preRootWriteGate4Audit,
+    lifecycle,
+  }) => {
+    await writeAuditedPreRootWriteGate4Artifacts({
+      predecessorRun,
+      predecessorClaim,
+      preRootWriteGate4Audit,
+    });
+    const gate4Path = join(predecessorRun, "gate4", "gate4-report.json");
+    const gate4Report = JSON.parse(await readFile(gate4Path, "utf8"));
+    gate4Report.actions = [{ actionId: "forbidden-root-write" }];
+    await writeJson(gate4Path, gate4Report);
+    preRootWriteGate4Audit.gate4ReportSha256 = sha256(
+      await readFile(gate4Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    await assert.rejects(
+      lifecycle.execute("acquire-or-roll-forward"),
+      /pre-root-write report is invalid/,
+    );
+  });
+});
+
+test("keeps Gate 3 pre-public-write recovery when Gate 4 evidence is absent", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    await writeJson(
+      gate3Path,
+      auditedPrePublicWriteGate3Report(predecessorClaim),
+    );
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.version, 2);
+    assert.equal(evidence.status, "retired-pre-public-write");
+  });
+});
+
 test("pins the exact audited direct-degradation Gate 3 rejection", () => {
   assert.deepEqual(
     auditedPrePublicWriteGate3Failures.find((audit) =>
@@ -1452,6 +1710,36 @@ test("pins the exact audited direct-degradation Gate 3 rejection", () => {
       retirementStatus: "audited-strict-evidence-rejection",
       reportProfile:
         "completed-gate3-strict-evidence-rejection-before-palace-write",
+    },
+  );
+});
+
+test("pins the exact audited Gate 4 pre-root-write harness failure", () => {
+  assert.deepEqual(
+    auditedPreRootWriteGate4HarnessFailures.find((audit) =>
+      audit.gitCommit === "50d8e53e4c61ac5c2a07d5eb9e7bf9efea66199f"
+    ),
+    {
+      gitCommit: "50d8e53e4c61ac5c2a07d5eb9e7bf9efea66199f",
+      snapshotNarHash:
+        "sha256-+sMgN0mEb7ZqGOZDUe/7klWUnvD+Hzl0A+htSS/gcpk=",
+      snapshotNarSize: 7407168,
+      snapshotRunnerSha256:
+        "135facfee7b336eee5960a6a59d231558e08cb9634e82541bc0b8db334a6558e",
+      runtimeManifestSha256:
+        "ed6a6f1c61e253f8137001035caa71c7a2df749ce48a41f60f037aa5da1a32d3",
+      compiledReportSha256:
+        "87917ae4d70fba9e7852bfd85d212ffc4b9c1846c41a2bb336f55b96e8c9f691",
+      gate3ReportSha256:
+        "42f6e5d649eb59eb5f6c6aac837d9883017dab93bbca2a6b79dae37e42e8973f",
+      gate4ReportSha256:
+        "4237d6f870c8c523124af9e1ac8662521fb39413957eb96b8e3ab137ffab64ef",
+      gate4ScopeSha256:
+        "2e054c6085f0f80bc7f0a0eba4864a91343952e99dd2085b5fe352c782512c61",
+      initialFailure: "process 2 has invalid group/session",
+      terminalFailure:
+        "a-initial cleanup rejected: process 2 has invalid topology during cleanup",
+      retirementStatus: "audited-pre-root-write-gate4-harness-failure",
     },
   );
 });
