@@ -186,17 +186,46 @@ test("backend stops poll timers on teardown", () => {
 });
 
 test("LEZ moderation controls reflect Core finalized capability only", () => {
+  const authorityOffset = coreImpl.indexOf(
+    "PalaceCoreImpl::finalizedHumanModerationAuthority(",
+  );
   const capabilityOffset = coreImpl.indexOf(
     "std::string PalaceCoreImpl::moderationCapabilityStatus() const",
   );
   const submitOffset = coreImpl.indexOf(
     "std::string PalaceCoreImpl::submitHumanModeration(",
   );
-  assert.ok(capabilityOffset >= 0);
+  assert.ok(authorityOffset >= 0 && authorityOffset < capabilityOffset);
   assert.ok(submitOffset >= 0);
 
+  const authoritySource = coreImpl.slice(authorityOffset, capabilityOffset);
   const capabilitySource = coreImpl.slice(capabilityOffset, submitOffset);
   const submitSource = coreImpl.slice(submitOffset);
+  const authorityAcceptedOffset = authoritySource.indexOf(
+    "authority.accepted = true",
+  );
+  assert.ok(authorityAcceptedOffset >= 0);
+  for (const reason of [
+    "authority-account-invalid",
+    "root-invalid",
+    "root-checkpoint-mismatch",
+  ]) {
+    const rejectionOffset = authoritySource.indexOf(
+      `authority.reason = "${reason}"`,
+    );
+    const returnOffset = authoritySource.indexOf(
+      "return authority;",
+      rejectionOffset,
+    );
+    assert.ok(
+      rejectionOffset >= 0 && rejectionOffset < authorityAcceptedOffset,
+      `${reason} must reject before authority is accepted`,
+    );
+    assert.ok(
+      returnOffset > rejectionOffset && returnOffset < authorityAcceptedOffset,
+      `${reason} must return an unavailable authority`,
+    );
+  }
   assert.match(capabilitySource, /currentHumanModerationContext\(\)/);
   assert.match(
     capabilitySource,
@@ -209,6 +238,10 @@ test("LEZ moderation controls reflect Core finalized capability only", () => {
   assert.match(
     capabilitySource,
     /if \(!user\.accepted \|\| !prop\.accepted\)[\s\S]{0,280}authority=unavailable;can_ban_user=0;can_ban_prop=0/,
+  );
+  assert.ok(
+    capabilitySource.indexOf('return "authority=finalized')
+      > capabilitySource.indexOf("if (!user.accepted || !prop.accepted)"),
   );
   assert.match(submitSource, /currentHumanModerationContext\(\)/);
   assert.match(
