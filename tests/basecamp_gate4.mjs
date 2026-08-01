@@ -3683,13 +3683,13 @@ function parseProjection(encoded) {
 async function deliverySnapshot(worker) {
   const properties = await worker.call("properties");
   return {
-    status: parseDeliveryStatus(properties.gate2Status),
-    projection: parseProjection(properties.gate2Projection),
+    status: parseDeliveryStatus(properties.deliveryStatus),
+    projection: parseProjection(properties.participantProjection),
     nodeEvidence: parseJsonObject(
-      properties.gate2NodeEvidence,
+      properties.deliveryNodeEvidence,
       "Delivery node evidence",
     ),
-    receipt: String(properties.gate2Receipt ?? ""),
+    receipt: String(properties.deliveryReceipt ?? ""),
   };
 }
 
@@ -3801,7 +3801,7 @@ async function startDeliveryMesh(activeLabels, ports, entryLabel) {
   );
   const entryStart = await invoke(
     entryWorker,
-    "gate2Start",
+    "startDelivery",
     [entryConfig],
     { prefix: "ok;state=" },
     120_000,
@@ -3829,7 +3829,7 @@ async function startDeliveryMesh(activeLabels, ports, entryLabel) {
     peerLabels.map((label) =>
       invoke(
         workers.get(label),
-        "gate2Start",
+        "startDelivery",
         [deliveryConfig(label, ports[label], [entryNode], entryLabel)],
         { prefix: "ok;state=" },
         120_000,
@@ -4030,7 +4030,7 @@ async function verifyInitialDeliveryLifecycle(propId) {
     labels.map((label) =>
       invoke(
         workers.get(label),
-        "gate2RefreshPresence",
+        "refreshPresence",
         [],
         { prefix: "ok;request=" },
         60_000,
@@ -4053,14 +4053,14 @@ async function verifyInitialDeliveryLifecycle(propId) {
   const carol = report.identities.c.accountId;
   const move = await invoke(
     workers.get("a"),
-    "gate2Move",
+    "moveAvatar",
     [2400, 3600],
     { prefix: "ok;request=" },
     60_000,
   );
   const speech = await invoke(
     workers.get("b"),
-    "gate2Say",
+    "sendSpeech",
     ["Gate 4 production mesh"],
     { prefix: "ok;request=" },
     60_000,
@@ -4069,7 +4069,7 @@ async function verifyInitialDeliveryLifecycle(propId) {
   const wear = propRequested
     ? await invoke(
         workers.get("c"),
-        "gate2Wear",
+        "wearProp",
         [propId],
         { prefix: "ok;request=" },
         60_000,
@@ -4112,7 +4112,7 @@ async function removeApprovedPropAfterEvidence(propId) {
   const carol = report.identities.c.accountId;
   const remove = await invoke(
     workers.get("c"),
-    "gate2Remove",
+    "removeProp",
     [propId],
     { prefix: "ok;request=" },
     60_000,
@@ -7061,7 +7061,7 @@ try {
       };
       const staleSpeech = await invoke(
         workers.get("c"),
-        "gate2Say",
+        "sendSpeech",
         ["stale Carol signed speech"],
         { prefix: "ok;request=" },
         60_000,
@@ -7115,7 +7115,7 @@ try {
     const baseline = await deliverySnapshot(workers.get("b"));
     const staleWear = await invoke(
       workers.get("a"),
-      "gate2Wear",
+      "wearProp",
       [catalog.propId],
       { prefix: "ok;request=" },
       60_000,
@@ -7682,7 +7682,7 @@ try {
     if (label === "b") {
       const offlineProperties = await worker.call("properties");
       const deliveryState = statusFields(
-        String(offlineProperties.gate2Status),
+        String(offlineProperties.deliveryStatus),
       ).state;
       const lezReady = statusFields(
         String(offlineProperties.gate4LezState),
@@ -7959,7 +7959,7 @@ try {
   );
   const bobSpeech = await invoke(
     workers.get("b"),
-    "gate2Say",
+    "sendSpeech",
     ["Bob recovered without creator"],
     { prefix: "ok;request=" },
     60_000,
@@ -7975,7 +7975,7 @@ try {
   );
   const carolBanned = await invoke(
     workers.get("c"),
-    "gate2Say",
+    "sendSpeech",
     ["Carol remains banned"],
     {
       exact: "rejected=delivery-publish;preflight=sender-banned",
@@ -7985,7 +7985,7 @@ try {
   const propBanned = propStoryRequested
     ? await invoke(
         workers.get("b"),
-        "gate2Wear",
+        "wearProp",
         [catalog.propId],
         {
           exact:

@@ -58,12 +58,8 @@ LGX packages:
 | `storage_module` | content-addressed object transport | pinned flake input |
 | `lez_core` | wallet and LEZ runtime bridge | pinned flake input |
 
-`palace_delivery_acceptance` is a test-only adversarial fixture under
-`tests/fixtures`. It is not part of the six-package MVP installation. Gate 2
-and the internal, non-production Gate 3 fixture mode use a separately named,
-fixture-enabled Core build. The compiled full MVP runs Gate 3 with production
-identities. The production
-`palace_core` artifact excludes acceptance identities and profile hooks.
+`palace_core` has one production build path. Gate 3 always installs that
+package and uses production identities.
 
 ## Architecture
 
@@ -131,9 +127,7 @@ Build C++ contract checks:
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
-  .#checks.x86_64-linux.palace-core-contracts \
-  .#checks.x86_64-linux.palace-core-production-fixture-audit \
-  .#checks.x86_64-linux.palace-core-acceptance-fixture-audit
+  .#checks.x86_64-linux.palace-core-contracts
 ```
 
 Run the non-live release-lock, process-scope, claim, process-ownership,

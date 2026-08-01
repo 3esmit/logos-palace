@@ -227,7 +227,7 @@ async function waitForView() {
     async () => {
       const result = await app.findByProperty(
         "objectName",
-        "palaceGate2Root",
+        "palaceRoot",
       );
       if (result.error || !result.matches || result.matches.length !== 1) {
         throw new Error(
@@ -1375,12 +1375,12 @@ const assetAuthoringCoreProbeHandle = "0".repeat(64);
 
 const allowedFunctions = new Set([
   "gate1EnterRoom",
-  "gate2Start",
-  "gate2Say",
-  "gate2Move",
-  "gate2Wear",
-  "gate2Remove",
-  "gate2RefreshPresence",
+  "startDelivery",
+  "sendSpeech",
+  "moveAvatar",
+  "wearProp",
+  "removeProp",
+  "refreshPresence",
   "gate3StartStorage",
   "gate3FetchPng",
   "gate3AssetStatus",
@@ -1474,6 +1474,15 @@ async function invoke(params) {
   }
   const receiptProperty = name === "acceptanceApplicationRoundTrip"
     ? "acceptanceRoundTripResponse"
+    : [
+      "startDelivery",
+      "sendSpeech",
+      "moveAvatar",
+      "wearProp",
+      "removeProp",
+      "refreshPresence",
+    ].includes(name)
+      ? "deliveryReceipt"
     : name.startsWith("gate5")
       ? "gate5Receipt"
       : "gate3Receipt";

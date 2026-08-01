@@ -182,42 +182,33 @@ if [ "${PALACE_MVP_LOCK_FD+x}" = "x" ]; then
   exit 1
 fi
 
-if [ "${PALACE_GATE3_PRODUCTION_IDENTITIES:-0}" = "1" ]; then
-  if [ -n "${PALACE_GATE3_STORAGE_CONFIG_BASE+x}" ]; then
-    printf 'Production Gate 3 forbids Storage config override\n' >&2
-    exit 1
-  fi
-  run_dir="$("${acceptance_tools}/bin/realpath" -e -- \
-    "$(dirname "${artifacts_dir}")")"
-  verified_claim="$(
-    "${acceptance_tools}/bin/node" \
-      "${product_snapshot}/tests/basecamp_active_run_claim.mjs" verify \
-      "${run_dir}" \
-      "${product_snapshot}" \
-      "${PALACE_MVP_SNAPSHOT_GC_ROOT:-}" \
-      "${PALACE_SOURCE_COMMIT:-}" \
-      "${PALACE_PRODUCT_SNAPSHOT_NAR_HASH:-}" \
-      "${PALACE_PRODUCT_SNAPSHOT_NAR_SIZE:-}" \
-      "${PALACE_MVP_RUNNER_SHA256:-}" \
-      "${PALACE_RUNTIME_OUTPUT_MANIFEST:-}" \
-      "${PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256:-}" \
-      "${PALACE_MVP_PROCESS_SCOPE_SLICE:-}" \
-      "${PALACE_MVP_PROCESS_SCOPE_PREFIX:-}"
-  )"
-  if [ "${verified_claim}" != "${PALACE_MVP_CLAIM_PATH:-}" ]; then
-    printf 'Production Gate 3 active-run claim differs\n' >&2
-    exit 1
-  fi
+if [ -n "${PALACE_GATE3_STORAGE_CONFIG_BASE+x}" ]; then
+  printf 'Gate 3 forbids Storage config override\n' >&2
+  exit 1
 fi
-
-if [ "${PALACE_GATE3_PRODUCTION_IDENTITIES:-0}" = "1" ]; then
-  palace_core_fixture_audit="palace-core-production-fixture-audit"
-else
-  palace_core_fixture_audit="palace-core-acceptance-fixture-audit"
+run_dir="$("${acceptance_tools}/bin/realpath" -e -- \
+  "$(dirname "${artifacts_dir}")")"
+verified_claim="$(
+  "${acceptance_tools}/bin/node" \
+    "${product_snapshot}/tests/basecamp_active_run_claim.mjs" verify \
+    "${run_dir}" \
+    "${product_snapshot}" \
+    "${PALACE_MVP_SNAPSHOT_GC_ROOT:-}" \
+    "${PALACE_SOURCE_COMMIT:-}" \
+    "${PALACE_PRODUCT_SNAPSHOT_NAR_HASH:-}" \
+    "${PALACE_PRODUCT_SNAPSHOT_NAR_SIZE:-}" \
+    "${PALACE_MVP_RUNNER_SHA256:-}" \
+    "${PALACE_RUNTIME_OUTPUT_MANIFEST:-}" \
+    "${PALACE_RUNTIME_OUTPUT_MANIFEST_SHA256:-}" \
+    "${PALACE_MVP_PROCESS_SCOPE_SLICE:-}" \
+    "${PALACE_MVP_PROCESS_SCOPE_PREFIX:-}"
+)"
+if [ "${verified_claim}" != "${PALACE_MVP_CLAIM_PATH:-}" ]; then
+  printf 'Gate 3 active-run claim differs\n' >&2
+  exit 1
 fi
 nix build --no-link \
-  "${product_ref}#checks.x86_64-linux.palace-core-contracts" \
-  "${product_ref}#checks.x86_64-linux.${palace_core_fixture_audit}"
+  "${product_ref}#checks.x86_64-linux.palace-core-contracts"
 
 basecamp_owner="$(
   "${acceptance_tools}/bin/jq" -r '.nodes.basecamp.locked.owner' "${lock_file}"
@@ -231,14 +222,9 @@ basecamp_rev="$(
 basecamp_ref="github:${basecamp_owner}/${basecamp_repo}/${basecamp_rev}"
 
 mapfile -t product_lgx_outputs < <(
-  if [ "${PALACE_GATE3_PRODUCTION_IDENTITIES:-0}" = "1" ]; then
-    palace_core_output="${product_ref}#palace-core-lgx-portable"
-  else
-    palace_core_output="${product_ref}#palace-core-acceptance-lgx-portable"
-  fi
   nix build --no-link --print-out-paths \
     "${product_ref}#palace-vm-lgx-portable" \
-    "${palace_core_output}" \
+    "${product_ref}#palace-core-lgx-portable" \
     "${product_ref}#logos-palace-ui-lgx-portable" \
     "${product_ref}#delivery-module-lgx-portable" \
     "${product_ref}#storage-module-lgx-portable" \

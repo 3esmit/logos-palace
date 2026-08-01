@@ -139,7 +139,7 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
   );
   assert.match(
     mainQml,
-    /var coordinate\s*=\s*root\.canvasPixelsToProtocol\(\s*mouse\.x,\s*mouse\.y\s*\)[\s\S]{0,120}root\.gate2Move\(coordinate\.x,\s*coordinate\.y\)/,
+    /var coordinate\s*=\s*root\.canvasPixelsToProtocol\(\s*mouse\.x,\s*mouse\.y\s*\)[\s\S]{0,120}root\.moveAvatar\(coordinate\.x,\s*coordinate\.y\)/,
   );
 
   const moveSurfaceOffset = mainQml.indexOf('objectName: "palaceRoomMoveSurface"');

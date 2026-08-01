@@ -19,9 +19,6 @@
 
 #include "palace_action_journal.h"
 #include "palace_callback_lifetime.h"
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-#include "palace_delivery_acceptance_fixture.h"
-#endif
 #include "palace_delivery_bridge.h"
 #include "palace_delivery_identity_store.h"
 #include "palace_delivery_session.h"
@@ -826,9 +823,6 @@ private:
     palace::AuthorityProjection m_deliveryAuthority;
     std::unique_ptr<palace::PalaceDeliverySession> m_deliverySession;
     std::unique_ptr<palace::DeliverySessionStore> m_deliverySessionStore;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    palace::DeliveryAcceptanceIdentity m_deliveryAcceptanceIdentity;
-#endif
     palace::PalaceDeliveryIdentity m_deliveryIdentity;
     std::unique_ptr<palace::PalaceDeliveryIdentityRegistration>
         m_deliveryIdentityRegistration;

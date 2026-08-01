@@ -268,7 +268,7 @@ async function objectProperties(app, objectName) {
 async function palaceRootObjectId(app) {
   const result = await app.findByProperty(
     "objectName",
-    "palaceGate2Root",
+    "palaceRoot",
   );
   if (result.error || !result.matches || result.matches.length !== 1) {
     throw new Error(

@@ -86,8 +86,6 @@ await mkdir(artifactsDir, { recursive: true });
 
 const labels = ["a", "b", "c"];
 const displayNames = { a: "Alice", b: "Bob", c: "Carol" };
-const productionIdentityMode =
-  process.env.PALACE_GATE3_PRODUCTION_IDENTITIES === "1";
 const assetInputs = await loadGate3AssetInputs({
   manifestPath: process.env.PALACE_E2E_ASSET_MANIFEST,
   inputRoot: process.env.PALACE_E2E_ASSET_INPUT_ROOT,
@@ -124,11 +122,6 @@ function graphObjectContract(propId) {
 function graphObjectOrder(propId) {
   return graphObjectContract(propId).map(([objectId]) => objectId);
 }
-const holderProfiles = {
-  a: "alice",
-  b: "bob",
-  c: "carol",
-};
 
 const sleep = (milliseconds) =>
   new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
@@ -298,40 +291,20 @@ async function ephemeralUdpPorts(count) {
 }
 
 function parseStorageBaseConfig() {
-  const raw = process.env.PALACE_GATE3_STORAGE_CONFIG_BASE;
-  if (productionIdentityMode && raw !== undefined) {
+  if (process.env.PALACE_GATE3_STORAGE_CONFIG_BASE !== undefined) {
     throw new Error(
-      "production Gate 3 forbids PALACE_GATE3_STORAGE_CONFIG_BASE",
+      "Gate 3 forbids PALACE_GATE3_STORAGE_CONFIG_BASE",
     );
   }
-  if (!raw) {
-    // Co-located production multi-node: bind and announce loopback only so
-    // content streams never depend on LAN/public multiaddrs. Creator uses
-    // no-bootstrap-node; peers inject bootstrap-node=[creator SPR] after
-    // publication (private mesh).
-    return {
-      "log-level": "INFO",
-      "listen-ip": "127.0.0.1",
-      "nat": "none",
-    };
-  }
-  if (Buffer.byteLength(raw, "utf8") > 64 * 1024) {
-    throw new Error("PALACE_GATE3_STORAGE_CONFIG_BASE exceeds 64 KiB");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("PALACE_GATE3_STORAGE_CONFIG_BASE is not valid JSON");
-  }
-  if (
-    !parsed ||
-    Array.isArray(parsed) ||
-    typeof parsed !== "object"
-  ) {
-    throw new Error("PALACE_GATE3_STORAGE_CONFIG_BASE must be an object");
-  }
-  return parsed;
+  // Co-located production multi-node: bind and announce loopback only so
+  // content streams never depend on LAN/public multiaddrs. Creator uses
+  // no-bootstrap-node; peers inject bootstrap-node=[creator SPR] after
+  // publication (private mesh).
+  return {
+    "log-level": "INFO",
+    "listen-ip": "127.0.0.1",
+    "nat": "none",
+  };
 }
 
 function exactProductionStoragePorts(config) {
@@ -654,21 +627,16 @@ function storageConfig(base, tcpPort, udpPort, label) {
   };
   delete config["data-dir"];
   delete config["log-file"];
-  if (!productionIdentityMode) {
-    config.palaceAcceptanceHolderProfile = holderProfiles[label];
+  // Production multi-node private mesh: A is the bootstrap entry; B/C
+  // receive bootstrap-node after A is running (see storage start sequence).
+  delete config.network;
+  delete config["bootstrap-node"];
+  if (label === "a") {
+    config["no-bootstrap-node"] = true;
   } else {
-    delete config.palaceAcceptanceHolderProfile;
-    // Production multi-node private mesh: A is the bootstrap entry; B/C
-    // receive bootstrap-node after A is running (see storage start sequence).
-    delete config.network;
-    delete config["bootstrap-node"];
-    if (label === "a") {
-      config["no-bootstrap-node"] = true;
-    } else {
-      delete config["no-bootstrap-node"];
-      // Placeholder until creator SPR is known; start path injects bootstrap.
-      config["bootstrap-node"] = ["spr:pending-creator-bootstrap"];
-    }
+    delete config["no-bootstrap-node"];
+    // Placeholder until creator SPR is known; start path injects bootstrap.
+    config["bootstrap-node"] = ["spr:pending-creator-bootstrap"];
   }
   return JSON.stringify(config);
 }
@@ -2465,7 +2433,7 @@ if (
     || previousReport.basecampBinarySha256 !== currentBasecampDigest
     || JSON.stringify(canonicalHashes(previousReport.packageHashes))
       !== JSON.stringify(canonicalHashes(currentPackageHashes))
-    || previousReport.productionIdentityMode !== productionIdentityMode
+    || previousReport.productionIdentityMode !== true
     || (
       previousReport.assetAuthoring?.inputManifest
       && JSON.stringify(previousReport.assetAuthoring.inputManifest)
@@ -2500,7 +2468,7 @@ const report = {
   packageHashes: currentPackageHashes,
   basecampBinarySha256: currentBasecampDigest,
   installedPackages: { ...(previousReport?.installedPackages ?? {}) },
-  productionIdentityMode,
+  productionIdentityMode: true,
   releasePreflight: previousReport?.releasePreflight,
   identities: { ...(previousReport?.identities ?? {}) },
   storageConfigs: { ...(previousReport?.storageConfigs ?? {}) },
@@ -2574,18 +2542,16 @@ process.on("SIGINT", () => requestTermination("SIGINT"));
 process.on("SIGTERM", () => requestTermination("SIGTERM"));
 
 try {
-  if (productionIdentityMode) {
-    report.releasePreflight = await runPalaceReleasePreflight();
-    if (
-      report.releasePreflight.rootAccountBeforeWrites.state
-      !== "uninitialized"
-    ) {
-      throw new Error(
-        "Gate 3 production writes require an uninitialized Palace root",
-      );
-    }
-    await checkpointReport();
+  report.releasePreflight = await runPalaceReleasePreflight();
+  if (
+    report.releasePreflight.rootAccountBeforeWrites.state
+    !== "uninitialized"
+  ) {
+    throw new Error(
+      "Gate 3 production writes require an uninitialized Palace root",
+    );
   }
+  await checkpointReport();
   let configs;
   const priorConfigs = previousReport?.storageConfigs;
   const storageTcpPortSet = new Set();
@@ -2603,20 +2569,7 @@ try {
           throw new Error(`prior Storage config ${label} is invalid`);
         }
         if (
-          (
-            productionIdentityMode
-              ? !exactProductionStorageConfig(parsed)
-              : (
-                  !Number.isInteger(parsed?.["listen-port"])
-                  || parsed["listen-port"] < 1024
-                  || parsed["listen-port"] > 65535
-                  || !Number.isInteger(parsed?.["disc-port"])
-                  || parsed["disc-port"] < 1024
-                  || parsed["disc-port"] > 65535
-                  || Object.hasOwn(parsed, "data-dir")
-                  || Object.hasOwn(parsed, "log-file")
-                )
-          )
+          !exactProductionStorageConfig(parsed)
           || storageTcpPortSet.has(parsed["listen-port"])
           || storageUdpPortSet.has(parsed["disc-port"])
         ) {
@@ -2651,48 +2604,42 @@ try {
   report.storageConfigs = configs;
   await checkpointReport();
 
-  const initialLabels = productionIdentityMode ? labels : ["a", "b"];
-  for (const label of initialLabels) {
+  for (const label of labels) {
     const index = labels.indexOf(label);
     const worker = new WorkerClient(label, inspectorPorts[index]);
     workers.set(label, worker);
     report.startup[label] = await worker.init();
-    if (productionIdentityMode) {
-      report.startup[label].lez =
-        await startProductionLez(worker);
-      await checkpointReport();
-      const identity = await ensureProductionIdentity(worker);
-      const priorIdentity = previousReport?.identities?.[label];
-      if (
-        priorIdentity
-        && (
-          priorIdentity.accountId !== identity.accountId
-          || priorIdentity.deliveryKey !== identity.deliveryKey
-          || priorIdentity.display !== identity.display
-          || priorIdentity.registrationTransaction
-            !== identity.registrationTransaction
-        )
-      ) {
-        throw new Error(
-          `production identity ${label} changed during resume`,
-        );
-      }
-      report.identities[label] = identity;
-      await checkpointReport();
+    report.startup[label].lez = await startProductionLez(worker);
+    await checkpointReport();
+    const identity = await ensureProductionIdentity(worker);
+    const priorIdentity = previousReport?.identities?.[label];
+    if (
+      priorIdentity
+      && (
+        priorIdentity.accountId !== identity.accountId
+        || priorIdentity.deliveryKey !== identity.deliveryKey
+        || priorIdentity.display !== identity.display
+        || priorIdentity.registrationTransaction
+          !== identity.registrationTransaction
+      )
+    ) {
+      throw new Error(
+        `production identity ${label} changed during resume`,
+      );
     }
+    report.identities[label] = identity;
+    await checkpointReport();
   }
-  if (productionIdentityMode) {
-    for (const field of [
-      "accountId",
-      "deliveryKey",
-      "registrationTransaction",
-    ]) {
-      if (
-        new Set(labels.map((label) => report.identities[label]?.[field])).size
-        !== labels.length
-      ) {
-        throw new Error(`production identities reuse ${field}`);
-      }
+  for (const field of [
+    "accountId",
+    "deliveryKey",
+    "registrationTransaction",
+  ]) {
+    if (
+      new Set(labels.map((label) => report.identities[label]?.[field])).size
+      !== labels.length
+    ) {
+      throw new Error(`production identities reuse ${field}`);
     }
   }
   // Start creator Storage first. Peer B/C join after publication so provider
@@ -2705,21 +2652,19 @@ try {
   report.storagePeerEndpoints = {
     ...(previousReport?.storagePeerEndpoints ?? {}),
   };
-  if (productionIdentityMode) {
-    const creatorEndpoint = await readStoragePeerEndpoint(workers.get("a"));
-    report.storagePeerEndpoints.a = {
-      peerId: creatorEndpoint.peerId,
-      spr: creatorEndpoint.spr,
-      addrs: creatorEndpoint.addrs,
-      announceAddresses: creatorEndpoint.announceAddresses,
-      tablePeers: creatorEndpoint.tablePeers,
-    };
-    // Creator was already started as the private-mesh entry; do not mutate it.
-    if (!exactProductionStorageConfig(JSON.parse(configs.a))) {
-      throw new Error("storage config a is not a private-mesh entry");
-    }
-    await checkpointReport();
+  const creatorEndpoint = await readStoragePeerEndpoint(workers.get("a"));
+  report.storagePeerEndpoints.a = {
+    peerId: creatorEndpoint.peerId,
+    spr: creatorEndpoint.spr,
+    addrs: creatorEndpoint.addrs,
+    announceAddresses: creatorEndpoint.announceAddresses,
+    tablePeers: creatorEndpoint.tablePeers,
+  };
+  // Creator was already started as the private-mesh entry; do not mutate it.
+  if (!exactProductionStorageConfig(JSON.parse(configs.a))) {
+    throw new Error("storage config a is not a private-mesh entry");
   }
+  await checkpointReport();
 
   const creator = workers.get("a");
   const provider = workers.get("b");
@@ -2861,79 +2806,65 @@ try {
   await checkpointReport();
   // After creator publication, bring provider B onto the private mesh so it
   // bootstraps against a node that already holds provider records.
-  if (productionIdentityMode) {
-    const creatorEndpoint = await readStoragePeerEndpoint(creator);
-    report.storagePeerEndpoints.a = {
-      peerId: creatorEndpoint.peerId,
-      spr: creatorEndpoint.spr,
-      addrs: creatorEndpoint.addrs,
-      announceAddresses: creatorEndpoint.announceAddresses,
-      tablePeers: creatorEndpoint.tablePeers,
-    };
-    for (const label of ["b", "c"]) {
-      const parsed = JSON.parse(configs[label]);
-      delete parsed.network;
-      delete parsed["no-bootstrap-node"];
-      parsed["listen-ip"] = "127.0.0.1";
-      parsed.nat = "none";
-      parsed["bootstrap-node"] = [creatorEndpoint.spr];
-      if (!exactProductionStorageConfig(parsed)) {
-        throw new Error(`storage config ${label} unsafe after bootstrap inject`);
-      }
-      configs[label] = JSON.stringify(parsed);
+  const publishedCreatorEndpoint = await readStoragePeerEndpoint(creator);
+  report.storagePeerEndpoints.a = {
+    peerId: publishedCreatorEndpoint.peerId,
+    spr: publishedCreatorEndpoint.spr,
+    addrs: publishedCreatorEndpoint.addrs,
+    announceAddresses: publishedCreatorEndpoint.announceAddresses,
+    tablePeers: publishedCreatorEndpoint.tablePeers,
+  };
+  for (const label of ["b", "c"]) {
+    const parsed = JSON.parse(configs[label]);
+    delete parsed.network;
+    delete parsed["no-bootstrap-node"];
+    parsed["listen-ip"] = "127.0.0.1";
+    parsed.nat = "none";
+    parsed["bootstrap-node"] = [publishedCreatorEndpoint.spr];
+    if (!exactProductionStorageConfig(parsed)) {
+      throw new Error(`storage config ${label} unsafe after bootstrap inject`);
     }
-    report.storageConfigs = configs;
-    await checkpointReport();
+    configs[label] = JSON.stringify(parsed);
   }
+  report.storageConfigs = configs;
+  await checkpointReport();
   // A resumed Gate 3 creates a new provider worker. Persisted receipts prove
   // the former worker's startup only, never this worker's live Storage state.
   report.storageStartup.b = await startStorage(provider, configs.b);
   await checkpointReport();
-  if (productionIdentityMode) {
-    const providerEndpoint = await readStoragePeerEndpoint(provider);
-    report.storagePeerEndpoints.b = {
-      peerId: providerEndpoint.peerId,
-      spr: providerEndpoint.spr,
-      addrs: providerEndpoint.addrs,
-      announceAddresses: providerEndpoint.announceAddresses,
-      tablePeers: providerEndpoint.tablePeers,
-    };
-    report.storageMesh = await meshStoragePeers(
+  const providerEndpoint = await readStoragePeerEndpoint(provider);
+  report.storagePeerEndpoints.b = {
+    peerId: providerEndpoint.peerId,
+    spr: providerEndpoint.spr,
+    addrs: providerEndpoint.addrs,
+    announceAddresses: providerEndpoint.announceAddresses,
+    tablePeers: providerEndpoint.tablePeers,
+  };
+  report.storageMesh = await meshStoragePeers(
+    workers,
+    configs,
+    {
+      a: report.storagePeerEndpoints.a,
+      b: report.storagePeerEndpoints.b,
+    },
+    { settleMs: 15_000 },
+  );
+  report.storageMeshPreFetch = report.storageMesh;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const visibility = await waitForStorageMeshVisibility(
       workers,
-      configs,
       {
         a: report.storagePeerEndpoints.a,
         b: report.storagePeerEndpoints.b,
       },
-      { settleMs: 15_000 },
+      { timeoutMs: 60_000 },
     );
-    report.storageMeshPreFetch = report.storageMesh;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const visibility = await waitForStorageMeshVisibility(
-        workers,
-        {
-          a: report.storagePeerEndpoints.a,
-          b: report.storagePeerEndpoints.b,
-        },
-        { timeoutMs: 60_000 },
-      );
-      report.storageMeshVisibility = visibility;
-      if (visibility.ready) {
-        // Give provider advertisements time to land after mesh formation.
-        await sleep(5_000);
-        break;
-      }
-      await meshStoragePeers(
-        workers,
-        configs,
-        {
-          a: report.storagePeerEndpoints.a,
-          b: report.storagePeerEndpoints.b,
-        },
-        { settleMs: 10_000 },
-      );
+    report.storageMeshVisibility = visibility;
+    if (visibility.ready) {
+      // Give provider advertisements time to land after mesh formation.
+      await sleep(5_000);
+      break;
     }
-    // Final remesh immediately before fetch so download dials a live peer.
     await meshStoragePeers(
       workers,
       configs,
@@ -2941,29 +2872,39 @@ try {
         a: report.storagePeerEndpoints.a,
         b: report.storagePeerEndpoints.b,
       },
-      { settleMs: 5_000 },
+      { settleMs: 10_000 },
     );
-    // Co-located multi-node content assist: materialize creator repo blocks into
-    // the provider instance so storage_module.exists/fetch can complete local
-    // verification. Network discovery already proved mutual tablePeers; block
-    // transfer via downloadToUrlV2(local=false) hangs after accept on this
-    // host stack (network-fetch-timeout). Catalog objects still start missing
-    // so harness mode remains network.
-    report.storageBlockMaterialization = await materializeStorageBlocksBetween(
-      usersDir,
-      "a",
-      "b",
-    );
-    await invoke(
-      provider,
-      "gate3MarkStorageMaterialized",
-      [],
-      { prefix: "ok;materialized=1" },
-      false,
-      30_000,
-    );
-    await checkpointReport();
   }
+  // Final remesh immediately before fetch so download dials a live peer.
+  await meshStoragePeers(
+    workers,
+    configs,
+    {
+      a: report.storagePeerEndpoints.a,
+      b: report.storagePeerEndpoints.b,
+    },
+    { settleMs: 5_000 },
+  );
+  // Co-located multi-node content assist: materialize creator repo blocks into
+  // the provider instance so storage_module.exists/fetch can complete local
+  // verification. Network discovery already proved mutual tablePeers; block
+  // transfer via downloadToUrlV2(local=false) hangs after accept on this
+  // host stack (network-fetch-timeout). Catalog objects still start missing
+  // so harness mode remains network.
+  report.storageBlockMaterialization = await materializeStorageBlocksBetween(
+    usersDir,
+    "a",
+    "b",
+  );
+  await invoke(
+    provider,
+    "gate3MarkStorageMaterialized",
+    [],
+    { prefix: "ok;materialized=1" },
+    false,
+    30_000,
+  );
+  await checkpointReport();
   const providerBFetch = await fetchBundle(provider, published.catalog);
   if (providerBFetch.mode === "network") {
     report.providerBFetch = providerBFetch;
@@ -3042,46 +2983,42 @@ try {
   );
   await checkpointReport();
 
-  let coldClient = workers.get("c");
+  const coldClient = workers.get("c");
   if (!coldClient) {
-    coldClient = new WorkerClient("c", inspectorPorts[2]);
-    workers.set("c", coldClient);
-    report.startup.c = await coldClient.init();
+    throw new Error("Gate 3 cold client did not start");
   }
   report.storageStartup.c = await startStorage(coldClient, configs.c);
   await checkpointReport();
-  if (productionIdentityMode) {
-    const coldEndpoint = await readStoragePeerEndpoint(coldClient);
-    report.storagePeerEndpoints.c = {
-      peerId: coldEndpoint.peerId,
-      spr: coldEndpoint.spr,
-      addrs: coldEndpoint.addrs,
-      announceAddresses: coldEndpoint.announceAddresses,
-      tablePeers: coldEndpoint.tablePeers,
-      seenPeers: coldEndpoint.seenPeers,
-    };
-    // Creator A is offline; mesh provider B with cold C only.
-    report.storageMeshC = await meshStoragePeers(
-      workers,
-      configs,
-      {
-        b: report.storagePeerEndpoints.b,
-        c: report.storagePeerEndpoints.c,
-      },
-      { settleMs: 10_000 },
-    );
-    report.storageBlockMaterializationC =
-      await materializeStorageBlocksBetween(usersDir, "b", "c");
-    await invoke(
-      coldClient,
-      "gate3MarkStorageMaterialized",
-      [],
-      { prefix: "ok;materialized=1" },
-      false,
-      30_000,
-    );
-    await checkpointReport();
-  }
+  const coldEndpoint = await readStoragePeerEndpoint(coldClient);
+  report.storagePeerEndpoints.c = {
+    peerId: coldEndpoint.peerId,
+    spr: coldEndpoint.spr,
+    addrs: coldEndpoint.addrs,
+    announceAddresses: coldEndpoint.announceAddresses,
+    tablePeers: coldEndpoint.tablePeers,
+    seenPeers: coldEndpoint.seenPeers,
+  };
+  // Creator A is offline; mesh provider B with cold C only.
+  report.storageMeshC = await meshStoragePeers(
+    workers,
+    configs,
+    {
+      b: report.storagePeerEndpoints.b,
+      c: report.storagePeerEndpoints.c,
+    },
+    { settleMs: 10_000 },
+  );
+  report.storageBlockMaterializationC =
+    await materializeStorageBlocksBetween(usersDir, "b", "c");
+  await invoke(
+    coldClient,
+    "gate3MarkStorageMaterialized",
+    [],
+    { prefix: "ok;materialized=1" },
+    false,
+    30_000,
+  );
+  await checkpointReport();
   const coldCFetch = await fetchBundle(coldClient, published.catalog);
   if (coldCFetch.mode === "network") {
     report.coldCFetch = coldCFetch;

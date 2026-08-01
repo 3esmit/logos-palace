@@ -6,7 +6,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    objectName: "palaceGate2Root"
+    objectName: "palaceRoot"
 
     readonly property var backend: logos.module("logos_palace_ui")
     readonly property string roomTitle: backend ? backend.roomTitle : "Connecting..."
@@ -46,7 +46,7 @@ Item {
         ? backend.spotReceipt : ""
     readonly property string participantProjection: backend
         ? backend.participantProjection : "[]"
-    readonly property string nodeEvidence: backend
+    readonly property string deliveryNodeEvidence: backend
         ? backend.deliveryNodeEvidence
         : "{\"success\":false,\"reason\":\"node-not-created\"}"
     property string invocationError: ""
@@ -95,13 +95,9 @@ Item {
            ? watchedActionReceipt
            : (backend ? backend.lastActionReceipt : ""))
 
-    // Stable inspector contract used by the compiled Gate 2 harness.
-    readonly property string gate2Status: deliveryStatus
-    readonly property string gate2Projection: participantProjection
-    readonly property string gate2NodeEvidence: nodeEvidence
-    readonly property string gate2Receipt: lastActionReceipt
-    readonly property int gate2ParticipantCount: participants.length
-    readonly property bool gate2Ready: ready
+    // Stable inspector contract for delivery actions and state.
+    readonly property string deliveryReceipt: lastActionReceipt
+    readonly property int participantCount: participants.length
 
     // Stable inspector contract used by the compiled Gate 3 harness.
     readonly property string gate3Status: storageStatus
@@ -165,7 +161,8 @@ Item {
             === "finalized"
         && encodedStatusValue(moderationCapabilityState, "can_ban_prop")
             === "1"
-    readonly property int connectedPeerCount: parseConnectedPeerCount(nodeEvidence)
+    readonly property int connectedPeerCount:
+        parseConnectedPeerCount(deliveryNodeEvidence)
     property bool ready: false
     property bool backgroundModerationOpen: false
     property int backgroundPreviewEpoch: 0
@@ -642,7 +639,7 @@ Item {
         return "pending"
     }
 
-    function gate2Start(configJson) {
+    function startDelivery(configJson) {
         if (!ready || !backend)
             return rejectedNotReady()
         return watchAction(backend.startDelivery(String(configJson)), null)
@@ -683,13 +680,13 @@ Item {
         return invocationError
     }
 
-    function gate2Say(text) {
+    function sendSpeech(text) {
         if (!ready || !backend)
             return rejectedNotReady()
         return watchAction(backend.say(String(text)), null)
     }
 
-    function gate2Move(x, y) {
+    function moveAvatar(x, y) {
         if (!ready || !backend)
             return rejectedNotReady()
         var nextX = Math.round(Number(x))
@@ -700,7 +697,7 @@ Item {
         })
     }
 
-    function gate2Wear(propId) {
+    function wearProp(propId) {
         if (!ready || !backend)
             return rejectedNotReady()
         var selectedProp = String(propId)
@@ -714,7 +711,7 @@ Item {
         })
     }
 
-    function gate2Remove(propId) {
+    function removeProp(propId) {
         if (!ready || !backend)
             return rejectedNotReady()
         var selectedProp = String(propId)
@@ -729,7 +726,7 @@ Item {
         })
     }
 
-    function gate2RefreshPresence() {
+    function refreshPresence() {
         if (!ready || !backend)
             return rejectedNotReady()
         return watchAction(backend.refreshPresence(), null)
@@ -1725,7 +1722,7 @@ Item {
                         text: "↑"
                         Accessible.name: "Move up"
                         enabled: root.ready
-                        onClicked: root.gate2Move(
+                        onClicked: root.moveAvatar(
                             root.localMotionX, root.localMotionY - 750)
                     }
                     Button {
@@ -1735,7 +1732,7 @@ Item {
                         text: "←"
                         Accessible.name: "Move left"
                         enabled: root.ready
-                        onClicked: root.gate2Move(
+                        onClicked: root.moveAvatar(
                             root.localMotionX - 750, root.localMotionY)
                     }
                     Button {
@@ -1745,7 +1742,7 @@ Item {
                         text: "→"
                         Accessible.name: "Move right"
                         enabled: root.ready
-                        onClicked: root.gate2Move(
+                        onClicked: root.moveAvatar(
                             root.localMotionX + 750, root.localMotionY)
                     }
                     Button {
@@ -1755,7 +1752,7 @@ Item {
                         text: "↓"
                         Accessible.name: "Move down"
                         enabled: root.ready
-                        onClicked: root.gate2Move(
+                        onClicked: root.moveAvatar(
                             root.localMotionX, root.localMotionY + 750)
                     }
                     Rectangle {
@@ -1777,7 +1774,7 @@ Item {
                             && root.availablePropId.length > 0
                             && root.localWornPropId
                                 !== root.availablePropId
-                        onClicked: root.gate2Wear(root.availablePropId)
+                        onClicked: root.wearProp(root.availablePropId)
                     }
                     Button {
                         objectName: "palaceRemoveAssignedProp"
@@ -1792,7 +1789,7 @@ Item {
                             && root.availablePropId.length > 0
                             && root.localWornPropId
                                 === root.availablePropId
-                        onClicked: root.gate2Remove(root.availablePropId)
+                        onClicked: root.removeProp(root.availablePropId)
                     }
                     Button {
                         objectName: "palaceBackgroundModerationButton"
@@ -1878,7 +1875,7 @@ Item {
                 onClicked: function(mouse) {
                     var coordinate = root.canvasPixelsToProtocol(
                         mouse.x, mouse.y)
-                    root.gate2Move(coordinate.x, coordinate.y)
+                    root.moveAvatar(coordinate.x, coordinate.y)
                 }
             }
 
@@ -2327,7 +2324,7 @@ Item {
                         onClicked: {
                             if (root.localWornPropId
                                     === root.availablePropId)
-                                root.gate2Remove(root.availablePropId)
+                                root.removeProp(root.availablePropId)
                             root.gate4BanProp(root.availablePropId)
                         }
                     }
@@ -2359,7 +2356,7 @@ Item {
                         enabled: root.ready
                         onAccepted: {
                             if (text.length > 0) {
-                                root.gate2Say(text)
+                                root.sendSpeech(text)
                                 clear()
                             }
                         }
@@ -2372,7 +2369,7 @@ Item {
                         Layout.preferredWidth: 44
                         enabled: root.ready && chatInput.text.length > 0
                         onClicked: {
-                            root.gate2Say(chatInput.text)
+                            root.sendSpeech(chatInput.text)
                             chatInput.clear()
                         }
                     }
@@ -2501,7 +2498,7 @@ Item {
                             && root.availablePropId.length > 0
                             && root.localWornPropId
                                 !== root.availablePropId
-                        onClicked: root.gate2Wear(root.availablePropId)
+                        onClicked: root.wearProp(root.availablePropId)
                     }
                     Button {
                         text: "Remove"
@@ -2511,7 +2508,7 @@ Item {
                             && root.availablePropId.length > 0
                             && root.localWornPropId
                                 === root.availablePropId
-                        onClicked: root.gate2Remove(root.availablePropId)
+                        onClicked: root.removeProp(root.availablePropId)
                     }
                 }
                 Button {
