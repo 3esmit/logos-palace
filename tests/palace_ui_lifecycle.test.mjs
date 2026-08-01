@@ -26,6 +26,14 @@ const backendH = readFileSync(
   join(root, "packages/logos_palace_ui/src/logos_palace_ui_backend.h"),
   "utf8",
 );
+const coreImpl = readFileSync(
+  join(root, "packages/palace_core/src/palace_core_impl.cpp"),
+  "utf8",
+);
+const uiRep = readFileSync(
+  join(root, "packages/logos_palace_ui/src/logos_palace_ui.rep"),
+  "utf8",
+);
 
 test("preview ready transitions never go negative and balance destroy", () => {
   let count = 0;
@@ -175,4 +183,79 @@ test("backend stops poll timers on teardown", () => {
   assert.match(backendCpp, /stopPollingTimers/);
   assert.match(backendCpp, /m_deliveryPollTimer->stop\(\)/);
   assert.match(backendCpp, /m_nodeEvidencePollTimer->stop\(\)/);
+});
+
+test("LEZ moderation controls reflect Core finalized capability only", () => {
+  const capabilityOffset = coreImpl.indexOf(
+    "std::string PalaceCoreImpl::moderationCapabilityStatus() const",
+  );
+  const submitOffset = coreImpl.indexOf(
+    "std::string PalaceCoreImpl::submitHumanModeration(",
+  );
+  assert.ok(capabilityOffset >= 0);
+  assert.ok(submitOffset >= 0);
+
+  const capabilitySource = coreImpl.slice(capabilityOffset, submitOffset);
+  const submitSource = coreImpl.slice(submitOffset);
+  assert.match(capabilitySource, /currentHumanModerationContext\(\)/);
+  assert.match(
+    capabilitySource,
+    /finalizedHumanModerationAuthority\(\s*context, kModerateUserCapability\s*\)/,
+  );
+  assert.match(
+    capabilitySource,
+    /finalizedHumanModerationAuthority\(\s*context, kModerateAssetCapability\s*\)/,
+  );
+  assert.match(
+    capabilitySource,
+    /if \(!user\.accepted \|\| !prop\.accepted\)[\s\S]{0,280}authority=unavailable;can_ban_user=0;can_ban_prop=0/,
+  );
+  assert.match(submitSource, /currentHumanModerationContext\(\)/);
+  assert.match(
+    submitSource,
+    /finalizedHumanModerationAuthority\(context, requiredCapability\)/,
+  );
+
+  assert.match(
+    uiRep,
+    /PROP\(QString moderationCapabilityState="authority=unavailable;can_ban_user=0;can_ban_prop=0;reason=core-unavailable;checkpoint=" READONLY\)/,
+  );
+  assert.match(
+    backendCpp,
+    /setModerationCapabilityState\(\s*modules\(\)\.palace_core\.moderationCapabilityStatus\(\)\);/,
+  );
+  assert.match(mainQml, /gate4ModerationCapabilityState:\s*moderationCapabilityState/);
+  assert.match(
+    mainQml,
+    /readonly property bool canBanUser:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_user"\)\s*=== "1"/,
+  );
+  assert.match(
+    mainQml,
+    /readonly property bool canBanProp:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_prop"\)\s*=== "1"/,
+  );
+
+  const banUserOffset = mainQml.indexOf('objectName: "palaceBanUserButton"');
+  const banPropOffset = mainQml.indexOf(
+    'objectName: "palaceBanAssignedPropButton"',
+  );
+  const trashOffset = mainQml.indexOf('objectName: "palacePropTrash"');
+  const assetsOffset = mainQml.indexOf(
+    'objectName: "palaceBackgroundModerationButton"',
+  );
+  assert.ok(banUserOffset >= 0 && banPropOffset >= 0);
+  assert.ok(trashOffset >= 0 && assetsOffset >= 0);
+  const banUserBlock = mainQml.slice(banUserOffset, banPropOffset);
+  const banPropBlock = mainQml.slice(banPropOffset, banPropOffset + 600);
+  const trashBlock = mainQml.slice(trashOffset, trashOffset + 600);
+  const assetsBlock = mainQml.slice(
+    assetsOffset,
+    mainQml.indexOf("onClicked:", assetsOffset),
+  );
+  assert.match(banUserBlock, /visible:\s*root\.canBanUser/);
+  assert.match(banUserBlock, /enabled:\s*root\.canBanUser/);
+  assert.match(banPropBlock, /visible:\s*root\.canBanProp/);
+  assert.match(banPropBlock, /enabled:\s*root\.canBanProp/);
+  assert.match(trashBlock, /visible:\s*root\.canBanProp/);
+  assert.match(trashBlock, /enabled:\s*root\.canBanProp/);
+  assert.doesNotMatch(assetsBlock, /canBan(User|Prop)/);
 });

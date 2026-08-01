@@ -31,6 +31,9 @@ Item {
     readonly property string moderationState: backend
         ? backend.moderationState
         : "state=idle;kind=;action=;target="
+    readonly property string moderationCapabilityState: backend
+        ? backend.moderationCapabilityState
+        : "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason=core-unavailable;checkpoint="
     readonly property string spotState: backend
         ? backend.spotState
         : "vm=idle;action=;navigation=0;reason=not-started"
@@ -115,6 +118,8 @@ Item {
     readonly property string gate4PalaceState: palaceState
     readonly property string gate4Receipt: lastActionReceipt
     readonly property string gate4ModerationState: moderationState
+    readonly property string gate4ModerationCapabilityState:
+        moderationCapabilityState
     readonly property string gate4ActivePropAsset:
         activePropAssetState
     readonly property bool gate4Ready: ready
@@ -141,6 +146,18 @@ Item {
     readonly property string availablePropId:
         activePropAsset.available === true
         ? String(activePropAsset.propId) : ""
+    // Human moderation is an admin-only LEZ command. Never infer it from
+    // display identity or room state; Core derives it from finalized authority.
+    readonly property bool canBanUser: ready
+        && encodedStatusValue(moderationCapabilityState, "authority")
+            === "finalized"
+        && encodedStatusValue(moderationCapabilityState, "can_ban_user")
+            === "1"
+    readonly property bool canBanProp: ready
+        && encodedStatusValue(moderationCapabilityState, "authority")
+            === "finalized"
+        && encodedStatusValue(moderationCapabilityState, "can_ban_prop")
+            === "1"
     readonly property int connectedPeerCount: parseConnectedPeerCount(nodeEvidence)
     property bool ready: false
     property bool backgroundModerationOpen: false
@@ -1990,7 +2007,8 @@ Item {
                         ToolTip.text: root.availablePropId.length > 0
                             ? "Discard / ban assigned prop"
                             : "Trash"
-                        enabled: root.ready
+                        visible: root.canBanProp
+                        enabled: root.canBanProp
                             && root.availablePropId.length > 0
                         onClicked: {
                             if (root.localWornPropId
@@ -2251,7 +2269,8 @@ Item {
                             height: 22
                             text: "Ban"
                             font.pixelSize: 9
-                            enabled: root.ready
+                            visible: root.canBanUser
+                            enabled: root.canBanUser
                                 && subjectUserId.length === 64
                             onClicked: root.gate4BanUser(subjectUserId)
                         }
@@ -2264,8 +2283,9 @@ Item {
                     height: 24
                     text: "Ban assigned prop"
                     font.pixelSize: 9
-                    visible: root.availablePropId.length > 0
-                    enabled: root.ready
+                    visible: root.canBanProp
+                        && root.availablePropId.length > 0
+                    enabled: root.canBanProp
                     onClicked: root.gate4BanProp(
                         root.availablePropId)
                 }

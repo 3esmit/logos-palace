@@ -381,6 +381,9 @@ public:
     std::string banUser(const std::string& subjectUserIdHex);
     std::string banProp(const std::string& propId);
     std::string moderationStatus() const;
+    // Read-only capability state derived from the same finalized LEZ authority
+    // preflight used by banUser/banProp. It never trusts QML or delivery hints.
+    std::string moderationCapabilityStatus() const;
     // `actionId` is a canonical decimal u64 shared with the guest. Zero is
     // reserved for Palace initialization; later actions are positive.
     std::string submitIntent(const std::string& actionId);
@@ -518,6 +521,28 @@ private:
         bool navigationApplied = false;
     };
 
+    // This context is created only from the current finalized LEZ authority
+    // snapshot and the locally registered delivery identity. It is shared by
+    // the human moderation command and the read-only UI capability surface so
+    // the latter cannot advertise an authority the command would reject.
+    struct HumanModerationContext {
+        bool accepted = false;
+        std::string reason;
+        std::string actionId;
+        std::string callerAccountIdHex;
+        palace::PalaceLezBytes32 callerAccountId{};
+        std::uint64_t nextActionId = 0U;
+    };
+
+    struct FinalizedHumanModerationAuthority {
+        bool accepted = false;
+        std::string reason;
+        std::optional<palace::PalaceLezRootRecordV3> root;
+        std::set<std::string> knownUserIds;
+        std::vector<palace::PalaceLezCapabilityGrantRecordV3>
+            eligibleGrants;
+    };
+
     bool persistProjection();
     void persistActionJournal();
     void persistDeliverySessionLocked();
@@ -613,6 +638,11 @@ private:
     std::string submitHumanModeration(
         palace::PalaceHumanModerationTargetV1 targetKind,
         const std::string& selectedTarget);
+    HumanModerationContext currentHumanModerationContext() const;
+    FinalizedHumanModerationAuthority
+    finalizedHumanModerationAuthority(
+        const HumanModerationContext& context,
+        std::uint32_t requiredCapability) const;
     bool repairTrackedPalaceSubmissionIntent(
         const palace::PalaceLezTransactionPlanV3& requestedPlan,
         std::string& transactionHash,

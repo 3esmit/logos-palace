@@ -712,6 +712,8 @@ QString LogosPalaceUiBackend::banUser(QString subjectUserIdHex)
     const QString result =
         modules().palace_core.banUser(subjectUserIdHex);
     refreshLezState();
+    setModerationCapabilityState(
+        modules().palace_core.moderationCapabilityStatus());
     return rememberModerationReceipt(
         QStringLiteral("user"),
         subjectUserIdHex,
@@ -734,6 +736,8 @@ QString LogosPalaceUiBackend::banProp(QString propId)
         + propId);
     const QString result = modules().palace_core.banProp(propId);
     refreshLezState();
+    setModerationCapabilityState(
+        modules().palace_core.moderationCapabilityStatus());
     return rememberModerationReceipt(
         QStringLiteral("prop"), propId, result);
 }
@@ -745,6 +749,8 @@ QString LogosPalaceUiBackend::refreshModeration()
     const QString result =
         modules().palace_core.moderationStatus();
     setModerationState(result);
+    setModerationCapabilityState(
+        modules().palace_core.moderationCapabilityStatus());
     m_moderationActionId =
         statusValue(result, QStringLiteral("action"));
     m_moderationKind =
@@ -948,6 +954,8 @@ void LogosPalaceUiBackend::refreshModerationState()
     const QString status =
         modules().palace_core.moderationStatus();
     setModerationState(status);
+    setModerationCapabilityState(
+        modules().palace_core.moderationCapabilityStatus());
     m_moderationActionId =
         statusValue(status, QStringLiteral("action"));
     m_moderationKind =

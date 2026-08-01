@@ -37,6 +37,9 @@
 
 namespace {
 
+constexpr std::uint32_t kModerateUserCapability = 1U << 0U;
+constexpr std::uint32_t kModerateAssetCapability = 1U << 1U;
+
 std::string result(bool changed, const palace::ActionStatus& status)
 {
     return std::string("changed=") + (changed ? "1" : "0")
@@ -5965,46 +5968,181 @@ std::string PalaceCoreImpl::moderationStatus() const
         + palace::actionStatusName(status.durableStage);
 }
 
-std::string PalaceCoreImpl::submitHumanModeration(
-    const palace::PalaceHumanModerationTargetV1 targetKind,
-    const std::string& selectedTarget)
+PalaceCoreImpl::HumanModerationContext
+PalaceCoreImpl::currentHumanModerationContext() const
 {
-    static constexpr std::uint32_t kModerateUser = 1U << 0U;
-    static constexpr std::uint32_t kModerateAsset = 1U << 1U;
-
+    HumanModerationContext context;
     if (!isContextReady() || !m_lezReady
         || !m_lezCoordinator.running()) {
-        return "rejected=moderation-lez-not-ready";
+        context.reason = "lez-not-ready";
+        return context;
     }
     if (!m_lezAuthorityReady
         || !m_lezOpenHistory.has_value()
         || !m_lezOpenHistory->authorityApplied
         || m_lezOpenHistory->palaceIdHex
             != m_deliveryAuthority.palaceId()) {
-        return "rejected=moderation-finalized-authority-required";
+        context.reason = "finalized-authority-required";
+        return context;
     }
     if (!m_deliveryIdentity.valid()
         || m_deliveryAuthority.deliveryKeyFor(
                m_deliveryIdentity.accountId(),
                m_deliveryIdentity.deliveryKeyEpoch())
             != m_deliveryIdentity.publicKey()) {
-        return "rejected=moderation-finalized-identity-required";
+        context.reason = "finalized-identity-required";
+        return context;
     }
     if (m_lezAuthorityBundle.checkpoint.lastOrderedActionId
         == std::numeric_limits<std::uint64_t>::max()) {
-        return "rejected=moderation-action-id-exhausted";
+        context.reason = "action-id-exhausted";
+        return context;
     }
 
-    const std::uint64_t nextActionId =
-        m_lezAuthorityBundle.checkpoint.lastOrderedActionId + 1U;
-    const std::string actionId = std::to_string(nextActionId);
-    const std::string callerAccountIdHex =
-        m_deliveryIdentity.accountId();
-    palace::PalaceLezBytes32 callerAccountId{};
+    context.callerAccountIdHex = m_deliveryIdentity.accountId();
     if (!palace::PalaceLezCodec::parseBytes32Hex(
-            callerAccountIdHex, callerAccountId)) {
-        return "rejected=moderation-caller-invalid";
+            context.callerAccountIdHex, context.callerAccountId)) {
+        context.reason = "caller-invalid";
+        return context;
     }
+    context.nextActionId =
+        m_lezAuthorityBundle.checkpoint.lastOrderedActionId + 1U;
+    context.actionId = std::to_string(context.nextActionId);
+    context.accepted = true;
+    context.reason = "authorized";
+    return context;
+}
+
+PalaceCoreImpl::FinalizedHumanModerationAuthority
+PalaceCoreImpl::finalizedHumanModerationAuthority(
+    const HumanModerationContext& context,
+    const std::uint32_t requiredCapability) const
+{
+    FinalizedHumanModerationAuthority authority;
+    if (!context.accepted) {
+        authority.reason = "finalized-authority-required";
+        return authority;
+    }
+
+    for (const palace::PalaceLezFinalizedAuthorityAccountV1&
+         stored : m_lezAuthorityBundle.accounts) {
+        const palace::PalaceLezPublicAccountV3 decoded =
+            palace::PalaceLezCodec::decodePublicAccount(
+                stored.responseJson,
+                m_lezAuthorityBundle.scope.programIdHex);
+        if (!decoded.accepted) {
+            authority.reason = "authority-account-invalid";
+            return authority;
+        }
+        if (stored.accountIdHex
+            == m_lezAuthorityBundle.scope.rootAccountIdHex) {
+            const auto* decodedRoot =
+                std::get_if<palace::PalaceLezRootRecordV3>(
+                    &decoded.record);
+            if (decodedRoot == nullptr || authority.root.has_value()) {
+                authority.reason = "root-invalid";
+                return authority;
+            }
+            authority.root = *decodedRoot;
+            continue;
+        }
+        if (const auto* profile =
+                std::get_if<palace::PalaceLezUserProfileRecordV3>(
+                    &decoded.record);
+            profile != nullptr) {
+            authority.knownUserIds.insert(
+                palace::PalaceLezCodec::bytes32Hex(profile->userId));
+            continue;
+        }
+        const auto* grant =
+            std::get_if<palace::PalaceLezCapabilityGrantRecordV3>(
+                &decoded.record);
+        if (grant != nullptr
+            && grant->subjectUserId == context.callerAccountId
+            && !grant->revoked
+            && grant->validThroughActionId >= context.nextActionId
+            && grant->scope.kind
+                == palace::PalaceLezScopeKindV3::Palace
+            && (grant->capabilities & requiredCapability)
+                == requiredCapability) {
+            authority.eligibleGrants.push_back(*grant);
+        }
+    }
+
+    if (!authority.root.has_value()
+        || authority.root->lastOrderedActionId
+            != m_lezAuthorityBundle.checkpoint
+                   .lastOrderedActionId) {
+        authority.reason = "root-checkpoint-mismatch";
+        return authority;
+    }
+    authority.eligibleGrants.erase(
+        std::remove_if(
+            authority.eligibleGrants.begin(),
+            authority.eligibleGrants.end(),
+            [&authority](const auto& grant) {
+                return grant.palaceId != authority.root->palaceId
+                    || grant.issuedBy != authority.root->owner;
+            }),
+        authority.eligibleGrants.end());
+    authority.accepted = true;
+    authority.reason = authority.eligibleGrants.size() == 1U
+        ? "authorized" : "grant-not-unique";
+    return authority;
+}
+
+std::string PalaceCoreImpl::moderationCapabilityStatus() const
+{
+    const HumanModerationContext context =
+        currentHumanModerationContext();
+    if (!context.accepted) {
+        return "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason="
+            + context.reason + ";checkpoint=";
+    }
+
+    const FinalizedHumanModerationAuthority user =
+        finalizedHumanModerationAuthority(
+            context, kModerateUserCapability);
+    const FinalizedHumanModerationAuthority prop =
+        finalizedHumanModerationAuthority(
+            context, kModerateAssetCapability);
+    if (!user.accepted || !prop.accepted) {
+        const std::string reason = !user.accepted
+            ? user.reason : prop.reason;
+        return "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason="
+            + reason + ";checkpoint="
+            + std::to_string(
+                m_lezAuthorityBundle.checkpoint.lastOrderedActionId);
+    }
+    const bool canBanUser = user.accepted
+        && user.eligibleGrants.size() == 1U;
+    const bool canBanProp = prop.accepted
+        && prop.eligibleGrants.size() == 1U;
+    std::string reason = "authorized";
+    if (!canBanUser && !canBanProp) {
+        reason = user.reason == prop.reason
+            ? user.reason : "capability-unavailable";
+    } else if (!canBanUser || !canBanProp) {
+        reason = "capability-partial";
+    }
+    return "authority=finalized;can_ban_user="
+        + std::string(canBanUser ? "1" : "0")
+        + ";can_ban_prop="
+        + std::string(canBanProp ? "1" : "0")
+        + ";reason=" + reason
+        + ";checkpoint="
+        + std::to_string(
+            m_lezAuthorityBundle.checkpoint.lastOrderedActionId);
+}
+
+std::string PalaceCoreImpl::submitHumanModeration(
+    const palace::PalaceHumanModerationTargetV1 targetKind,
+    const std::string& selectedTarget)
+{
+    const HumanModerationContext context =
+        currentHumanModerationContext();
+    if (!context.accepted)
+        return "rejected=moderation-" + context.reason;
 
     std::string target = selectedTarget;
     if (targetKind
@@ -6029,98 +6167,38 @@ std::string PalaceCoreImpl::submitHumanModeration(
             return "rejected=moderation-user-already-banned";
     }
 
-    std::optional<palace::PalaceLezRootRecordV3> root;
-    std::vector<palace::PalaceLezCapabilityGrantRecordV3>
-        eligibleGrants;
-    bool targetUserKnown =
-        targetKind
-        != palace::PalaceHumanModerationTargetV1::User;
     const std::uint32_t requiredCapability =
         targetKind
             == palace::PalaceHumanModerationTargetV1::User
-        ? kModerateUser : kModerateAsset;
-    for (const palace::PalaceLezFinalizedAuthorityAccountV1&
-         stored : m_lezAuthorityBundle.accounts) {
-        const palace::PalaceLezPublicAccountV3 decoded =
-            palace::PalaceLezCodec::decodePublicAccount(
-                stored.responseJson,
-                m_lezAuthorityBundle.scope.programIdHex);
-        if (!decoded.accepted)
-            return "rejected=moderation-authority-account-invalid";
-        if (stored.accountIdHex
-            == m_lezAuthorityBundle.scope.rootAccountIdHex) {
-            const auto* decodedRoot =
-                std::get_if<palace::PalaceLezRootRecordV3>(
-                    &decoded.record);
-            if (decodedRoot == nullptr || root.has_value())
-                return "rejected=moderation-root-invalid";
-            root = *decodedRoot;
-            continue;
-        }
-        if (const auto* profile =
-                std::get_if<palace::PalaceLezUserProfileRecordV3>(
-                    &decoded.record);
-            profile != nullptr) {
-            if (targetKind
-                    == palace::PalaceHumanModerationTargetV1::User
-                && palace::PalaceLezCodec::bytes32Hex(
-                       profile->userId)
-                    == target) {
-                targetUserKnown = true;
-            }
-            continue;
-        }
-        const auto* grant =
-            std::get_if<
-                palace::PalaceLezCapabilityGrantRecordV3>(
-                &decoded.record);
-        if (grant != nullptr
-            && grant->subjectUserId == callerAccountId
-            && !grant->revoked
-            && grant->validThroughActionId >= nextActionId
-            && grant->scope.kind
-                == palace::PalaceLezScopeKindV3::Palace
-            && (grant->capabilities & requiredCapability)
-                == requiredCapability) {
-            eligibleGrants.push_back(*grant);
-        }
-    }
-    if (!root.has_value()
-        || root->lastOrderedActionId
-            != m_lezAuthorityBundle.checkpoint
-                   .lastOrderedActionId) {
-        return "rejected=moderation-root-checkpoint-mismatch";
-    }
-    if (!targetUserKnown)
+        ? kModerateUserCapability : kModerateAssetCapability;
+    const FinalizedHumanModerationAuthority authority =
+        finalizedHumanModerationAuthority(context, requiredCapability);
+    if (!authority.accepted)
+        return "rejected=moderation-" + authority.reason;
+    if (targetKind == palace::PalaceHumanModerationTargetV1::User
+        && authority.knownUserIds.find(target)
+            == authority.knownUserIds.end()) {
         return "rejected=moderation-user-unknown";
+    }
     if (targetKind
             == palace::PalaceHumanModerationTargetV1::User
-        && palace::PalaceLezCodec::bytes32Hex(root->owner)
+        && palace::PalaceLezCodec::bytes32Hex(authority.root->owner)
             == target) {
         return "rejected=moderation-owner-protected";
     }
-    eligibleGrants.erase(
-        std::remove_if(
-            eligibleGrants.begin(),
-            eligibleGrants.end(),
-            [&root](const auto& grant) {
-                return grant.palaceId != root->palaceId
-                    || grant.issuedBy != root->owner;
-            }),
-        eligibleGrants.end());
-    if (eligibleGrants.size() != 1U)
+    if (authority.eligibleGrants.size() != 1U)
         return "rejected=moderation-grant-not-unique";
 
     palace::PalaceHumanModerationRequestV1 request;
     request.targetKind = targetKind;
-    request.actionId = actionId;
+    request.actionId = context.actionId;
     request.programIdHex =
         m_lezAuthorityBundle.scope.programIdHex;
     request.rootAccountIdHex =
         m_lezAuthorityBundle.scope.rootAccountIdHex;
-    request.issuerAccountIdHex = callerAccountIdHex;
+    request.issuerAccountIdHex = context.callerAccountIdHex;
     request.grantIdHex = palace::PalaceLezCodec::bytes32Hex(
-        eligibleGrants.front().grantId);
+        authority.eligibleGrants.front().grantId);
     request.target = target;
     const palace::PalaceHumanModerationCommandV1 command =
         palace::buildPalaceHumanModerationCommandV1(request);

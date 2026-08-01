@@ -61,6 +61,7 @@ class LogosPalaceUi
     PROP(QString identityState="identity=none" READONLY)
     PROP(QString palaceState="palace=closed;reason=not-opened" READONLY)
     PROP(QString moderationState="state=idle;kind=;action=;target=" READONLY)
+    PROP(QString moderationCapabilityState="authority=unavailable;can_ban_user=0;can_ban_prop=0;reason=core-unavailable;checkpoint=" READONLY)
     PROP(QString spotState="vm=idle;action=;navigation=0;reason=not-started" READONLY)
     PROP(QString spotActionId="" READONLY)
     PROP(QString spotReceipt="" READONLY)
