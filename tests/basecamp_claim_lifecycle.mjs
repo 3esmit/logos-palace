@@ -2632,8 +2632,10 @@ export function createClaimLifecycle({
   async function validateRollForwardChain(claim, depth = 0, seen = new Set()) {
     if (!Object.hasOwn(claim, "rollForward")) return claim;
     // Bound must cover long audited recovery histories (Gate 3 iteration
-    // chains can exceed a dozen nested retirements on one release claim).
-    if (depth >= 32) {
+    // chains can exceed dozens of nested retirements on one release claim).
+    // Raised 32→64 after enmbmS9V hit the bound following multi-week peer-fetch
+    // recovery (BOnEa1w7 et al.).
+    if (depth >= 64) {
       throw new Error("active-run roll-forward chain exceeds depth bound");
     }
     const rollForward = claim.rollForward;
