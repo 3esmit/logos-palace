@@ -58,6 +58,11 @@ const identityRegistrationAndSealedMvpBundleProfile =
 // not weaken the earlier sealed-bundle recovery profile.
 const identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile =
   "identity-registration-and-sealed-mvp-bundle-retained-after-creator-offline-before-palace-write";
+// Gate 3 can finish its local Storage/admin story while the runner rejects
+// only its stale evidence contract. This profile is limited to an exact,
+// audited report that proves no Palace-root action began.
+const completedGate3StrictEvidenceRejectionProfile =
+  "completed-gate3-strict-evidence-rejection-before-palace-write";
 const storageCidPattern =
   /^(b[a-z2-7]{50,}|z[1-9A-HJ-NP-Za-km-z]{40,})$/;
 
@@ -614,6 +619,27 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     reportProfile:
       identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile,
   }),
+  // run.5DW7f3WN @ 82d68fa: Gate 3 completed its sealed multi-node Storage
+  // story and local PNG verification. The runner then rejected its own stale
+  // private-loopback listener/config evidence before Gate 4 or any
+  // Palace-root action.
+  Object.freeze({
+    gitCommit: "82d68fa608cef2d74d4c0eaa8aeae851da8c7388",
+    snapshotNarHash:
+      "sha256-6c7zGBH4ruwIudURFTkPF4mBnD9JJRoWWJSueD7qY14=",
+    snapshotNarSize: 7330144,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "4a37c531e52bd93744a238cdf9d07f14cb1b9bd3cbc92fd8007cfd326a879400",
+    compiledReportSha256:
+      "a6107fe3cc54da1434cb4a4a7af183e60b98793a71d3853bd25734a1118d390a",
+    gate3ReportSha256:
+      "20fb6854bed4f2edb16bc137c65606524e0ab65a5aa2d40e466dfe1566faede5",
+    gate3Failure: "gate report failed strict validation",
+    retirementStatus: "audited-strict-evidence-rejection",
+    reportProfile: completedGate3StrictEvidenceRejectionProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -651,10 +677,12 @@ function validPrePublicWriteAudit(audit) {
         identityRegistrationAndPublishedAssetsProfile,
         identityRegistrationAndSealedMvpBundleProfile,
         identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile,
+        completedGate3StrictEvidenceRejectionProfile,
       ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
       "audited-pre-public-write-failure",
+      "audited-strict-evidence-rejection",
     ].includes(audit.retirementStatus);
 }
 
@@ -2260,11 +2288,11 @@ function validStoragePeerEndpoint(endpoint) {
     && endpoint.tablePeers.includes(endpoint.peerId);
 }
 
-function validStorageMeshDial(dial, endpoints) {
+function validStorageMeshDial(dial, endpoints, labels = ["a", "b"]) {
   if (
     !exactKeys(dial, ["addresses", "from", "peerId", "result", "to"])
-    || !["a", "b"].includes(dial.from)
-    || !["a", "b"].includes(dial.to)
+    || !labels.includes(dial.from)
+    || !labels.includes(dial.to)
     || dial.from === dial.to
   ) {
     return false;
@@ -2285,20 +2313,26 @@ function validStorageMeshDial(dial, endpoints) {
     && fields.peers === "2";
 }
 
-function validStorageMesh(mesh, endpoints) {
+function validStorageMesh(mesh, endpoints, labels = ["a", "b"]) {
+  const [first, second] = labels;
   if (
     !exactKeys(mesh, ["dials", "labels", "settleMs"])
-    || !exactJson(mesh.labels, ["a", "b"])
+    || labels.length !== 2
+    || !exactJson(mesh.labels, labels)
     || !Array.isArray(mesh.dials)
     || mesh.dials.length !== 2
     || !Number.isSafeInteger(mesh.settleMs)
     || mesh.settleMs < 0
-    || !mesh.dials.every((dial) => validStorageMeshDial(dial, endpoints))
+    || !mesh.dials.every((dial) =>
+      validStorageMeshDial(dial, endpoints, labels)
+    )
   ) {
     return false;
   }
   const routes = new Set(mesh.dials.map((dial) => `${dial.from}->${dial.to}`));
-  return routes.size === 2 && routes.has("a->b") && routes.has("b->a");
+  return routes.size === 2
+    && routes.has(`${first}->${second}`)
+    && routes.has(`${second}->${first}`);
 }
 
 function validStorageMeshVisibility(visibility, endpoints) {
@@ -2396,6 +2430,53 @@ function validPostCreatorOfflineStorageTopology(report) {
     && validStorageBlockMaterialization(report.storageBlockMaterialization);
 }
 
+function validCompletedGate3ColdStoragePeerEndpoint(endpoint) {
+  return exactKeys(endpoint, [
+    "addrs",
+    "announceAddresses",
+    "peerId",
+    "seenPeers",
+    "spr",
+    "tablePeers",
+  ])
+    && typeof endpoint.peerId === "string"
+    && endpoint.peerId.length > 0
+    && typeof endpoint.spr === "string"
+    && endpoint.spr.startsWith("spr:")
+    && Array.isArray(endpoint.addrs)
+    && endpoint.addrs.length > 0
+    && endpoint.addrs.every((address) =>
+      typeof address === "string" && address.length > 0,
+    )
+    && exactJson(endpoint.announceAddresses, endpoint.addrs)
+    && Array.isArray(endpoint.tablePeers)
+    && endpoint.tablePeers.length > 0
+    && endpoint.tablePeers.includes(endpoint.peerId)
+    && Array.isArray(endpoint.seenPeers)
+    && endpoint.seenPeers.every((peerId) =>
+      typeof peerId === "string" && peerId.length > 0,
+    );
+}
+
+function validCompletedGate3StorageTopology(report) {
+  const endpoints = report.storagePeerEndpoints;
+  return exactKeys(endpoints, ["a", "b", "c"])
+    && validStoragePeerEndpoint(endpoints.a)
+    && validStoragePeerEndpoint(endpoints.b)
+    && validCompletedGate3ColdStoragePeerEndpoint(endpoints.c)
+    && new Set([endpoints.a.peerId, endpoints.b.peerId, endpoints.c.peerId])
+      .size === 3
+    && validStorageMesh(report.storageMesh, endpoints, ["a", "b"])
+    && validStorageMesh(report.storageMeshPreFetch, endpoints, ["a", "b"])
+    && exactJson(report.storageMeshPreFetch, report.storageMesh)
+    && validStorageMeshVisibility(report.storageMeshVisibility, endpoints)
+    && validStorageBlockMaterialization(report.storageBlockMaterialization)
+    && validStorageMesh(report.storageMeshC, endpoints, ["b", "c"])
+    && validColdStorageBlockMaterialization(
+      report.storageBlockMaterializationC,
+    );
+}
+
 function validPostCreatorOfflineFetchFailure(failure) {
   const match = /^worker b: gate3FetchPng receipt timeout: before="missing" after="" state="([^"]+)" sequence=([1-9][0-9]*)->([1-9][0-9]*)$/.exec(
     failure,
@@ -2432,6 +2513,251 @@ function validIdentityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline(
     && validPostCreatorOfflineFetchFailure(report.failure);
 }
 
+function validCompletedGate3StorageStartup(report) {
+  return exactKeys(report.identities, ["a", "b", "c"])
+    && validIdentityRegistration(report.identities.a, "Alice")
+    && validIdentityRegistration(report.identities.b, "Bob")
+    && validIdentityRegistration(report.identities.c, "Carol")
+    && exactKeys(report.startup, ["a", "b", "c"])
+    && ["a", "b", "c"].every((label) =>
+      validCurrentNoAuthorityLez(report.startup[label]))
+    && exactKeys(report.storageConfigs, ["a", "b", "c"])
+    && Object.values(report.storageConfigs).every(
+      (config) => typeof config === "string" && config.length > 0,
+    )
+    && exactKeys(report.storageStartup, ["a", "b", "c"])
+    && ["a", "b", "c"].every((label) =>
+      exactKeys(report.storageStartup[label], ["running", "start"])
+      && validIdleStorageStatus(report.storageStartup[label].start, "starting")
+      && validIdleStorageStatus(report.storageStartup[label].running, "running"),
+    );
+}
+
+function validColdStorageBlockMaterialization(materialization) {
+  return exactKeys(materialization, [
+    "copied",
+    "fromLabel",
+    "fromRepo",
+    "mode",
+    "toLabel",
+    "toRepo",
+  ])
+    && materialization.fromLabel === "b"
+    && materialization.toLabel === "c"
+    && materialization.mode === "co-located-block-copy"
+    && typeof materialization.fromRepo === "string"
+    && materialization.fromRepo.length > 0
+    && typeof materialization.toRepo === "string"
+    && materialization.toRepo.length > 0
+    && materialization.fromRepo !== materialization.toRepo
+    && exactJson(materialization.copied, [
+      "blocks",
+      "manifests",
+      "dht/providers",
+      "storage_publications",
+      "verified_assets",
+    ]);
+}
+
+function validCompletedGate3StorageMetrics(report) {
+  const storage = report.metrics?.storage;
+  const expected = {
+    providerBNetwork: report.providerBFetch?.endToEndMs,
+    providerBCache: report.providerBCachedFetch?.endToEndMs,
+    coldCNetwork: report.coldCFetch?.endToEndMs,
+    coldCCache: report.coldCCachedFetch?.endToEndMs,
+  };
+  return exactKeys(report.metrics, ["storage"])
+    && exactKeys(storage, ["cachedFetch", "clock", "firstNetworkFetch"])
+    && storage.clock === "performance.now monotonic milliseconds"
+    && exactKeys(storage.firstNetworkFetch, ["coldC", "providerB"])
+    && exactKeys(storage.cachedFetch, ["coldC", "providerB"])
+    && [
+      [storage.firstNetworkFetch.providerB, "network", expected.providerBNetwork],
+      [storage.firstNetworkFetch.coldC, "network", expected.coldCNetwork],
+      [storage.cachedFetch.providerB, "cache", expected.providerBCache],
+      [storage.cachedFetch.coldC, "cache", expected.coldCCache],
+    ].every(([metric, mode, elapsedMs]) =>
+      exactKeys(metric, ["endToEndMs", "mode"])
+      && metric.mode === mode
+      && Number.isSafeInteger(metric.endToEndMs)
+      && metric.endToEndMs >= 0
+      && metric.endToEndMs === elapsedMs,
+    );
+}
+
+function validCompletedGate3AssetStateProof(proof) {
+  const validAsset = (asset, requireBefore) => exactKeys(asset, [
+    ...(requireBefore ? ["before"] : []),
+    "cid",
+    "completed",
+    "dispatched",
+    "role",
+  ])
+    && asset.role === "room-background"
+    && storageCidPattern.test(asset.cid)
+    && (!requireBefore || validTimedReceipt(asset.before))
+    && validTimedReceipt(asset.dispatched, "ok;asset=fetching;")
+    && validTimedReceipt(asset.completed);
+  return exactKeys(proof, ["degradedAsset", "states", "verifiedAsset"])
+    && exactJson(proof.states, ["missing", "fetching", "verified", "degraded"])
+    && validAsset(proof.verifiedAsset, true)
+    && validAsset(proof.degradedAsset, false)
+    && proof.verifiedAsset.completed.receipt.startsWith("verified;handle=")
+    && proof.degradedAsset.completed.receipt.startsWith("degraded;reason=");
+}
+
+function validCompletedGate3Screenshot(screenshot) {
+  return exactKeys(screenshot, [
+    "artifactPath",
+    "byteLength",
+    "file",
+    "height",
+    "label",
+    "renderEvidence",
+    "sha256",
+    "stage",
+    "state",
+    "width",
+  ])
+    && screenshot.file === "gate3-admin-assets-published.png"
+    && screenshot.artifactPath === screenshot.file
+    && screenshot.label === "a"
+    && screenshot.stage === "gate3-admin-asset-authoring"
+    && screenshot.state === "admin-selected-assets-approved-published-assigned"
+    && Number.isSafeInteger(screenshot.width)
+    && screenshot.width > 0
+    && Number.isSafeInteger(screenshot.height)
+    && screenshot.height > 0
+    && Number.isSafeInteger(screenshot.byteLength)
+    && screenshot.byteLength > 0
+    && sha256Pattern.test(screenshot.sha256)
+    && exactKeys(screenshot.renderEvidence, [
+      "atriumAssigned",
+      "cardCount",
+      "epoch",
+      "fenceFrame",
+      "fenceRequest",
+      "fenceState",
+      "loungeAssigned",
+      "open",
+      "propAssigned",
+      "publishedCount",
+      "readyImageCount",
+      "schema",
+      "version",
+    ])
+    && screenshot.renderEvidence.schema === "logos.palace.asset-authoring-render"
+    && screenshot.renderEvidence.version === 1
+    && screenshot.renderEvidence.open === true
+    && screenshot.renderEvidence.atriumAssigned === true
+    && screenshot.renderEvidence.loungeAssigned === true
+    && screenshot.renderEvidence.propAssigned === false
+    && screenshot.renderEvidence.fenceState === "complete"
+    && Number.isSafeInteger(screenshot.renderEvidence.cardCount)
+    && screenshot.renderEvidence.cardCount > 0
+    && screenshot.renderEvidence.readyImageCount
+      === screenshot.renderEvidence.cardCount
+    && screenshot.renderEvidence.publishedCount
+      === screenshot.renderEvidence.cardCount;
+}
+
+function validCompletedGate3StrictEvidenceRejection(report) {
+  return exactKeys(report, [
+    "assetAuthoring",
+    "assetAuthoringScreenshot",
+    "assetStateProof",
+    "basecampBinarySha256",
+    "basecampRevision",
+    "blockers",
+    "cleanup",
+    "coldCCachedFetch",
+    "coldCFetch",
+    "creatorOffline",
+    "creatorStopIntent",
+    "fullGate3",
+    "identities",
+    "installedPackages",
+    "metrics",
+    "packageHashes",
+    "pngRecovery",
+    "productSnapshot",
+    "productSnapshotNarHash",
+    "productSnapshotNarSize",
+    "productionIdentityMode",
+    "providerBCachedFetch",
+    "providerBFetch",
+    "providerBRetentionProofs",
+    "publication",
+    "releasePreflight",
+    "runtimeOutputManifestSha256",
+    "schema",
+    "snapshotRunnerSha256",
+    "sourceCommit",
+    "startup",
+    "status",
+    "storageBlockMaterialization",
+    "storageBlockMaterializationC",
+    "storageConfigs",
+    "storageMesh",
+    "storageMeshC",
+    "storageMeshPreFetch",
+    "storageMeshVisibility",
+    "storagePeerEndpoints",
+    "storageStartup",
+    "version",
+  ])
+    && report.schema === "logos.palace.basecamp-gate3-report"
+    && report.version === 1
+    && report.status === "passed"
+    && report.fullGate3 === "passed"
+    && !Object.hasOwn(report, "failure")
+    && report.productionIdentityMode === true
+    && exactKeys(report.cleanup, ["failures", "status"])
+    && report.cleanup.status === "passed"
+    && exactJson(report.cleanup.failures, [])
+    && exactJson(report.blockers, [])
+    && validCompletedGate3StorageStartup(report)
+    && validIdentityRegistrationAndSealedMvpBundle(
+      report.assetAuthoring,
+      report.publication,
+    )
+    && exactKeys(report.creatorStopIntent, ["checkpointed", "pid"])
+    && report.creatorStopIntent.checkpointed === true
+    && Number.isSafeInteger(report.creatorStopIntent.pid)
+    && report.creatorStopIntent.pid === report.startup.a.basecampPid
+    && report.creatorOffline === true
+    && validPostCreatorOfflineRetentionProofs(
+      report.providerBRetentionProofs,
+      report.publication,
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.providerBFetch,
+      report.publication,
+      "network",
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.providerBCachedFetch,
+      report.publication,
+      "cache",
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.coldCFetch,
+      report.publication,
+      "network",
+    )
+    && validPostCreatorOfflineBundleFetch(
+      report.coldCCachedFetch,
+      report.publication,
+      "cache",
+    )
+    && validCompletedGate3StorageTopology(report)
+    && validCompletedGate3StorageMetrics(report)
+    && validCompletedGate3AssetStateProof(report.assetStateProof)
+    && validCompletedGate3Screenshot(report.assetAuthoringScreenshot)
+    && report.pngRecovery === "passed";
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
@@ -2449,6 +2775,27 @@ function validatesAuditedPrePublicWriteGate3Report(
   const identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline =
     audit.reportProfile
       === identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile;
+  const completedGate3StrictEvidenceRejection =
+    audit.reportProfile === completedGate3StrictEvidenceRejectionProfile;
+  if (completedGate3StrictEvidenceRejection) {
+    if (
+      report.productSnapshot !== predecessor.productSnapshot
+      || report.sourceCommit !== predecessor.gitCommit
+      || report.productSnapshotNarHash !== predecessor.snapshotNarHash
+      || report.productSnapshotNarSize !== predecessor.snapshotNarSize
+      || report.snapshotRunnerSha256 !== predecessor.snapshotRunnerSha256
+      || report.runtimeOutputManifestSha256
+        !== predecessor.runtimeManifestSha256
+      || report.releasePreflight?.status !== "passed"
+      || report.releasePreflight?.rootAccountBeforeWrites?.status !== "passed"
+      || report.releasePreflight.rootAccountBeforeWrites.state
+        !== "uninitialized"
+      || !validCompletedGate3StrictEvidenceRejection(report)
+    ) {
+      throw new Error("audited Gate 3 pre-public-write report is invalid");
+    }
+    return;
+  }
   const hasSealedMvpBundle = identityRegistrationAndSealedMvpBundle
     || identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOffline;
   const hasAssetAuthoring = identityRegistrationAndIdleStorage

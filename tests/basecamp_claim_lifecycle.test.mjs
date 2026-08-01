@@ -488,6 +488,133 @@ function sealedBundleRetainedAfterCreatorOfflineGate3Report(predecessor) {
   return report;
 }
 
+function completedGate3StrictEvidenceRejectionReport(predecessor) {
+  const report = sealedBundleRetainedAfterCreatorOfflineGate3Report(
+    predecessor,
+  );
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const storageStatus = (state) => ({
+    receipt:
+      `ok;storage=${state};pending=0;callbacks=0;callback_registration=ready;`
+      + "reconciliation_required=0;catalog=idle;catalog_verified=0;"
+      + "retention_round=0;retained=0",
+    elapsedMs: 1,
+  });
+  const endpointC = {
+    peerId: "peer-c",
+    spr: "spr:peer-c",
+    addrs: ["/ip4/127.0.0.1/tcp/41003"],
+    announceAddresses: ["/ip4/127.0.0.1/tcp/41003"],
+    tablePeers: ["peer-c", "peer-b"],
+    seenPeers: [],
+  };
+  const meshDial = (from, to) => ({
+    from,
+    to,
+    peerId: report.storagePeerEndpoints[to].peerId,
+    addresses: [
+      report.storagePeerEndpoints[to].addrs[0],
+      `${report.storagePeerEndpoints[to].addrs[0]}/p2p/${report.storagePeerEndpoints[to].peerId}`,
+    ],
+    result: { receipt: "ok;connect=sent;peers=2", elapsedMs: 1 },
+  });
+  const cid = report.publication.objects[0].cid;
+  const handle = report.assetAuthoring.assets[0].handle;
+
+  report.status = "passed";
+  report.fullGate3 = "passed";
+  delete report.failure;
+  report.pngRecovery = "passed";
+  report.storageStartup.c = {
+    start: storageStatus("starting"),
+    running: storageStatus("running"),
+  };
+  report.storagePeerEndpoints.c = endpointC;
+  report.storageMeshC = {
+    labels: ["b", "c"],
+    dials: [meshDial("b", "c"), meshDial("c", "b")],
+    settleMs: 1,
+  };
+  report.storageBlockMaterializationC = {
+    fromRepo: "/fixture/b/repo",
+    toRepo: "/fixture/c/repo",
+    fromLabel: "b",
+    toLabel: "c",
+    mode: "co-located-block-copy",
+    copied: [
+      "blocks",
+      "manifests",
+      "dht/providers",
+      "storage_publications",
+      "verified_assets",
+    ],
+  };
+  report.coldCFetch = clone(report.providerBFetch);
+  report.coldCCachedFetch = clone(report.providerBCachedFetch);
+  report.metrics = {
+    storage: {
+      clock: "performance.now monotonic milliseconds",
+      firstNetworkFetch: {
+        providerB: { mode: "network", endToEndMs: report.providerBFetch.endToEndMs },
+        coldC: { mode: "network", endToEndMs: report.coldCFetch.endToEndMs },
+      },
+      cachedFetch: {
+        providerB: { mode: "cache", endToEndMs: report.providerBCachedFetch.endToEndMs },
+        coldC: { mode: "cache", endToEndMs: report.coldCCachedFetch.endToEndMs },
+      },
+    },
+  };
+  report.assetStateProof = {
+    states: ["missing", "fetching", "verified", "degraded"],
+    verifiedAsset: {
+      role: "room-background",
+      cid,
+      before: { receipt: "missing", elapsedMs: 1 },
+      dispatched: {
+        receipt: "ok;asset=fetching;operation=fixture-1",
+        elapsedMs: 1,
+      },
+      completed: { receipt: `verified;handle=${handle}`, elapsedMs: 1 },
+    },
+    degradedAsset: {
+      role: "room-background",
+      cid,
+      dispatched: {
+        receipt: "ok;asset=fetching;operation=fixture-2",
+        elapsedMs: 1,
+      },
+      completed: { receipt: "degraded;reason=fixture", elapsedMs: 1 },
+    },
+  };
+  report.assetAuthoringScreenshot = {
+    file: "gate3-admin-assets-published.png",
+    artifactPath: "gate3-admin-assets-published.png",
+    width: 1,
+    height: 1,
+    byteLength: 1,
+    sha256: "f".repeat(64),
+    stage: "gate3-admin-asset-authoring",
+    state: "admin-selected-assets-approved-published-assigned",
+    label: "a",
+    renderEvidence: {
+      schema: "logos.palace.asset-authoring-render",
+      version: 1,
+      open: true,
+      cardCount: 2,
+      readyImageCount: 2,
+      publishedCount: 2,
+      atriumAssigned: true,
+      loungeAssigned: true,
+      propAssigned: false,
+      fenceRequest: 1,
+      fenceState: "complete",
+      fenceFrame: 1,
+      epoch: 1,
+    },
+  };
+  return report;
+}
+
 async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
@@ -1243,6 +1370,58 @@ test("rolls forward sealed storage retained after creator shutdown before a Pala
       ),
     );
     assert.equal(certificate.status, "audited-pre-public-write-failure");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.status, "retired-pre-public-write");
+  });
+});
+
+test("rolls forward audited completed Gate 3 strict-evidence rejection before a Palace write", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    const compiled = failedReport(predecessorClaim.productSnapshot, "gate3");
+    compiled.failure.message = "gate report failed strict validation";
+    await writeJson(compiledPath, compiled);
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    await writeJson(
+      gate3Path,
+      completedGate3StrictEvidenceRejectionReport(predecessorClaim),
+    );
+    prePublicWriteAudit.reportProfile =
+      "completed-gate3-strict-evidence-rejection-before-palace-write";
+    prePublicWriteAudit.retirementStatus = "audited-strict-evidence-rejection";
+    prePublicWriteAudit.gate3Failure = "gate report failed strict validation";
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-public-write-gate3-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.status, "audited-strict-evidence-rejection");
     const evidence = JSON.parse(
       await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
     );
