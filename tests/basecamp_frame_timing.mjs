@@ -14,7 +14,7 @@ const evidenceKeys = Object.freeze([
 ]);
 
 export const palaceFrameTimingContract = Object.freeze({
-  basecampRevision: "115ffcafd7ccc0555c6f15f93c1562c4025f148e",
+  basecampRevision: "3de3c4476b7061e36760b39f97653766ef4434f0",
   qtVersion: "6.9.2",
   qtSourceTag: "v6.9.2",
   qtSourcePath: "src/quick/util/qquickframeanimation.cpp",
