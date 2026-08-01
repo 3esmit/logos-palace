@@ -4920,7 +4920,9 @@ std::string PalaceCoreImpl::storagePeerEndpoint()
             }
         }
         // DHT routing table peer IDs (for multi-node mesh readiness checks).
+        // Prefer nodes with seen=true (actually observed), not just records.
         QJsonArray tablePeers;
+        QJsonArray seenPeers;
         if (debug.contains("table") && debug["table"].is_object()) {
             const auto& table = debug["table"];
             if (table.contains("localNode")
@@ -4943,12 +4945,20 @@ std::string PalaceCoreImpl::storagePeerEndpoint()
                         node["peerId"].get<std::string>();
                     if (id.empty() || id.size() > 1024U)
                         continue;
-                    tablePeers.append(QString::fromStdString(id));
+                    const QString qid = QString::fromStdString(id);
+                    tablePeers.append(qid);
+                    bool seen = false;
+                    if (node.contains("seen") && node["seen"].is_boolean())
+                        seen = node["seen"].get<bool>();
+                    if (seen)
+                        seenPeers.append(qid);
                 }
             }
         }
         if (!tablePeers.isEmpty())
             endpoint.insert(QStringLiteral("tablePeers"), tablePeers);
+        if (!seenPeers.isEmpty())
+            endpoint.insert(QStringLiteral("seenPeers"), seenPeers);
     }
 
     const QByteArray encoded =

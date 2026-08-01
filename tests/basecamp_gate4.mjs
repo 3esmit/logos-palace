@@ -415,8 +415,8 @@ function exactProductionStorageConfig(config) {
     || Array.isArray(config)
     || typeof config !== "object"
     || config["log-level"] !== "INFO"
-    || config["listen-ip"] !== "0.0.0.0"
-    || config.nat !== "extip:127.0.0.1"
+    || config["listen-ip"] !== "127.0.0.1"
+    || config.nat !== "none"
     || !Number.isInteger(config["listen-port"])
     || config["listen-port"] < 1024
     || config["listen-port"] > 65535

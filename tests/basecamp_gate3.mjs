@@ -302,14 +302,14 @@ function parseStorageBaseConfig() {
     );
   }
   if (!raw) {
-    // Co-located production multi-node: announce loopback so peers can dial.
-    // Creator uses no-bootstrap-node; peers inject bootstrap-node=[creator SPR]
-    // after A starts (private mesh — public logos.test DHT filters private
-    // multiaddrs and hangs gate3FetchBundle on GetProviders).
+    // Co-located production multi-node: bind and announce loopback only so
+    // content streams never depend on LAN/public multiaddrs. Creator uses
+    // no-bootstrap-node; peers inject bootstrap-node=[creator SPR] after
+    // publication (private mesh).
     return {
       "log-level": "INFO",
-      "listen-ip": "0.0.0.0",
-      "nat": "extip:127.0.0.1",
+      "listen-ip": "127.0.0.1",
+      "nat": "none",
     };
   }
   if (Buffer.byteLength(raw, "utf8") > 64 * 1024) {
@@ -363,8 +363,8 @@ function exactProductionStorageConfig(config) {
     || Array.isArray(config)
     || typeof config !== "object"
     || config["log-level"] !== "INFO"
-    || config["listen-ip"] !== "0.0.0.0"
-    || config.nat !== "extip:127.0.0.1"
+    || config["listen-ip"] !== "127.0.0.1"
+    || config.nat !== "none"
     || !exactProductionStoragePorts(config)
   ) {
     return false;
@@ -431,6 +431,7 @@ function parseStoragePeerEndpointReceipt(receipt) {
       ? parsed.announceAddresses
       : [],
     tablePeers: Array.isArray(parsed.tablePeers) ? parsed.tablePeers : [],
+    seenPeers: Array.isArray(parsed.seenPeers) ? parsed.seenPeers : [],
   };
 }
 
@@ -448,8 +449,11 @@ async function waitForStorageMeshVisibility(
     for (const label of labels) {
       last[label] = await readStoragePeerEndpoint(workersByLabel.get(label));
     }
+    // Require observed (seen) peers when available; fall back to tablePeers.
     const ready = labels.every((label) => {
-      const peers = new Set(last[label]?.tablePeers || []);
+      const seen = last[label]?.seenPeers || [];
+      const table = last[label]?.tablePeers || [];
+      const peers = new Set(seen.length > 0 ? seen : table);
       return labels.every(
         (other) => other === label || peers.has(endpoints[other].peerId),
       );
@@ -2755,7 +2759,8 @@ try {
       const parsed = JSON.parse(configs[label]);
       delete parsed.network;
       delete parsed["no-bootstrap-node"];
-      parsed.nat = "extip:127.0.0.1";
+      parsed["listen-ip"] = "127.0.0.1";
+      parsed.nat = "none";
       parsed["bootstrap-node"] = [creatorEndpoint.spr];
       if (!exactProductionStorageConfig(parsed)) {
         throw new Error(`storage config ${label} unsafe after bootstrap inject`);

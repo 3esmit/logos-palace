@@ -490,6 +490,25 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.raitXnpX @ 0c4131b: fetch pre-cache still network-fetch-timeout
+  Object.freeze({
+    gitCommit: "0c4131b36fc7951fddebfd879330cd81b97c7869",
+    snapshotNarHash:
+      "sha256-JvX+N1pRo4KxhpE4vawyS9dV0ihYOozuUemDE8srbOc=",
+    snapshotNarSize: 7286664,
+    snapshotRunnerSha256:
+      "b09880ccfeee674e1c4388a06940c42084563405feaa854fdf0ae19b9fedaa55",
+    runtimeManifestSha256:
+      "2e9c620b39e4a66e731055cf6302a64ffd5fb809461d0bfd67e59d1c9a766339",
+    compiledReportSha256:
+      "ef3f47b3bc4ba8f6ee8ed7b63994eb02d5804ecdf5f5e8459d9df877029a1b94",
+    gate3ReportSha256:
+      "2ee717436b85d15bd10ae77a55e2435f579983a17d10847fd72d265e36727c79",
+    gate3Failure:
+      "fetch exact MVP bundle on b degraded: state=degraded;published=8;verified=0;total=8;retention=degraded;failed_object=background-atrium;failed_reason=network-fetch-timeout",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: identityRegistrationAndSealedMvpBundleProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
