@@ -352,7 +352,7 @@ const networkContract = {
   productionDeliveryEnvelopeNetworkId: "logos-lez-testnet-v0.2.0",
   deliveryTransport: "direct-entry-node-test-topology",
   sharedFleetUsed: false,
-  storageNetworkId: "logos.test",
+  storageTopology: "private-loopback-bootstrap-mesh",
   lezNetworkId: "logos-lez-testnet-v0.2.0",
   lezModuleApiVersion: "0.4.0-alpha.2",
   lezModuleRevision: "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
@@ -366,15 +366,20 @@ const networkContract = {
   lezReadOrigin: palaceRelease.explorerOrigin,
 };
 
-function storageConfig(tcpPort, discPort) {
-  return JSON.stringify({
+function storageConfig(label, tcpPort, discPort) {
+  const config = {
     "log-level": "INFO",
-    "listen-ip": "0.0.0.0",
+    "listen-ip": "127.0.0.1",
     "listen-port": tcpPort,
     "disc-port": discPort,
-    nat: "any",
-    network: "logos.test",
-  });
+    nat: "none",
+  };
+  if (label === "a") {
+    config["no-bootstrap-node"] = true;
+  } else {
+    config["bootstrap-node"] = ["spr:fixture-creator-bootstrap-node"];
+  }
+  return JSON.stringify(config);
 }
 
 function deliveryConfig(label, port, entryNode) {
@@ -1367,9 +1372,9 @@ async function fixture() {
     basecampBinarySha256: basecampSha256,
     packageHashes: lgxPackages,
     storageConfigs: {
-      a: storageConfig(31001, 32001),
-      b: storageConfig(31002, 32002),
-      c: storageConfig(31003, 32003),
+      a: storageConfig("a", 31001, 32001),
+      b: storageConfig("b", 31002, 32002),
+      c: storageConfig("c", 31003, 32003),
     },
     releasePreflight,
     assetAuthoring: {

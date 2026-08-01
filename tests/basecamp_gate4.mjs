@@ -8015,11 +8015,6 @@ try {
     ),
   );
   validateDirectEntryNodeTopology(report.delivery.initialMesh);
-  const storageNetworkIds = labels.map((label) =>
-    parseJsonObject(
-      storageConfigs[label],
-      `release contract Storage config ${label}`,
-    ).network);
   const entryVmProfile =
     plan.actions[0].transition.entry_room.vm_profile;
   const secondaryVmProfile =
@@ -8030,9 +8025,7 @@ try {
     recoverPersistedTimingEvidence(action, "finalized")
       .map((field) => `${action.actionId}:${field}`));
   if (
-    new Set(storageNetworkIds).size !== 1
-    || storageNetworkIds[0] !== "logos.test"
-    || entryVmProfile !== "iptscrae_mvp_v1"
+    entryVmProfile !== "iptscrae_mvp_v1"
     || secondaryVmProfile !== entryVmProfile
     || storageCatalogProtocol
       !== "logos-palace-mvp-storage-catalog-v1"
@@ -8123,7 +8116,7 @@ try {
         "logos-lez-testnet-v0.2.0",
       deliveryTransport: "direct-entry-node-test-topology",
       sharedFleetUsed: false,
-      storageNetworkId: storageNetworkIds[0],
+      storageTopology: "private-loopback-bootstrap-mesh",
       lezNetworkId: "logos-lez-testnet-v0.2.0",
       lezModuleApiVersion: "0.4.0-alpha.2",
       lezModuleRevision,

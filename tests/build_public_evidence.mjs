@@ -377,7 +377,7 @@ const networkContract = Object.freeze({
   productionDeliveryEnvelopeNetworkId: "logos-lez-testnet-v0.2.0",
   deliveryTransport: "direct-entry-node-test-topology",
   sharedFleetUsed: false,
-  storageNetworkId: "logos.test",
+  storageTopology: "private-loopback-bootstrap-mesh",
   lezNetworkId: "logos-lez-testnet-v0.2.0",
   lezModuleApiVersion: "0.4.0-alpha.2",
   lezModuleRevision: "e8d84103660604b1a6a06ddd66d20da7a2fdeb3f",
@@ -2567,6 +2567,85 @@ function validateDirectEntryTopology(gate4) {
   }
 }
 
+function validPrivateStorageBootstrapNodes(bootstrap) {
+  return (
+    Array.isArray(bootstrap)
+    && bootstrap.length >= 1
+    && bootstrap.length <= 8
+    && bootstrap.every(
+      (entry) =>
+        typeof entry === "string"
+        && entry.length >= 16
+        && entry.length <= 8192
+        && !entry.includes("\0"),
+    )
+  );
+}
+
+function validPrivateLoopbackStorageConfig(label, config) {
+  if (
+    !config
+    || Array.isArray(config)
+    || typeof config !== "object"
+    || config["log-level"] !== "INFO"
+    || config["listen-ip"] !== "127.0.0.1"
+    || config.nat !== "none"
+    || !Number.isSafeInteger(config["listen-port"])
+    || config["listen-port"] < 1024
+    || config["listen-port"] > 65535
+    || !Number.isSafeInteger(config["disc-port"])
+    || config["disc-port"] < 1024
+    || config["disc-port"] > 65535
+  ) {
+    return false;
+  }
+  if (label === "a") {
+    return (
+      exactKeys(config, [
+        "disc-port",
+        "listen-ip",
+        "listen-port",
+        "log-level",
+        "nat",
+        "no-bootstrap-node",
+      ])
+      && config["no-bootstrap-node"] === true
+    );
+  }
+  return (
+    exactKeys(config, [
+      "bootstrap-node",
+      "disc-port",
+      "listen-ip",
+      "listen-port",
+      "log-level",
+      "nat",
+    ])
+    && validPrivateStorageBootstrapNodes(config["bootstrap-node"])
+  );
+}
+
+function validPrivateLoopbackStorageConfigs(configs) {
+  if (!exactKeys(configs, ["a", "b", "c"])) return false;
+  const parsed = {};
+  for (const label of ["a", "b", "c"]) {
+    try {
+      parsed[label] = JSON.parse(configs[label]);
+    } catch {
+      return false;
+    }
+    if (!validPrivateLoopbackStorageConfig(label, parsed[label])) {
+      return false;
+    }
+  }
+  return (
+    new Set(Object.values(parsed).map(({ "listen-port": port }) => port)).size
+      === 3
+    && new Set(Object.values(parsed).map(({ "disc-port": port }) => port)).size
+      === 3
+  );
+}
+
 function publicContracts(reports) {
   const gate2 = reports.gate2.value;
   const gate3 = reports.gate3.value;
@@ -2587,40 +2666,7 @@ function publicContracts(reports) {
   ) {
     throw new Error("raw protocol or network release contract differs");
   }
-  if (
-    !exactKeys(gate3.storageConfigs, ["a", "b", "c"])
-    || Object.values(gate3.storageConfigs).some((encoded) => {
-      let config;
-      try {
-        config = JSON.parse(encoded);
-      } catch {
-        return true;
-      }
-      return (
-        !exactKeys(
-          config,
-          [
-            "disc-port",
-            "listen-ip",
-            "listen-port",
-            "log-level",
-            "nat",
-            "network",
-          ],
-        )
-        || config.network !== networkContract.storageNetworkId
-        || config["log-level"] !== "INFO"
-        || config["listen-ip"] !== "0.0.0.0"
-        || config.nat !== "any"
-        || !Number.isSafeInteger(config["listen-port"])
-        || config["listen-port"] < 1024
-        || config["listen-port"] > 65535
-        || !Number.isSafeInteger(config["disc-port"])
-        || config["disc-port"] < 1024
-        || config["disc-port"] > 65535
-      );
-    })
-  ) {
+  if (!validPrivateLoopbackStorageConfigs(gate3.storageConfigs)) {
     throw new Error("raw Storage network evidence differs");
   }
   validateDirectEntryTopology(gate4);

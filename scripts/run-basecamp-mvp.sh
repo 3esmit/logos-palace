@@ -1884,27 +1884,55 @@ gate_report_passes() {
           and (.receipt | length) > 0
           and (.receipt | length) <= 65536;
 
-      def valid_production_storage_config:
+      def valid_private_storage_bootstrap_nodes:
+        type == "array"
+          and length >= 1
+          and length <= 8
+          and all(
+            .[];
+            type == "string"
+              and length >= 16
+              and length <= 8192
+              and (contains("\u0000") | not)
+          );
+
+      def valid_private_storage_config:
         fromjson
-        | (keys | sort)
-            == [
-              "disc-port",
-              "listen-ip",
-              "listen-port",
-              "log-level",
-              "nat",
-              "network"
-            ]
-          and .["log-level"] == "INFO"
-          and .["listen-ip"] == "0.0.0.0"
-          and .nat == "any"
-          and .network == "logos.test"
+        | .["log-level"] == "INFO"
+          and .["listen-ip"] == "127.0.0.1"
+          and .nat == "none"
           and (.["listen-port"] | valid_nonnegative_integer)
           and .["listen-port"] >= 1024
           and .["listen-port"] <= 65535
           and (.["disc-port"] | valid_nonnegative_integer)
           and .["disc-port"] >= 1024
-          and .["disc-port"] <= 65535;
+          and .["disc-port"] <= 65535
+          and (
+            (
+              exact_object_keys([
+                "disc-port",
+                "listen-ip",
+                "listen-port",
+                "log-level",
+                "nat",
+                "no-bootstrap-node"
+              ])
+              and .["no-bootstrap-node"] == true
+            )
+            or
+            (
+              exact_object_keys([
+                "bootstrap-node",
+                "disc-port",
+                "listen-ip",
+                "listen-port",
+                "log-level",
+                "nat"
+              ])
+              and (.["bootstrap-node"]
+                | valid_private_storage_bootstrap_nodes)
+            )
+          );
 
       def valid_asset_invocation:
         exact_object_keys(["receipt", "elapsedMs"])
@@ -2384,7 +2412,7 @@ gate_report_passes() {
             type == "string"
               and length > 0
               and length <= 65536
-              and valid_production_storage_config
+              and valid_private_storage_config
           )
           and all(
             [.providerBFetch, .coldCFetch][];
@@ -3518,7 +3546,7 @@ gate_report_passes() {
                 "logos-lez-testnet-v0.2.0",
               deliveryTransport: "direct-entry-node-test-topology",
               sharedFleetUsed: false,
-              storageNetworkId: "logos.test",
+              storageTopology: "private-loopback-bootstrap-mesh",
               lezNetworkId: "logos-lez-testnet-v0.2.0",
               lezModuleApiVersion: "0.4.0-alpha.2",
               lezModuleRevision:
