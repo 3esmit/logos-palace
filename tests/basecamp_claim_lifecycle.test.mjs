@@ -701,6 +701,62 @@ function preRootWriteGate4FailureReport(audit) {
   };
 }
 
+function preRootWriteGate4ActionZeroSubmitSyncFailureReport(
+  predecessor,
+  audit,
+) {
+  const report = preRootWriteGate4FailureReport(audit);
+  const identities = Object.fromEntries(
+    Object.entries(
+      completedGate3StrictEvidenceRejectionReport(predecessor).identities,
+    ).map(([label, identity]) => [label, { ...identity, existing: true }]),
+  );
+  return {
+    ...report,
+    noPalaceServer: "passed",
+    processModel: { standalonePalaceServer: false },
+    detectedFinalizedPrefix: -1,
+    productSnapshot: predecessor.productSnapshot,
+    productSnapshotNarHash: predecessor.snapshotNarHash,
+    productSnapshotNarSize: predecessor.snapshotNarSize,
+    snapshotRunnerSha256: predecessor.snapshotRunnerSha256,
+    runtimeOutputManifestSha256: predecessor.runtimeManifestSha256,
+    sourceCommit: predecessor.gitCommit,
+    actions: [{
+      actionId: "0",
+      caller: "a",
+      callerAccountId: identities.a.accountId,
+      kind: "initialize",
+      observeAttempts: [],
+      reconcileAttempts: [],
+      status: "running",
+      submissionMethod: "gate4Submit",
+      submitAttempts: [{
+        elapsedMs: 1,
+        receipt: "rejected=lez-submit-sync;reason=synced-height-ahead",
+      }],
+      timingBoundaries: {
+        submitStartedAtUnixMs: 1,
+        totalStartedAtUnixMs: 1,
+      },
+      timingMeasurement: {},
+      timings: {},
+      transitionSha256: "a".repeat(64),
+    }],
+    checkpoints: {
+      initialProbe: "skipped=no-exact-prior-finalized-action-zero",
+      initialProbeMode: "fresh-or-local-journal-resume",
+    },
+    identities,
+    cleanup: { status: "passed", failures: [] },
+    failures: [{
+      phase: "gate4-actions-zero-through-seven",
+      message:
+        "action 0 submit rejected: rejected=lez-submit-sync;reason=synced-height-ahead",
+    }],
+  };
+}
+
 function preRootWriteGate4Scope() {
   return {
     schema: "logos.palace.basecamp-process-scope",
@@ -741,7 +797,13 @@ async function writeAuditedPreRootWriteGate4Artifacts({
   const gate4Path = join(gate4Directory, "gate4-report.json");
   await writeJson(
     gate4Path,
-    preRootWriteGate4FailureReport(preRootWriteGate4Audit),
+    preRootWriteGate4Audit.reportProfile
+      === "gate4-action-zero-submit-sync-rejection-before-palace-write"
+      ? preRootWriteGate4ActionZeroSubmitSyncFailureReport(
+        predecessorClaim,
+        preRootWriteGate4Audit,
+      )
+      : preRootWriteGate4FailureReport(preRootWriteGate4Audit),
   );
   const scopePath = join(gate4Directory, "process-scope.json");
   await writeJson(scopePath, preRootWriteGate4Scope());
@@ -764,6 +826,7 @@ async function fixture({
   legacy = false,
   additionalPrePublicWriteAudits = [],
   additionalPreRootWriteGate4Audits = [],
+  preRootWriteGate4AuditOverrides = {},
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "palace-claim-lifecycle-"));
   const claimDirectory = join(root, "claims");
@@ -897,6 +960,13 @@ async function fixture({
     gate3Failure: "production LEZ a: rejected=lez-network-fingerprint",
     retirementStatus: "audited-fingerprint-rejection",
   };
+  const {
+    cleanupStatus = "failed",
+    initialFailure = "fixture startup guard rejected unrelated process",
+    retirementStatus = "audited-pre-root-write-gate4-harness-failure",
+    terminalFailure,
+    ...preRootWriteGate4AuditExtra
+  } = preRootWriteGate4AuditOverrides;
   const preRootWriteGate4Audit = {
     gitCommit: predecessorCommon.gitCommit,
     snapshotNarHash: predecessorCommon.snapshotNarHash,
@@ -907,10 +977,16 @@ async function fixture({
     gate3ReportSha256: "f".repeat(64),
     gate4ReportSha256: "1".repeat(64),
     gate4ScopeSha256: "2".repeat(64),
-    cleanupStatus: "failed",
-    initialFailure: "fixture startup guard rejected unrelated process",
-    terminalFailure: "fixture cleanup rejected unrelated process",
-    retirementStatus: "audited-pre-root-write-gate4-harness-failure",
+    cleanupStatus,
+    initialFailure,
+    retirementStatus,
+    ...preRootWriteGate4AuditExtra,
+    ...(cleanupStatus === "failed"
+      ? {
+        terminalFailure:
+          terminalFailure ?? "fixture cleanup rejected unrelated process",
+      }
+      : {}),
   };
   let timestamp = 1_700_000_001_000;
   let lockChecks = 0;
@@ -1757,6 +1833,60 @@ test("rolls forward an audited Gate 4 listener-boundary failure with clean clean
   });
 });
 
+test("rolls forward the exact audited Gate 4 action-zero sync rejection", async () => {
+  await withFixture({
+    preRootWriteGate4AuditOverrides: {
+      cleanupStatus: "passed",
+      initialFailure:
+        "action 0 submit rejected: rejected=lez-submit-sync;reason=synced-height-ahead",
+      retirementStatus:
+        "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+      reportProfile:
+        "gate4-action-zero-submit-sync-rejection-before-palace-write",
+    },
+  }, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    preRootWriteGate4Audit,
+    lifecycle,
+  }) => {
+    await writeAuditedPreRootWriteGate4Artifacts({
+      predecessorRun,
+      predecessorClaim,
+      preRootWriteGate4Audit,
+    });
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-root-write-gate4-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(
+      certificate.status,
+      "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+    );
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.status, "retired-pre-root-write-gate4");
+    assert.equal(
+      evidence.proof.gate4Artifacts,
+      "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+    );
+    assert.equal(evidence.proof.rootAccount, "uninitialized");
+  });
+});
+
 test("rejects audited Gate 4 pre-root-write evidence after any action", async () => {
   await withFixture({}, async ({
     claimPath,
@@ -1788,6 +1918,108 @@ test("rejects audited Gate 4 pre-root-write evidence after any action", async ()
       /pre-root-write report is invalid/,
     );
   });
+});
+
+test("rejects mutations of the audited Gate 4 action-zero sync rejection", async () => {
+  const mutations = [
+    (report) => {
+      report.actions[0].submitAttempts[0].receipt =
+        "rejected=lez-submit-sync;reason=other";
+    },
+    (report) => {
+      report.actions[0].status = "finalized";
+      report.detectedFinalizedPrefix = 0;
+    },
+    (report) => {
+      report.release.rootAccountBeforeWrites.state = "initialized";
+      report.release.revalidation.rootAdvancedByGate4 = true;
+    },
+    (report) => {
+      report.noPalaceServer = "failed";
+      report.processModel.standalonePalaceServer = true;
+    },
+  ];
+  for (const mutate of mutations) {
+    await withFixture({
+      preRootWriteGate4AuditOverrides: {
+        cleanupStatus: "passed",
+        initialFailure:
+          "action 0 submit rejected: rejected=lez-submit-sync;reason=synced-height-ahead",
+        retirementStatus:
+          "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+        reportProfile:
+          "gate4-action-zero-submit-sync-rejection-before-palace-write",
+      },
+    }, async ({
+      claimPath,
+      predecessorClaim,
+      predecessorRun,
+      preRootWriteGate4Audit,
+      lifecycle,
+    }) => {
+      await writeAuditedPreRootWriteGate4Artifacts({
+        predecessorRun,
+        predecessorClaim,
+        preRootWriteGate4Audit,
+      });
+      const gate4Path = join(predecessorRun, "gate4", "gate4-report.json");
+      const gate4Report = JSON.parse(await readFile(gate4Path, "utf8"));
+      mutate(gate4Report);
+      await writeJson(gate4Path, gate4Report);
+      preRootWriteGate4Audit.gate4ReportSha256 = sha256(
+        await readFile(gate4Path),
+      );
+      await writeJson(claimPath, {
+        ...predecessorClaim,
+        status: "gate3-entered",
+        gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+      });
+
+      await assert.rejects(
+        lifecycle.execute("acquire-or-roll-forward"),
+        /pre-root-write report is invalid/,
+      );
+    });
+  }
+});
+
+test("rejects later Gate evidence after the audited action-zero sync rejection", async () => {
+  for (const gate of ["gate5", "gate6"]) {
+    await withFixture({
+      preRootWriteGate4AuditOverrides: {
+        cleanupStatus: "passed",
+        initialFailure:
+          "action 0 submit rejected: rejected=lez-submit-sync;reason=synced-height-ahead",
+        retirementStatus:
+          "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+        reportProfile:
+          "gate4-action-zero-submit-sync-rejection-before-palace-write",
+      },
+    }, async ({
+      claimPath,
+      predecessorClaim,
+      predecessorRun,
+      preRootWriteGate4Audit,
+      lifecycle,
+    }) => {
+      await writeAuditedPreRootWriteGate4Artifacts({
+        predecessorRun,
+        predecessorClaim,
+        preRootWriteGate4Audit,
+      });
+      await mkdir(join(predecessorRun, gate), { mode: 0o700 });
+      await writeJson(claimPath, {
+        ...predecessorClaim,
+        status: "gate3-entered",
+        gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+      });
+
+      await assert.rejects(
+        lifecycle.execute("acquire-or-roll-forward"),
+        new RegExp(`pre-root-write Gate ${gate.slice(-1)} evidence`),
+      );
+    });
+  }
 });
 
 test("keeps Gate 3 pre-public-write recovery when Gate 4 evidence is absent", async () => {
@@ -1969,6 +2201,39 @@ test("pins the exact audited Gate 4 listener-boundary failure", () => {
       initialFailure: "Basecamp TCP listener inventory is not exact",
       retirementStatus:
         "audited-pre-root-write-gate4-listener-boundary-failure",
+    },
+  );
+});
+
+test("pins the exact audited Gate 4 action-zero sync rejection", () => {
+  assert.deepEqual(
+    auditedPreRootWriteGate4HarnessFailures.find((audit) =>
+      audit.gitCommit === "9e0900f3438495100faa9550df642ba2e9ddcd79"
+    ),
+    {
+      gitCommit: "9e0900f3438495100faa9550df642ba2e9ddcd79",
+      snapshotNarHash:
+        "sha256-JNiMSzlIM9yW4EGLMqEKV6dXsMucHgk98KH53y/bPdQ=",
+      snapshotNarSize: 7_519_264,
+      snapshotRunnerSha256:
+        "69a85990456bdd1caac1825d129b3b61a089e3a25aeca78c54f373d6e15c8fa6",
+      runtimeManifestSha256:
+        "f2b60a2c4da20ca33e66cd9fc71453669b3ef8cc8c4cb4ca7fd4c912ef7a7d7c",
+      compiledReportSha256:
+        "754578a560b54ab5c5fdec4a670cf88276193e9be0cad3b7b2530112613def96",
+      gate3ReportSha256:
+        "f4f7a7cd8b1bd419f8750e61074e84b414e691cbd7dc92d127ea81692679d259",
+      gate4ReportSha256:
+        "93f7796082495f8b6429091fa27702bfef3bebc32354e35d2b6a23336f67a8a9",
+      gate4ScopeSha256:
+        "863900b9b1b98ac18bdf44cf8afdb6fe21ed07315366586c470dde9fba8a9ab3",
+      cleanupStatus: "passed",
+      initialFailure:
+        "action 0 submit rejected: rejected=lez-submit-sync;reason=synced-height-ahead",
+      retirementStatus:
+        "audited-pre-root-write-gate4-action-zero-submit-sync-rejection",
+      reportProfile:
+        "gate4-action-zero-submit-sync-rejection-before-palace-write",
     },
   );
 });
