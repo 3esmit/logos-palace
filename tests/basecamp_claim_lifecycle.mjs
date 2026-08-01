@@ -79,6 +79,17 @@ const gate4ActionZeroSubmitSyncFailure =
   `action 0 submit rejected: ${gate4ActionZeroSubmitSyncReceipt}`;
 const gate4ActionZeroSubmitSyncRetirementStatus =
   "audited-pre-root-write-gate4-action-zero-submit-sync-rejection";
+// Gate 4 can reject action zero while preparing its submission intent, before
+// the intent reaches the Palace root. This recovery remains limited to the
+// exact invalid-argument receipt and a later root revalidation.
+const gate4ActionZeroPrepareSaveRejectionProfile =
+  "gate4-action-zero-prepare-save-rejection-before-palace-write";
+const gate4ActionZeroPrepareSaveReceipt =
+  "rejected=lez-submit-intent-prepare-save;reason=invalid_argument";
+const gate4ActionZeroPrepareSaveFailure =
+  `action 0 submit rejected: ${gate4ActionZeroPrepareSaveReceipt}`;
+const gate4ActionZeroPrepareSaveRetirementStatus =
+  "audited-pre-root-write-gate4-action-zero-prepare-save-rejection";
 // Gate 4 can reach the package-swap boundary, then stop before its Node
 // runner creates gate4-report.json. This profile is deliberately bound to the
 // one source snapshot where the runner still approved the former LEZ revision
@@ -806,6 +817,32 @@ export const auditedPreRootWriteGate4HarnessFailures = Object.freeze([
     retirementStatus: gate4ActionZeroSubmitSyncRetirementStatus,
     reportProfile: gate4ActionZeroSubmitSyncRejectionProfile,
   }),
+  // run.HRFRvT5N @ 6218c50: Gate 3 and Gate 4 preflight passed, then Gate 4
+  // action zero rejected while persisting its LEZ submission intent. The
+  // release revalidation proves the root stayed uninitialized; no action
+  // journal, Gate 5/6 evidence, completion, or public evidence exists.
+  Object.freeze({
+    gitCommit: "6218c500499133d4e87058fe581e10156f22942d",
+    snapshotNarHash:
+      "sha256-mBz74gxIWa8S8GZ7C1ZkIBs/TFSxNPkZIdc+YIv2o/0=",
+    snapshotNarSize: 7_598_536,
+    snapshotRunnerSha256:
+      "46b41421863c14c93d8442f3e0af4f8efa2316672d092b0cd7b35bdb39e7f677",
+    runtimeManifestSha256:
+      "ee972a8426007f18971c7596cee845911383f00575c2a319ae3af7ea9ffce033",
+    compiledReportSha256:
+      "84b0a80c5d44c82b2b38c4f27972473e7057ae80af06f3367febe62ec2beec9d",
+    gate3ReportSha256:
+      "fdcfd56f107c08bb6bc9dd1db6ed1956c703d05392f4111f249898a98d4b221a",
+    gate4ReportSha256:
+      "d628dc7a52ae63768afb4ea22640a882caa856a2d36ea5c6deb5aba71cc9bda8",
+    gate4ScopeSha256:
+      "ecc63e1f8ca6181149b96d66d8a6d2209296db79cc8642d0f9078aab57b86ab8",
+    cleanupStatus: "passed",
+    initialFailure: gate4ActionZeroPrepareSaveFailure,
+    retirementStatus: gate4ActionZeroPrepareSaveRetirementStatus,
+    reportProfile: gate4ActionZeroPrepareSaveRejectionProfile,
+  }),
   // run.5FQR38Z8 @ 95d36fd: Gate 3 passed and Gate 4 swapped the audited
   // packages, but the wrapper stopped before the Gate 4 runner created a
   // report. The immutable source's former approved LEZ revision differed from
@@ -1005,6 +1042,13 @@ function validPreRootWriteGate4Audit(audit) {
           && audit.retirementStatus === gate4ActionZeroSubmitSyncRetirementStatus
         )
         || (
+          audit.reportProfile === gate4ActionZeroPrepareSaveRejectionProfile
+          && audit.cleanupStatus === "passed"
+          && audit.initialFailure === gate4ActionZeroPrepareSaveFailure
+          && audit.retirementStatus
+            === gate4ActionZeroPrepareSaveRetirementStatus
+        )
+        || (
           audit.reportProfile === gate4WrapperLezRevisionMismatchProfile
           && audit.cleanupStatus === "passed"
           && audit.initialFailure === gate4WrapperLezRevisionMismatchFailure
@@ -1016,6 +1060,7 @@ function validPreRootWriteGate4Audit(audit) {
       "audited-pre-root-write-gate4-harness-failure",
       "audited-pre-root-write-gate4-listener-boundary-failure",
       gate4ActionZeroSubmitSyncRetirementStatus,
+      gate4ActionZeroPrepareSaveRetirementStatus,
       gate4WrapperLezRevisionMismatchRetirementStatus,
     ].includes(audit.retirementStatus);
 }
@@ -3844,7 +3889,134 @@ function validPreRootWriteGate4ActionZeroSubmitSyncRejection(
     && revalidation.gate3AgeAtRevalidationMs >= 0;
 }
 
+function validPreRootWriteGate4ActionZeroPrepareSaveRejection(
+  report,
+  predecessor,
+  audit,
+) {
+  const root = report?.release?.rootAccountBeforeWrites;
+  const revalidation = report?.release?.revalidation;
+  const gate3Preflight = report?.release?.gate3Preflight;
+  const action = report?.actions?.[0];
+  const identities = report?.identities;
+  return audit.cleanupStatus === "passed"
+    && audit.initialFailure === gate4ActionZeroPrepareSaveFailure
+    && audit.retirementStatus === gate4ActionZeroPrepareSaveRetirementStatus
+    && report !== null
+    && typeof report === "object"
+    && report.schema === "logos.palace.basecamp-gate4-6-report"
+    && report.version === 2
+    && report.status === "failed"
+    && report.fullGate4 === "failed"
+    && report.fullGate5 === "failed"
+    && report.fullGate6 === "failed"
+    && report.noPalaceServer === "passed"
+    && report.processModel?.standalonePalaceServer === false
+    && report.detectedFinalizedPrefix === -1
+    && report.productSnapshot === predecessor.productSnapshot
+    && report.sourceCommit === predecessor.gitCommit
+    && report.productSnapshotNarHash === predecessor.snapshotNarHash
+    && report.productSnapshotNarSize === predecessor.snapshotNarSize
+    && report.snapshotRunnerSha256 === predecessor.snapshotRunnerSha256
+    && report.runtimeOutputManifestSha256
+      === predecessor.runtimeManifestSha256
+    && Array.isArray(report.actions)
+    && report.actions.length === 1
+    && exactKeys(action, [
+      "actionId",
+      "caller",
+      "callerAccountId",
+      "kind",
+      "observeAttempts",
+      "reconcileAttempts",
+      "status",
+      "submissionMethod",
+      "submitAttempts",
+      "timingBoundaries",
+      "timingMeasurement",
+      "timings",
+      "transitionSha256",
+    ])
+    && action.actionId === "0"
+    && action.caller === "a"
+    && action.kind === "initialize"
+    && action.status === "running"
+    && action.submissionMethod === "gate4Submit"
+    && exactJson(action.observeAttempts, [])
+    && exactJson(action.reconcileAttempts, [])
+    && Array.isArray(action.submitAttempts)
+    && action.submitAttempts.length === 1
+    && exactKeys(action.submitAttempts[0], ["elapsedMs", "receipt"])
+    && Number.isSafeInteger(action.submitAttempts[0].elapsedMs)
+    && action.submitAttempts[0].elapsedMs >= 0
+    && action.submitAttempts[0].receipt === gate4ActionZeroPrepareSaveReceipt
+    && exactKeys(action.timingBoundaries, [
+      "submitStartedAtUnixMs",
+      "totalStartedAtUnixMs",
+    ])
+    && Number.isSafeInteger(action.timingBoundaries.submitStartedAtUnixMs)
+    && action.timingBoundaries.submitStartedAtUnixMs > 0
+    && action.timingBoundaries.totalStartedAtUnixMs
+      === action.timingBoundaries.submitStartedAtUnixMs
+    && exactJson(action.timingMeasurement, {})
+    && exactJson(action.timings, {})
+    && sha256Pattern.test(action.transitionSha256)
+    && exactKeys(identities, ["a", "b", "c"])
+    && validIdentityRegistration(identities.a, "Alice")
+    && validIdentityRegistration(identities.b, "Bob")
+    && validIdentityRegistration(identities.c, "Carol")
+    && identities.a.existing === true
+    && identities.b.existing === true
+    && identities.c.existing === true
+    && action.callerAccountId === identities.a.accountId
+    && exactJson(report.actionJournals, {})
+    && exactJson(report.checkpoints, {
+      initialProbe: "skipped=no-exact-prior-finalized-action-zero",
+      initialProbeMode: "fresh-or-local-journal-resume",
+    })
+    && exactJson(report.storage, {})
+    && exactJson(report.delivery, {})
+    && exactJson(report.moderation, {})
+    && exactJson(report.gate5, {})
+    && exactJson(report.gate6, { resumeWithoutCreator: false })
+    && exactJson(report.screenshots, [])
+    && exactJson(report.uiEvidence, {
+      pending: [],
+      finalized: [],
+      degraded: [],
+      offline: [],
+    })
+    && exactJson(report.failureEvidence, {})
+    && exactJson(report.restart, {})
+    && exactJson(report.cleanup, { status: "passed", failures: [] })
+    && exactJson(report.failures, [{
+      phase: "gate4-actions-zero-through-seven",
+      message: gate4ActionZeroPrepareSaveFailure,
+    }])
+    && report.release?.programDeployment?.status === "passed"
+    && root?.status === "passed"
+    && root.state === "uninitialized"
+    && gate3Preflight?.status === "passed"
+    && revalidation?.status === "passed"
+    && revalidation.exactDeploymentMatch === true
+    && revalidation.exactRootAccountMatch === true
+    && revalidation.rootAdvancedByGate4 === false
+    && Number.isSafeInteger(revalidation.gate3CompletedAtUnixMs)
+    && Number.isSafeInteger(revalidation.gate4CompletedAtUnixMs)
+    && revalidation.gate4CompletedAtUnixMs
+      >= revalidation.gate3CompletedAtUnixMs
+    && Number.isSafeInteger(revalidation.gate3AgeAtRevalidationMs)
+    && revalidation.gate3AgeAtRevalidationMs >= 0;
+}
+
 function validPreRootWriteGate4FailureReport(report, predecessor, audit) {
+  if (audit.reportProfile === gate4ActionZeroPrepareSaveRejectionProfile) {
+    return validPreRootWriteGate4ActionZeroPrepareSaveRejection(
+      report,
+      predecessor,
+      audit,
+    );
+  }
   if (audit.reportProfile === gate4ActionZeroSubmitSyncRejectionProfile) {
     return validPreRootWriteGate4ActionZeroSubmitSyncRejection(
       report,
@@ -4127,7 +4299,10 @@ async function validateAuditedPreRootWriteGate4Artifacts({
   const run = predecessor.runDirectory;
   await canonicalOwnerDirectory(join(run, "gate3"), uid, 0o700);
   await canonicalOwnerDirectory(join(run, "gate4"), uid, 0o700);
-  if (audit.reportProfile === gate4ActionZeroSubmitSyncRejectionProfile) {
+  if (
+    audit.reportProfile === gate4ActionZeroSubmitSyncRejectionProfile
+    || audit.reportProfile === gate4ActionZeroPrepareSaveRejectionProfile
+  ) {
     await Promise.all([
       absent(join(run, "gate5"), "pre-root-write Gate 5 evidence"),
       absent(join(run, "gate6"), "pre-root-write Gate 6 evidence"),
