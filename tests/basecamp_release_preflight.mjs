@@ -29,6 +29,22 @@ export const palaceRelease = Object.freeze({
   systemProgramBase58: "11111111111111111111111111111111",
 });
 
+const explorerPostMaximumAttempts = 3;
+const retryableExplorerTransportCodes = new Set([
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EPIPE",
+  "ERR_SOCKET_CLOSED",
+  "ERR_SOCKET_TIMEOUT",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "ETIMEDOUT",
+]);
+
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -421,16 +437,21 @@ function parseStrictJson(body, description) {
   return value;
 }
 
-function explorerPost(path, formBody, maximumBytes = 16 * 1024 * 1024) {
-  if (
-    !/^\/api\/(?:get_blocks|get_account)[0-9]+$/.test(path)
-    || typeof formBody !== "string"
-    || Buffer.byteLength(formBody, "utf8") > 1024
-  ) {
-    throw new Error("invalid explorer request boundary");
-  }
+function isRetryableExplorerTransportError(error) {
+  return (
+    error instanceof Error
+    && retryableExplorerTransportCodes.has(error.code)
+  );
+}
+
+function explorerPostOnce(
+  path,
+  formBody,
+  maximumBytes,
+  requestImplementation,
+) {
   return new Promise((resolveRequest, rejectRequest) => {
-    const request = https.request(
+    const request = requestImplementation(
       {
         protocol: "https:",
         hostname: palaceRelease.explorerHost,
@@ -506,11 +527,47 @@ function explorerPost(path, formBody, maximumBytes = 16 * 1024 * 1024) {
       },
     );
     request.once("timeout", () => {
-      request.destroy(new Error("explorer request timed out"));
+      const error = new Error("explorer request timed out");
+      error.code = "ETIMEDOUT";
+      request.destroy(error);
     });
     request.once("error", rejectRequest);
     request.end(formBody);
   });
+}
+
+export async function postExplorerReadOnly(
+  path,
+  formBody,
+  maximumBytes = 16 * 1024 * 1024,
+  requestImplementation = https.request,
+) {
+  if (
+    !/^\/api\/(?:get_blocks|get_account)[0-9]+$/.test(path)
+    || typeof formBody !== "string"
+    || Buffer.byteLength(formBody, "utf8") > 1024
+    || typeof requestImplementation !== "function"
+  ) {
+    throw new Error("invalid explorer request boundary");
+  }
+  for (let attempt = 1; attempt <= explorerPostMaximumAttempts; attempt += 1) {
+    try {
+      return await explorerPostOnce(
+        path,
+        formBody,
+        maximumBytes,
+        requestImplementation,
+      );
+    } catch (error) {
+      if (
+        attempt === explorerPostMaximumAttempts
+        || !isRetryableExplorerTransportError(error)
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("explorer retry attempts invalid");
 }
 
 function validateExplorerBlock(block) {
@@ -557,9 +614,10 @@ function validateExplorerBlock(block) {
 
 export async function verifyPalaceProgramDeployment(
   releaseArtifact = loadImmutableReleaseArtifact(),
+  postExplorer = postExplorerReadOnly,
 ) {
   const path = `/api/get_blocks${palaceRelease.explorerSuffix}`;
-  const body = await explorerPost(
+  const body = await postExplorer(
     path,
     `limit=1&before=${palaceRelease.deploymentBlockId + 1}`,
   );
@@ -631,8 +689,10 @@ export async function verifyPalaceProgramDeployment(
   throw new Error("release ProgramDeployment missing from pinned block");
 }
 
-export async function probePalaceRootAccount() {
-  const body = await explorerPost(
+export async function probePalaceRootAccount(
+  postExplorer = postExplorerReadOnly,
+) {
+  const body = await postExplorer(
     `/api/get_account${palaceRelease.explorerSuffix}`,
     `account_id=${palaceRelease.rootAccountIdBase58}`,
     2 * 1024 * 1024,

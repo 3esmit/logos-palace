@@ -63,6 +63,11 @@ const identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile =
 // audited report that proves no Palace-root action began.
 const completedGate3StrictEvidenceRejectionProfile =
   "completed-gate3-strict-evidence-rejection-before-palace-write";
+// Gate 3 timed out during its first Explorer-backed release-preflight read.
+// The report therefore has no completed preflight observation and proves no
+// startup, identity, Storage, asset, or Palace-root action began.
+const explorerTimeoutDuringReleasePreflightProfile =
+  "explorer-timeout-during-release-preflight-before-palace-write";
 const storageCidPattern =
   /^(b[a-z2-7]{50,}|z[1-9A-HJ-NP-Za-km-z]{40,})$/;
 
@@ -681,6 +686,25 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-pre-public-write-failure",
     reportProfile: identityRegistrationAndSealedMvpBundleProfile,
   }),
+  // run.x4KlS3NF @ 00febaa: Explorer timed out during the first release
+  // preflight read, so no Palace-root action could have begun.
+  Object.freeze({
+    gitCommit: "00febaa6e0de58e09b5935ff5e7101bd3d43e0be",
+    snapshotNarHash:
+      "sha256-/vcrrdWm2JJRb0+SZD48pqUqhTt68hSCpVnh5nu/YmA=",
+    snapshotNarSize: 7_503_544,
+    snapshotRunnerSha256:
+      "69a85990456bdd1caac1825d129b3b61a089e3a25aeca78c54f373d6e15c8fa6",
+    runtimeManifestSha256:
+      "f2b60a2c4da20ca33e66cd9fc71453669b3ef8cc8c4cb4ca7fd4c912ef7a7d7c",
+    compiledReportSha256:
+      "eded5bba090b1aa0f11c998cdf5f7c0c6791fee13da3fbc0d71370e5bc092f20",
+    gate3ReportSha256:
+      "72dd97dd7999f9fafb560cf371a5716165ded495d07b1570991156924989a54c",
+    gate3Failure: "explorer request timed out",
+    retirementStatus: "audited-pre-public-write-failure",
+    reportProfile: explorerTimeoutDuringReleasePreflightProfile,
+  }),
 ]);
 
 // Gate 4 reached its local startup guard, but the guard rejected an unrelated
@@ -774,6 +798,7 @@ function validPrePublicWriteAudit(audit) {
         identityRegistrationAndSealedMvpBundleProfile,
         identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile,
         completedGate3StrictEvidenceRejectionProfile,
+        explorerTimeoutDuringReleasePreflightProfile,
       ].includes(audit.reportProfile))
     && [
       "audited-fingerprint-rejection",
@@ -788,7 +813,7 @@ function validPrePublicWriteAudits(audits) {
     || audits.length === 0
     // Bound must cover long Gate 3 recovery histories (peer-fetch and
     // authoring iterations accumulate beyond a single dozen audits).
-    || audits.length > 32
+    || audits.length > 33
     || audits.some((audit) => !validPrePublicWriteAudit(audit))
   ) {
     return false;
@@ -2951,6 +2976,69 @@ function validCompletedGate3StrictEvidenceRejection(report) {
     && report.pngRecovery === "passed";
 }
 
+function validExplorerTimeoutDuringReleasePreflightGate3Report(
+  report,
+  predecessor,
+  audit,
+) {
+  return exactKeys(report, [
+    "basecampBinarySha256",
+    "basecampRevision",
+    "blockers",
+    "cleanup",
+    "creatorOffline",
+    "failure",
+    "fullGate3",
+    "identities",
+    "installedPackages",
+    "packageHashes",
+    "pngRecovery",
+    "productSnapshot",
+    "productSnapshotNarHash",
+    "productSnapshotNarSize",
+    "productionIdentityMode",
+    "providerBRetentionProofs",
+    "runtimeOutputManifestSha256",
+    "schema",
+    "snapshotRunnerSha256",
+    "sourceCommit",
+    "startup",
+    "status",
+    "storageConfigs",
+    "storageStartup",
+    "version",
+  ])
+    && report.schema === "logos.palace.basecamp-gate3-report"
+    && report.version === 1
+    && report.status === "failed"
+    && report.fullGate3 === "failed"
+    && report.productSnapshot === predecessor.productSnapshot
+    && report.sourceCommit === predecessor.gitCommit
+    && report.productSnapshotNarHash === predecessor.snapshotNarHash
+    && report.productSnapshotNarSize === predecessor.snapshotNarSize
+    && report.snapshotRunnerSha256 === predecessor.snapshotRunnerSha256
+    && report.runtimeOutputManifestSha256
+      === predecessor.runtimeManifestSha256
+    && sha256Pattern.test(report.basecampBinarySha256)
+    && sourceCommitPattern.test(report.basecampRevision)
+    && exactKeys(report.cleanup, ["failures", "status"])
+    && report.cleanup.status === "passed"
+    && exactJson(report.cleanup.failures, [])
+    && exactJson(report.blockers, [])
+    && report.productionIdentityMode === true
+    && exactKeys(report.identities, [])
+    && exactKeys(report.storageConfigs, [])
+    && exactKeys(report.startup, [])
+    && exactKeys(report.storageStartup, [])
+    && exactKeys(report.installedPackages, ["a", "b", "c"])
+    && Object.values(report.installedPackages).every(Array.isArray)
+    && Array.isArray(report.packageHashes)
+    && exactJson(report.providerBRetentionProofs, [])
+    && report.creatorOffline === false
+    && report.pngRecovery === "failed"
+    && report.failure === audit.gate3Failure;
+}
+
 function validatesAuditedPrePublicWriteGate3Report(
   report,
   predecessor,
@@ -2970,6 +3058,18 @@ function validatesAuditedPrePublicWriteGate3Report(
       === identityRegistrationAndSealedMvpBundleRetainedAfterCreatorOfflineProfile;
   const completedGate3StrictEvidenceRejection =
     audit.reportProfile === completedGate3StrictEvidenceRejectionProfile;
+  const explorerTimeoutDuringReleasePreflight =
+    audit.reportProfile === explorerTimeoutDuringReleasePreflightProfile;
+  if (explorerTimeoutDuringReleasePreflight) {
+    if (!validExplorerTimeoutDuringReleasePreflightGate3Report(
+      report,
+      predecessor,
+      audit,
+    )) {
+      throw new Error("audited Gate 3 pre-public-write report is invalid");
+    }
+    return;
+  }
   if (completedGate3StrictEvidenceRejection) {
     if (
       report.productSnapshot !== predecessor.productSnapshot

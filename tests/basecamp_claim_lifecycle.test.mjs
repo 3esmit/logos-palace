@@ -129,6 +129,36 @@ function auditedPrePublicWriteGate3Report(predecessor) {
   };
 }
 
+function explorerTimeoutDuringReleasePreflightGate3Report(predecessor) {
+  return {
+    schema: "logos.palace.basecamp-gate3-report",
+    version: 1,
+    status: "failed",
+    fullGate3: "failed",
+    cleanup: { status: "passed", failures: [] },
+    blockers: [],
+    productSnapshot: predecessor.productSnapshot,
+    productSnapshotNarHash: predecessor.snapshotNarHash,
+    productSnapshotNarSize: predecessor.snapshotNarSize,
+    snapshotRunnerSha256: predecessor.snapshotRunnerSha256,
+    runtimeOutputManifestSha256: predecessor.runtimeManifestSha256,
+    sourceCommit: predecessor.gitCommit,
+    basecampRevision: "1".repeat(40),
+    packageHashes: [],
+    basecampBinarySha256: "2".repeat(64),
+    installedPackages: { a: [], b: [], c: [] },
+    productionIdentityMode: true,
+    identities: {},
+    storageConfigs: {},
+    startup: {},
+    storageStartup: {},
+    providerBRetentionProofs: [],
+    creatorOffline: false,
+    pngRecovery: "failed",
+    failure: "explorer request timed out",
+  };
+}
+
 function identityRegistrationAndIdleStorageGate3Report(predecessor) {
   const registration = (label, display) => {
     const accountId = label.repeat(64);
@@ -1271,6 +1301,60 @@ test("rejects any Gate 3 artifact and a gate3-entered predecessor", async () => 
   });
 });
 
+test("rolls forward exact explorer timeout during release preflight", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = explorerTimeoutDuringReleasePreflightGate3Report(
+      predecessorClaim,
+    );
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.reportProfile =
+      "explorer-timeout-during-release-preflight-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure = report.failure;
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const certificate = JSON.parse(
+      await readFile(
+        join(predecessorRun, "pre-public-write-gate3-retirement.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(certificate.status, "audited-pre-public-write-failure");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.status, "retired-pre-public-write");
+  });
+});
+
 test("rolls forward only the matching audited Gate 3 pre-public-write failure", async () => {
   await withFixture({
     additionalPrePublicWriteAudits: [{
@@ -1802,6 +1886,32 @@ test("pins the exact audited provider Storage resume failure", () => {
   );
 });
 
+test("pins exact audited explorer timeout during release preflight", () => {
+  assert.deepEqual(
+    auditedPrePublicWriteGate3Failures.find((audit) =>
+      audit.gitCommit === "00febaa6e0de58e09b5935ff5e7101bd3d43e0be"
+    ),
+    {
+      gitCommit: "00febaa6e0de58e09b5935ff5e7101bd3d43e0be",
+      snapshotNarHash:
+        "sha256-/vcrrdWm2JJRb0+SZD48pqUqhTt68hSCpVnh5nu/YmA=",
+      snapshotNarSize: 7_503_544,
+      snapshotRunnerSha256:
+        "69a85990456bdd1caac1825d129b3b61a089e3a25aeca78c54f373d6e15c8fa6",
+      runtimeManifestSha256:
+        "f2b60a2c4da20ca33e66cd9fc71453669b3ef8cc8c4cb4ca7fd4c912ef7a7d7c",
+      compiledReportSha256:
+        "eded5bba090b1aa0f11c998cdf5f7c0c6791fee13da3fbc0d71370e5bc092f20",
+      gate3ReportSha256:
+        "72dd97dd7999f9fafb560cf371a5716165ded495d07b1570991156924989a54c",
+      gate3Failure: "explorer request timed out",
+      retirementStatus: "audited-pre-public-write-failure",
+      reportProfile:
+        "explorer-timeout-during-release-preflight-before-palace-write",
+    },
+  );
+});
+
 test("pins the exact audited Gate 4 pre-root-write harness failure", () => {
   assert.deepEqual(
     auditedPreRootWriteGate4HarnessFailures.find((audit) =>
@@ -2018,6 +2128,54 @@ test("rejects altered audited Gate 3 pre-public-write evidence", async () => {
     const report = auditedPrePublicWriteGate3Report(predecessorClaim);
     report.identities = { a: { unexpected: true } };
     await writeJson(gate3Path, report);
+    prePublicWriteAudit.compiledReportSha256 = sha256(
+      await readFile(compiledPath),
+    );
+    prePublicWriteAudit.gate3ReportSha256 = sha256(
+      await readFile(gate3Path),
+    );
+    await writeJson(claimPath, {
+      ...predecessorClaim,
+      status: "gate3-entered",
+      gate3EnteredAtUnixMs: predecessorClaim.createdAtUnixMs + 1,
+    });
+
+    await assert.rejects(
+      lifecycle.execute("acquire-or-roll-forward"),
+      /pre-public-write report is invalid/,
+    );
+  });
+});
+
+test("rejects explorer-timeout recovery after preflight evidence", async () => {
+  await withFixture({}, async ({
+    claimPath,
+    predecessorClaim,
+    predecessorRun,
+    prePublicWriteAudit,
+    lifecycle,
+  }) => {
+    const compiledPath = join(predecessorRun, "compiled-mvp-report.json");
+    await writeJson(
+      compiledPath,
+      failedReport(predecessorClaim.productSnapshot, "gate3"),
+    );
+    const gate3Directory = join(predecessorRun, "gate3");
+    await mkdir(gate3Directory, { mode: 0o700 });
+    const gate3Path = join(gate3Directory, "gate3-report.json");
+    const report = explorerTimeoutDuringReleasePreflightGate3Report(
+      predecessorClaim,
+    );
+    report.releasePreflight = {
+      status: "passed",
+      rootAccountBeforeWrites: { status: "passed", state: "uninitialized" },
+    };
+    await writeJson(gate3Path, report);
+    prePublicWriteAudit.reportProfile =
+      "explorer-timeout-during-release-preflight-before-palace-write";
+    prePublicWriteAudit.retirementStatus =
+      "audited-pre-public-write-failure";
+    prePublicWriteAudit.gate3Failure = report.failure;
     prePublicWriteAudit.compiledReportSha256 = sha256(
       await readFile(compiledPath),
     );
