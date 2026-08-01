@@ -640,6 +640,26 @@ export const auditedPrePublicWriteGate3Failures = Object.freeze([
     retirementStatus: "audited-strict-evidence-rejection",
     reportProfile: completedGate3StrictEvidenceRejectionProfile,
   }),
+  // run.7DMWAJDB @ 398c71e: Gate 3 completed its storage and local asset
+  // evidence, but the compiled runner rejected a stale evidence contract
+  // before Gate 4 or any Palace-root action.
+  Object.freeze({
+    gitCommit: "398c71e9d8bff6a2c5e9d692e3db22c95fb0c8a0",
+    snapshotNarHash:
+      "sha256-4NV82UhBVk9g5hjMJDIUIojijCwLmftSqFMiGQfiLT0=",
+    snapshotNarSize: 7393464,
+    snapshotRunnerSha256:
+      "5de670ea699bb1226a7a3176e77cc0fd8f0938817a6cc837a55507243f9b1a08",
+    runtimeManifestSha256:
+      "35c0d419be617d9e86a430bef1f831e82040c9682014e7af1936b63ffa0811dc",
+    compiledReportSha256:
+      "cd8775a91b1dd97a5879b5d4f410f41dd055348b01cc267b0ccb497385f38b8b",
+    gate3ReportSha256:
+      "34300a1ffc26f4b57b98b9cd5a55020fe9982f79488ce0dfc7a34ae3594bb57f",
+    gate3Failure: "gate report failed strict validation",
+    retirementStatus: "audited-strict-evidence-rejection",
+    reportProfile: completedGate3StrictEvidenceRejectionProfile,
+  }),
 ]);
 
 function validPrePublicWriteAudit(audit) {
@@ -2597,7 +2617,14 @@ function validCompletedGate3AssetStateProof(proof) {
     && asset.role === "room-background"
     && storageCidPattern.test(asset.cid)
     && (!requireBefore || validTimedReceipt(asset.before))
-    && validTimedReceipt(asset.dispatched, "ok;asset=fetching;")
+    // The corruption probe can enter its terminal degraded state before a
+    // fetch dispatch receipt is observed. Keep that exception to the
+    // degraded probe; exact audited report hashes still bind recovery.
+    && (
+      validTimedReceipt(asset.dispatched, "ok;asset=fetching;")
+      || (!requireBefore
+        && validTimedReceipt(asset.dispatched, "degraded;reason="))
+    )
     && validTimedReceipt(asset.completed);
   return exactKeys(proof, ["degradedAsset", "states", "verifiedAsset"])
     && exactJson(proof.states, ["missing", "fetching", "verified", "degraded"])

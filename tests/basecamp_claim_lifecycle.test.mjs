@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import {
+  auditedPrePublicWriteGate3Failures,
   createClaimLifecycle,
   releaseProgramId,
   releaseRootId,
@@ -580,7 +581,7 @@ function completedGate3StrictEvidenceRejectionReport(predecessor) {
       role: "room-background",
       cid,
       dispatched: {
-        receipt: "ok;asset=fetching;operation=fixture-2",
+        receipt: "degraded;reason=byte-length-or-digest-mismatch",
         elapsedMs: 1,
       },
       completed: { receipt: "degraded;reason=fixture", elapsedMs: 1 },
@@ -1427,6 +1428,32 @@ test("rolls forward audited completed Gate 3 strict-evidence rejection before a 
     );
     assert.equal(evidence.status, "retired-pre-public-write");
   });
+});
+
+test("pins the exact audited direct-degradation Gate 3 rejection", () => {
+  assert.deepEqual(
+    auditedPrePublicWriteGate3Failures.find((audit) =>
+      audit.gitCommit === "398c71e9d8bff6a2c5e9d692e3db22c95fb0c8a0"
+    ),
+    {
+      gitCommit: "398c71e9d8bff6a2c5e9d692e3db22c95fb0c8a0",
+      snapshotNarHash:
+        "sha256-4NV82UhBVk9g5hjMJDIUIojijCwLmftSqFMiGQfiLT0=",
+      snapshotNarSize: 7393464,
+      snapshotRunnerSha256:
+        "5de670ea699bb1226a7a3176e77cc0fd8f0938817a6cc837a55507243f9b1a08",
+      runtimeManifestSha256:
+        "35c0d419be617d9e86a430bef1f831e82040c9682014e7af1936b63ffa0811dc",
+      compiledReportSha256:
+        "cd8775a91b1dd97a5879b5d4f410f41dd055348b01cc267b0ccb497385f38b8b",
+      gate3ReportSha256:
+        "34300a1ffc26f4b57b98b9cd5a55020fe9982f79488ce0dfc7a34ae3594bb57f",
+      gate3Failure: "gate report failed strict validation",
+      retirementStatus: "audited-strict-evidence-rejection",
+      reportProfile:
+        "completed-gate3-strict-evidence-rejection-before-palace-write",
+    },
+  );
 });
 
 test("rejects post-creator retention evidence with a catalog CID mismatch", async () => {
