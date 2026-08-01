@@ -1982,6 +1982,13 @@ function validatesAuditedPrePublicWriteGate3Report(
     report,
     "storageBlockMaterializationC",
   );
+  // Peer fetch can succeed (providerBFetch/providerBCachedFetch) and still fail
+  // later on retention (BOnEa1w7) before any LEZ public write.
+  const hasProviderBFetch = Object.hasOwn(report, "providerBFetch");
+  const hasProviderBCachedFetch = Object.hasOwn(
+    report,
+    "providerBCachedFetch",
+  );
   if (
     !exactKeys(report, [
       ...(hasAssetAuthoring ? ["assetAuthoring"] : []),
@@ -2003,6 +2010,8 @@ function validatesAuditedPrePublicWriteGate3Report(
       "productSnapshotNarHash",
       "productSnapshotNarSize",
       "productionIdentityMode",
+      ...(hasProviderBCachedFetch ? ["providerBCachedFetch"] : []),
+      ...(hasProviderBFetch ? ["providerBFetch"] : []),
       "providerBRetentionProofs",
       ...(hasPublication ? ["publication"] : []),
       "releasePreflight",
