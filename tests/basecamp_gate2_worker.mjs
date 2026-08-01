@@ -425,6 +425,114 @@ async function invoke(params) {
   );
 }
 
+function boundedProtocolCoordinate(pixel, inset, usableSpan) {
+  const numericPixel = Number(pixel);
+  const numericInset = Number(inset);
+  const numericSpan = Number(usableSpan);
+  if (
+    !Number.isFinite(numericPixel)
+    || !Number.isFinite(numericInset)
+    || !Number.isFinite(numericSpan)
+  ) {
+    throw new Error("room move surface geometry is invalid");
+  }
+  return Math.max(
+    0,
+    Math.min(
+      10_000,
+      Math.round(
+        (numericPixel - numericInset) * 10_000 / Math.max(1, numericSpan),
+      ),
+    ),
+  );
+}
+
+async function clickRoomMoveSurface() {
+  if (!app || !inspector || !rootObjectId) {
+    throw new Error("worker is not initialized");
+  }
+  if (viewArgument !== "palace") {
+    throw new Error("room pointer motion is available only for the Palace view");
+  }
+
+  const found = await app.findByProperty(
+    "objectName",
+    "palaceRoomMoveSurface",
+  );
+  if (found.error || !Array.isArray(found.matches) || found.matches.length !== 1) {
+    throw new Error(
+      `expected one palaceRoomMoveSurface, got ${found.matches?.length ?? 0}`,
+    );
+  }
+  const objectId = String(found.matches[0]?.id ?? "");
+  if (objectId.length === 0 || objectId.length > 512) {
+    throw new Error("room move surface identity is invalid");
+  }
+
+  const [surface, root] = await Promise.all([
+    app.getProperties(objectId).then(propertyMap),
+    rootProperties(),
+  ]);
+  if (surface.visible === false || surface.enabled !== true) {
+    throw new Error("room move surface is not interactive");
+  }
+  const width = Number(surface.width);
+  const height = Number(surface.height);
+  const horizontalInset = Number(root.roomCanvasHorizontalInset);
+  const topInset = Number(root.roomCanvasTopInset);
+  const verticalInset = Number(root.roomCanvasVerticalInset);
+  if (
+    !Number.isFinite(width)
+    || !Number.isFinite(height)
+    || width <= 0
+    || height <= 0
+    || !Number.isFinite(horizontalInset)
+    || !Number.isFinite(topInset)
+    || !Number.isFinite(verticalInset)
+  ) {
+    throw new Error("room move surface dimensions are invalid");
+  }
+
+  // Inspector click uses a QQuickItem's center. Reproduce the QML inverse
+  // mapping only for the expected projection; the mutation below remains an
+  // actual pointer event routed through MouseArea.onClicked.
+  const coordinate = {
+    x: boundedProtocolCoordinate(
+      width / 2,
+      horizontalInset,
+      width - horizontalInset * 2,
+    ),
+    y: boundedProtocolCoordinate(
+      height / 2,
+      topInset,
+      height - verticalInset,
+    ),
+  };
+  const before = String(root[view.receiptProperty] ?? "");
+  const startedAt = performance.now();
+  const clicked = await inspector.send("click", { objectId });
+  if (clicked?.error || clicked?.clicked !== true) {
+    throw new Error("room move surface click failed");
+  }
+
+  const deadline = Date.now() + 30_000;
+  let receipt = "";
+  while (Date.now() < deadline) {
+    receipt = String((await rootProperties())[view.receiptProperty] ?? "");
+    if (receipt !== before && receipt.startsWith("ok;request=")) {
+      return {
+        coordinate,
+        receipt,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      };
+    }
+    await sleep(50);
+  }
+  throw new Error(
+    `room move surface receipt timeout: before=${JSON.stringify(before)} after=${JSON.stringify(receipt)}`,
+  );
+}
+
 async function detailedMatches(params) {
   if (!app) throw new Error("worker is not initialized");
   const response = await app.findByProperty(params.property, params.value);
@@ -470,6 +578,8 @@ async function dispatch(command, params) {
     return rootProperties();
   case "invoke":
     return invoke(params);
+  case "clickRoomMoveSurface":
+    return clickRoomMoveSurface();
   case "find":
     return detailedMatches(params ?? {});
   case "screenshot":

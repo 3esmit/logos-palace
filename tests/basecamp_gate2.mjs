@@ -1930,8 +1930,27 @@ try {
   };
 
   const liveActions = [];
+  const alicePointerMove = await workers.a.call("clickRoomMoveSurface");
+  if (
+    !Number.isSafeInteger(alicePointerMove?.coordinate?.x)
+    || !Number.isSafeInteger(alicePointerMove?.coordinate?.y)
+    || alicePointerMove.coordinate.x < 0
+    || alicePointerMove.coordinate.x > 10_000
+    || alicePointerMove.coordinate.y < 0
+    || alicePointerMove.coordinate.y > 10_000
+    || !String(alicePointerMove.receipt ?? "").startsWith("ok;request=")
+  ) {
+    throw new Error(
+      `Alice pointer motion evidence is invalid: ${JSON.stringify(alicePointerMove)}`,
+    );
+  }
+  liveActions.push({
+    label: "a",
+    name: "palaceRoomMoveSurface",
+    args: [alicePointerMove.coordinate.x, alicePointerMove.coordinate.y],
+    receipt: alicePointerMove.receipt,
+  });
   const actionCalls = [
-    ["a", "gate2Move", [1200, 2300]],
     ["b", "gate2Move", [3400, 4500]],
     ["c", "gate2Move", [5600, 6700]],
   ];
@@ -1949,8 +1968,8 @@ try {
     alice: {
       displayName: "Alice",
       speech: renderProbeMessage,
-      x: 1200,
-      y: 2300,
+      x: alicePointerMove.coordinate.x,
+      y: alicePointerMove.coordinate.y,
       props: [],
     },
     bob: {
