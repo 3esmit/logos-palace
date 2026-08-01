@@ -18,11 +18,16 @@ option(
 )
 
 set(PALACE_DELIVERY_ACCEPTANCE_SOURCES)
+set(PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS)
 if(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
     list(
         APPEND PALACE_DELIVERY_ACCEPTANCE_SOURCES
-        src/palace_delivery_acceptance_fixture.h
-        src/palace_delivery_acceptance_fixture.cpp
+        tests/fixtures/palace_delivery_acceptance_fixture.h
+        tests/fixtures/palace_delivery_acceptance_fixture.cpp
+    )
+    list(
+        APPEND PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS
+        tests/fixtures
     )
 endif()
 
@@ -110,7 +115,9 @@ logos_module(
         src/palace_action_journal.cpp
         src/palace_core_impl.h
         src/palace_core_impl.cpp
-    INCLUDE_DIRS src
+    INCLUDE_DIRS
+        src
+        ${PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS}
 )
 
 target_link_libraries(${MODULE_NAME}_module_plugin PRIVATE OpenSSL::Crypto Qt6::Core Qt6::Gui Qt6::Network)

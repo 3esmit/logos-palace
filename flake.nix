@@ -51,8 +51,8 @@
       };
 
       palaceDeliveryAcceptance = logos-module-builder.lib.mkLogosQmlModule {
-        src = ./packages/palace_delivery_acceptance;
-        configFile = ./packages/palace_delivery_acceptance/metadata.json;
+        src = ./tests/fixtures/palace_delivery_acceptance;
+        configFile = ./tests/fixtures/palace_delivery_acceptance/metadata.json;
         flakeInputs = inputs;
       };
 

@@ -16,8 +16,7 @@ struct DeliveryAcceptanceIdentity {
     Ed25519KeyPair signer;
 };
 
-// Gate-2-only bootstrap until finalized LEZ authority and a Basecamp keystore
-// supply these inputs. Seeds are public RFC 8032 test vectors, not user keys.
+// Gate-2 test bootstrap. Seeds are public RFC 8032 vectors, not user keys.
 bool bootstrapDeliveryAcceptanceAuthority(AuthorityProjection& authority);
 bool deliveryAcceptanceIdentity(const std::string& userId,
                                 DeliveryAcceptanceIdentity& identity);

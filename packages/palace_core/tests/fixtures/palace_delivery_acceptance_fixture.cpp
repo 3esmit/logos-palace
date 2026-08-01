@@ -14,9 +14,8 @@ struct FixtureVector {
     const char* publicKeyHex;
 };
 
-// RFC 8032 Ed25519 test vectors. Keeping this list in an acceptance-named
-// translation unit prevents fixture credentials from being mistaken for a
-// production keystore or finalized authority source.
+// Test-only RFC 8032 Ed25519 vectors. This file is intentionally outside the
+// production source tree; acceptance builds link it only when explicitly set.
 constexpr std::array<FixtureVector, 3> kFixtureVectors{{
     {
         "alice",

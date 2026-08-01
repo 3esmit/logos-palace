@@ -34,9 +34,10 @@ logos_palace_ui
 
 The concrete package names are `logos_palace_ui`, `palace_core`, `palace_vm`,
 `delivery_module`, `storage_module`, and `lez_core`. The
-`palace_delivery_acceptance` package is test-only and is installed only in its
-isolated acceptance user directory. Gate 2 and the internal, non-production
-Gate 3 fixture mode substitute an explicitly fixture-enabled `palace_core`
+`palace_delivery_acceptance` fixture module lives under `tests/fixtures` and
+is installed only in its isolated acceptance user directory. Gate 2 and the
+internal, non-production Gate 3 fixture mode substitute an explicitly
+fixture-enabled `palace_core`
 build. The compiled full MVP runs Gate 3 with production identities.
 Production Core artifacts exclude the fixture authority, private test seeds,
 and acceptance profile parsing.
