@@ -40,6 +40,8 @@ class LogosPalaceUi
     SLOT(QString markStorageMaterialized())
     SLOT(QString startLez(QString password))
     SLOT(QString createIdentity(QString displayName))
+    SLOT(QString createPalace(QString title))
+    SLOT(QString createInitialRoomState())
     SLOT(QString openPalace(QString palaceUri))
     SLOT(QString refreshPalace())
     SLOT(QString refreshLez())

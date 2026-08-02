@@ -1155,10 +1155,6 @@ palace_vm_lgx="$(
 palace_core_lgx="$(
   build_one_output "${product_ref}#palace-core-lgx-portable"
 )"
-palace_core_acceptance_lgx="$(
-  build_one_output \
-    "${product_ref}#palace-core-acceptance-lgx-portable"
-)"
 palace_ui_lgx="$(
   build_one_output "${product_ref}#logos-palace-ui-lgx-portable"
 )"
@@ -1249,9 +1245,6 @@ root_runtime_output "release-verifier" "${release_artifact}"
 root_runtime_output "palace-core-contracts" "${palace_core_contracts}"
 root_runtime_output "palace-vm-contracts" "${palace_vm_contracts}"
 root_runtime_output "palace-vm-lgx" "${palace_vm_lgx}"
-root_runtime_output \
-  "palace-core-acceptance-lgx" \
-  "${palace_core_acceptance_lgx}"
 root_runtime_output "palace-core-lgx" "${palace_core_lgx}"
 root_runtime_output "palace-ui-lgx" "${palace_ui_lgx}"
 root_runtime_output "delivery-module-lgx" "${delivery_lgx}"
@@ -1276,8 +1269,8 @@ generated_runtime_manifest="$(
        }
    ]
    | sort_by(.name)
-   | select(length == 13)
-   | select((map(.name) | unique | length) == 13)
+   | select(length == 12)
+   | select((map(.name) | unique | length) == 12)
    | {
        schema: "logos.palace.runtime-output-manifest",
        version: 1,
@@ -1295,7 +1288,6 @@ if ! "${jq_bin}" -e \
        "basecamp",
        "delivery-module-lgx",
        "lez-core-lgx",
-       "palace-core-acceptance-lgx",
        "palace-core-contracts",
        "palace-core-lgx",
        "palace-ui-lgx",
@@ -1735,8 +1727,7 @@ gate_report_passes() {
         end;
 
       def packages:
-        (.productionLgxPackages
-          // .lgxPackages
+        (.lgxPackages
           // .packageHashes
           // [])
         | map({file: .file, sha256: .sha256})
@@ -3621,9 +3612,9 @@ gate_report_passes() {
               lezNetworkId: "logos-lez-testnet-v0.2.0",
               lezModuleApiVersion: "0.4.0-alpha.2",
               lezModuleRevision:
-                "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
+                "10c6c1dd76107cb96e99f651fec3f61c35e09901",
               lezRuntimeRevision:
-                "e923315c020d4966807849f9db10536b628d5739",
+                "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
               lezSchemaId: "palace-schema-v3",
               lezPublicContractRevision:
                 "2b67563baf590c32dd82e50e3252815ec56bdaec",
@@ -3762,7 +3753,7 @@ gate_report_passes() {
               and (.sha256 | valid_sha256)
           );
 
-      def valid_gate2_core:
+      def valid_gate2_evidence:
         . as $report
         | (
             $report.lgxPackages
@@ -4106,7 +4097,7 @@ gate_report_passes() {
                 status: "passed",
                 failures: []
               }
-              and ($candidate | valid_gate2_core)
+              and ($candidate | valid_gate2_evidence)
           elif $gate == "gate3" then
             $candidate.schema == "logos.palace.basecamp-gate3-report"
               and $candidate.version == 1
@@ -4349,8 +4340,7 @@ prior_run_complete() {
         end;
 
       def packages:
-        (.productionLgxPackages
-          // .lgxPackages
+        (.lgxPackages
           // .packageHashes
           // [])
         | map({file: .file, sha256: .sha256})
@@ -4669,7 +4659,7 @@ prior_run_complete() {
           == "logos.palace.runtime-output-manifest"
         and $runtime_outputs.version == 1
         and ($runtime_outputs.outputs | type) == "array"
-        and ($runtime_outputs.outputs | length) == 13
+        and ($runtime_outputs.outputs | length) == 12
         and (
           $runtime_outputs.outputs | map(.name) | sort
         ) == [
@@ -4677,7 +4667,6 @@ prior_run_complete() {
           "basecamp",
           "delivery-module-lgx",
           "lez-core-lgx",
-          "palace-core-acceptance-lgx",
           "palace-core-contracts",
           "palace-core-lgx",
           "palace-ui-lgx",
@@ -5039,7 +5028,6 @@ run_or_skip_gate "gate1" "${gate1_report}" \
 secure_gate_dir "${gate2_dir}"
 run_or_skip_gate "gate2" "${gate2_report}" \
   "PALACE_GATE2_PRODUCT_SNAPSHOT=${product_snapshot}" \
-  "PALACE_GATE2_ACCEPTANCE_CORE_LGX=${palace_core_acceptance_lgx}" \
   "${acceptance_tools}/bin/bash" \
   -p \
   "${product_snapshot}/scripts/run-basecamp-gate2.sh" \
@@ -5129,8 +5117,7 @@ if ! validation="$(
         end;
 
       def packages:
-        (.productionLgxPackages
-          // .lgxPackages
+        (.lgxPackages
           // .packageHashes
           // [])
         | map({file: .file, sha256: .sha256})

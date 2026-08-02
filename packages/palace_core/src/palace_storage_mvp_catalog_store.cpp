@@ -86,7 +86,6 @@ bool validBinding(const PalaceStorageMvpCatalogBindingV1 &binding) {
   return validNetworkId(binding.networkId) &&
          isNonzeroHex64(binding.programIdHex) &&
          isNonzeroHex64(binding.rootAccountIdHex) &&
-         binding.finalizedCheckpoint > 0U &&
          isNonzeroHex64(binding.finalizedHash) &&
          validRootManifestCid(binding.rootManifestCid);
 }
@@ -99,6 +98,23 @@ bool equalBinding(const PalaceStorageMvpCatalogBindingV1 &left,
          left.finalizedCheckpoint == right.finalizedCheckpoint &&
          left.finalizedHash == right.finalizedHash &&
          left.rootManifestCid == right.rootManifestCid;
+}
+
+bool equalLocalCommittedBinding(
+    const PalaceStorageMvpCatalogBindingV1 &stored,
+    const PalaceStorageMvpCatalogBindingV1 &current) {
+  if (stored.networkId != current.networkId ||
+      stored.programIdHex != current.programIdHex ||
+      stored.rootAccountIdHex != current.rootAccountIdHex ||
+      stored.rootManifestCid != current.rootManifestCid ||
+      stored.finalizedCheckpoint > current.finalizedCheckpoint) {
+    return false;
+  }
+  // Equal heights are not harmless advancement. Retain the normal exact
+  // hash fence so a competing same-height local snapshot cannot reuse the
+  // catalog.
+  return stored.finalizedCheckpoint != current.finalizedCheckpoint ||
+         stored.finalizedHash == current.finalizedHash;
 }
 
 bool validCanonicalCatalog(const std::string &catalog) {
@@ -642,6 +658,47 @@ readRecord(const fs::path &root, std::vector<std::uint8_t> &record) {
 }
 #endif
 
+enum class CatalogBindingComparison {
+  Exact,
+  LocalCommitted,
+};
+
+PalaceStorageMvpCatalogStoreStatus loadBoundRecord(
+    const std::string &instancePersistenceRoot,
+    const PalaceStorageMvpCatalogBindingV1 &expectedBinding,
+    PalaceStorageMvpCatalogRecordV1 &record,
+    const CatalogBindingComparison comparison) {
+  if (instancePersistenceRoot.empty() || !validBinding(expectedBinding)) {
+    return PalaceStorageMvpCatalogStoreStatus::InvalidArgument;
+  }
+
+  const fs::path root(instancePersistenceRoot);
+  const PalaceStorageMvpCatalogStoreStatus prepared = prepareRoot(root, false);
+  if (prepared != PalaceStorageMvpCatalogStoreStatus::Loaded)
+    return prepared;
+
+  std::vector<std::uint8_t> bytes;
+  const PalaceStorageMvpCatalogStoreStatus read = readRecord(root, bytes);
+  if (read != PalaceStorageMvpCatalogStoreStatus::Loaded)
+    return read;
+
+  std::vector<std::uint8_t> payload;
+  PalaceStorageMvpCatalogRecordV1 parsed;
+  if (!parseFramedRecord(bytes, payload) ||
+      !parseRecordPayload(payload, parsed)) {
+    return PalaceStorageMvpCatalogStoreStatus::InvalidRecord;
+  }
+  const bool bindingMatches =
+      comparison == CatalogBindingComparison::Exact
+          ? equalBinding(parsed.binding, expectedBinding)
+          : equalLocalCommittedBinding(parsed.binding, expectedBinding);
+  if (!bindingMatches)
+    return PalaceStorageMvpCatalogStoreStatus::BindingMismatch;
+
+  record = std::move(parsed);
+  return PalaceStorageMvpCatalogStoreStatus::Loaded;
+}
+
 } // namespace
 
 PalaceStorageMvpCatalogStore::PalaceStorageMvpCatalogStore(
@@ -672,31 +729,16 @@ PalaceStorageMvpCatalogStoreStatus PalaceStorageMvpCatalogStore::save(
 PalaceStorageMvpCatalogStoreStatus PalaceStorageMvpCatalogStore::load(
     const PalaceStorageMvpCatalogBindingV1 &expectedBinding,
     PalaceStorageMvpCatalogRecordV1 &record) const {
-  if (instancePersistenceRoot_.empty() || !validBinding(expectedBinding)) {
-    return PalaceStorageMvpCatalogStoreStatus::InvalidArgument;
-  }
+  return loadBoundRecord(instancePersistenceRoot_, expectedBinding, record,
+                         CatalogBindingComparison::Exact);
+}
 
-  const fs::path root(instancePersistenceRoot_);
-  const PalaceStorageMvpCatalogStoreStatus prepared = prepareRoot(root, false);
-  if (prepared != PalaceStorageMvpCatalogStoreStatus::Loaded)
-    return prepared;
-
-  std::vector<std::uint8_t> bytes;
-  const PalaceStorageMvpCatalogStoreStatus read = readRecord(root, bytes);
-  if (read != PalaceStorageMvpCatalogStoreStatus::Loaded)
-    return read;
-
-  std::vector<std::uint8_t> payload;
-  PalaceStorageMvpCatalogRecordV1 parsed;
-  if (!parseFramedRecord(bytes, payload) ||
-      !parseRecordPayload(payload, parsed)) {
-    return PalaceStorageMvpCatalogStoreStatus::InvalidRecord;
-  }
-  if (!equalBinding(parsed.binding, expectedBinding))
-    return PalaceStorageMvpCatalogStoreStatus::BindingMismatch;
-
-  record = std::move(parsed);
-  return PalaceStorageMvpCatalogStoreStatus::Loaded;
+PalaceStorageMvpCatalogStoreStatus
+PalaceStorageMvpCatalogStore::loadLocalCommitted(
+    const PalaceStorageMvpCatalogBindingV1 &expectedBinding,
+    PalaceStorageMvpCatalogRecordV1 &record) const {
+  return loadBoundRecord(instancePersistenceRoot_, expectedBinding, record,
+                         CatalogBindingComparison::LocalCommitted);
 }
 
 const char *palaceStorageMvpCatalogStoreStatusName(

@@ -236,6 +236,77 @@ LOGOS_TEST(storage_mvp_catalog_store_roundtrips_exact_sealed_record) {
                   palace::crypto::sha256Hex(source.canonicalCatalog));
 }
 
+LOGOS_TEST(storage_mvp_catalog_store_accepts_genesis_checkpoint_binding) {
+  palace::PalaceStorageMvpCatalogRecordV1 source = record();
+  source.binding.finalizedCheckpoint = 0U;
+  TemporaryDirectory root("palace-storage-mvp-catalog-genesis");
+  palace::PalaceStorageMvpCatalogStore store(root.path().string());
+
+  LOGOS_ASSERT_EQ(statusName(store.save(source)), std::string("saved"));
+
+  palace::PalaceStorageMvpCatalogRecordV1 restored;
+  LOGOS_ASSERT_EQ(statusName(store.load(source.binding, restored)),
+                  std::string("loaded"));
+  LOGOS_ASSERT_TRUE(sameRecord(restored, source));
+}
+
+LOGOS_TEST(
+    storage_mvp_catalog_store_local_committed_allows_verified_empty_block_advance) {
+  const palace::PalaceStorageMvpCatalogRecordV1 source = record();
+  TemporaryDirectory root("palace-storage-mvp-catalog-local-advance");
+  palace::PalaceStorageMvpCatalogStore store(root.path().string());
+  LOGOS_ASSERT_EQ(statusName(store.save(source)), std::string("saved"));
+
+  palace::PalaceStorageMvpCatalogBindingV1 advanced = source.binding;
+  ++advanced.finalizedCheckpoint;
+  advanced.finalizedHash = std::string(64U, '1');
+
+  palace::PalaceStorageMvpCatalogRecordV1 restored;
+  // Public-finality loading remains an exact tip/hash comparison.
+  LOGOS_ASSERT_EQ(statusName(store.load(advanced, restored)),
+                  std::string("binding_mismatch"));
+  LOGOS_ASSERT_EQ(statusName(store.loadLocalCommitted(advanced, restored)),
+                  std::string("loaded"));
+  LOGOS_ASSERT_TRUE(sameRecord(restored, source));
+
+  const auto rejected = [&](const palace::PalaceStorageMvpCatalogBindingV1
+                                &expected) {
+    palace::PalaceStorageMvpCatalogRecordV1 retained = source;
+    retained.binding.networkId = "retained-sentinel";
+    const palace::PalaceStorageMvpCatalogRecordV1 before = retained;
+    LOGOS_ASSERT_EQ(statusName(store.loadLocalCommitted(expected, retained)),
+                    std::string("binding_mismatch"));
+    LOGOS_ASSERT_TRUE(sameRecord(retained, before));
+  };
+
+  palace::PalaceStorageMvpCatalogBindingV1 sameHeightDifferentHash =
+      source.binding;
+  sameHeightDifferentHash.finalizedHash = std::string(64U, '2');
+  rejected(sameHeightDifferentHash);
+
+  palace::PalaceStorageMvpCatalogBindingV1 behind = source.binding;
+  --behind.finalizedCheckpoint;
+  behind.finalizedHash = std::string(64U, '3');
+  rejected(behind);
+
+  std::vector<palace::PalaceStorageMvpCatalogBindingV1> differentAuthority;
+  palace::PalaceStorageMvpCatalogBindingV1 changed = advanced;
+  changed.networkId = "other-network";
+  differentAuthority.push_back(changed);
+  changed = advanced;
+  changed.programIdHex[0] = 'f';
+  differentAuthority.push_back(changed);
+  changed = advanced;
+  changed.rootAccountIdHex[0] = 'f';
+  differentAuthority.push_back(changed);
+  changed = advanced;
+  changed.rootManifestCid =
+      "QmNLfbof5rLekrACjeuLk9JmGZD2HDBHCU4z16iYKmx5SE";
+  differentAuthority.push_back(changed);
+  for (const auto &different : differentAuthority)
+    rejected(different);
+}
+
 LOGOS_TEST(
     storage_mvp_catalog_store_restores_transport_only_until_exact_bytes) {
   palace::PalaceStorageMvpBundle published;
@@ -379,7 +450,7 @@ LOGOS_TEST(storage_mvp_catalog_store_rejects_invalid_catalog_and_binding) {
   }
 
   palace::PalaceStorageMvpCatalogBindingV1 invalidExpected = source.binding;
-  invalidExpected.finalizedCheckpoint = 0U;
+  invalidExpected.rootManifestCid.clear();
   palace::PalaceStorageMvpCatalogRecordV1 retained = source;
   const palace::PalaceStorageMvpCatalogRecordV1 before = retained;
   LOGOS_ASSERT_EQ(statusName(store.load(invalidExpected, retained)),

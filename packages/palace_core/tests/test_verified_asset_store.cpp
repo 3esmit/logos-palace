@@ -105,6 +105,34 @@ LOGOS_TEST(verified_asset_store_resolves_only_untampered_digest_handles) {
     LOGOS_ASSERT_FALSE(store.verifiedPngPath(staged.handle).has_value());
 }
 
+LOGOS_TEST(verified_asset_store_keeps_profile_scoped_assets_in_selected_profile) {
+    QTemporaryDir temporary;
+    LOGOS_ASSERT_TRUE(temporary.isValid());
+
+    const QString instanceRoot = temporary.path() + QStringLiteral("/instance");
+    const QString profileRoot =
+        instanceRoot + QStringLiteral("/palace-profiles/local-development");
+    LOGOS_ASSERT_TRUE(QDir().mkpath(profileRoot));
+
+    palace::VerifiedAssetStore store(profileRoot.toStdString());
+    const std::string encoded = encodedPng();
+    const palace::VerifiedAsset staged =
+        store.stagePngDerivative(assetRef(encoded), encoded);
+    LOGOS_ASSERT_TRUE(staged.accepted);
+
+    const QString profilePath = QDir::cleanPath(
+        profileRoot + QStringLiteral("/verified_assets/logos_palace_ui/")
+        + QString::fromStdString(staged.handle) + QStringLiteral(".png"));
+    const QString legacyPath = QDir::cleanPath(
+        instanceRoot + QStringLiteral("/verified_assets/logos_palace_ui/")
+        + QString::fromStdString(staged.handle) + QStringLiteral(".png"));
+    LOGOS_ASSERT_TRUE(QFileInfo::exists(profilePath));
+    LOGOS_ASSERT_FALSE(QFileInfo::exists(legacyPath));
+    const auto resolved = store.verifiedPngPath(staged.handle);
+    LOGOS_ASSERT_TRUE(resolved.has_value());
+    LOGOS_ASSERT_EQ(*resolved, QFileInfo(profilePath).canonicalFilePath().toStdString());
+}
+
 LOGOS_TEST(verified_asset_store_rejects_existing_same_content_symlink) {
     QTemporaryDir temporary;
     LOGOS_ASSERT_TRUE(temporary.isValid());

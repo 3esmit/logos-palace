@@ -14,6 +14,15 @@ enum class CapabilityKind {
     SetRoomLock,
 };
 
+// Identifies the evidence that supplied the current authority snapshot.
+// Locally committed state is usable only in the local-development profile;
+// it must never be presented as public finality.
+enum class AuthoritySnapshotSource : std::uint8_t {
+    None = 0U,
+    Finalized = 1U,
+    LocalCommitted = 2U,
+};
+
 struct UserProfileV1 {
     std::string userId;
     std::string deliverySigningPublicKey;
@@ -61,11 +70,15 @@ struct AuthoritySnapshotV1 {
     std::vector<BanV1> bans;
 };
 
-// Stores only a fully validated, finalized authority projection. Callers must
-// not apply a Delivery hint or a pending action through this class.
+// Stores only a fully validated authority projection. Callers must not apply a
+// Delivery hint or a pending action through this class. The source stays
+// explicit so a local committed snapshot cannot silently become finality.
 class AuthorityProjection {
 public:
     bool replaceFinalized(const AuthoritySnapshotV1& snapshot, std::int64_t finalizedAt);
+    bool replaceLocalCommitted(
+        const AuthoritySnapshotV1& snapshot,
+        std::int64_t committedAt);
 
     bool can(const std::string& subjectUserId,
              CapabilityKind capability,
@@ -79,11 +92,21 @@ public:
     const std::string& entryRoomId() const;
     std::int64_t roomEpoch(const std::string& roomId) const;
     std::int64_t finalizedAt() const;
+    std::int64_t committedAt() const;
+    AuthoritySnapshotSource source() const;
 
 private:
+    bool replace(
+        const AuthoritySnapshotV1& snapshot,
+        std::int64_t committedAt,
+        AuthoritySnapshotSource source);
+
     AuthoritySnapshotV1 m_snapshot;
-    std::int64_t m_finalizedAt = 0;
+    std::int64_t m_committedAt = 0;
+    AuthoritySnapshotSource m_source = AuthoritySnapshotSource::None;
     bool m_hasSnapshot = false;
 };
+
+const char* authoritySnapshotSourceName(AuthoritySnapshotSource source);
 
 } // namespace palace

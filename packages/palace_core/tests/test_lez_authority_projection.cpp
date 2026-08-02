@@ -367,6 +367,27 @@ LOGOS_TEST(lez_finalized_authority_projects_owner_moderator_rooms_and_bans) {
         "bafyblocked", hex(bytes(0x40U))));
 }
 
+LOGOS_TEST(lez_authority_projection_keeps_local_commit_source_explicit) {
+    using namespace palace;
+    const Fixture fixture = finalizedFixture();
+    AuthorityProjection authority;
+    const PalaceLezAuthorityProjectionResultV1 replaced =
+        replaceLezAuthorityV1(
+            authority,
+            fixture.root,
+            fixture.children,
+            AuthoritySnapshotSource::LocalCommitted,
+            500);
+    LOGOS_ASSERT_TRUE(replaced.accepted);
+    LOGOS_ASSERT_TRUE(
+        authority.source() == AuthoritySnapshotSource::LocalCommitted);
+    LOGOS_ASSERT_EQ(authority.committedAt(), 500);
+    LOGOS_ASSERT_EQ(authority.finalizedAt(), 0);
+    LOGOS_ASSERT_EQ(
+        std::string(authoritySnapshotSourceName(authority.source())),
+        std::string("local-committed"));
+}
+
 LOGOS_TEST(lez_finalized_authority_requires_exact_root_and_child_pdas) {
     using namespace palace;
 
@@ -375,7 +396,7 @@ LOGOS_TEST(lez_finalized_authority_requires_exact_root_and_child_pdas) {
     LOGOS_ASSERT_EQ(
         projectFinalizedLezAuthorityV1(
             wrongRoot.root, wrongRoot.children).reason,
-        std::string("invalid-finalized-root"));
+        std::string("invalid-authority-root"));
 
     Fixture wrongChild = finalizedFixture();
     wrongChild.children[0].accountIdHex = std::string(64U, 'f');

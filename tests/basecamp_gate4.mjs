@@ -202,7 +202,7 @@ const basecampWrapperFallbackLoaderPaths = Object.freeze([
 const releaseProgramId = palaceRelease.programIdHex;
 const releaseRootId = palaceRelease.rootAccountIdHex;
 const approvedLezModuleRevision =
-  "e50f1628dff936b017ee2ec69e8c99b0cafb69a6";
+  "10c6c1dd76107cb96e99f651fec3f61c35e09901";
 function expectedGraphObjectContract(propId) {
   if (
     propId !== null
@@ -8193,7 +8193,7 @@ try {
       lezModuleApiVersion: "0.4.0-alpha.2",
       lezModuleRevision,
       lezRuntimeRevision:
-        "e923315c020d4966807849f9db10536b628d5739",
+        "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
       lezSchemaId: "palace-schema-v3",
       lezPublicContractRevision:
         "2b67563baf590c32dd82e50e3252815ec56bdaec",

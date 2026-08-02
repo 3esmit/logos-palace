@@ -245,6 +245,44 @@ void populate(
     coordinator.interrupt();
 }
 
+LOGOS_TEST(lez_coordinator_rejects_observation_with_divergent_root_digest)
+{
+    palace::PalaceLezTransactionCoordinator coordinator;
+    const palace::PalaceLezNetworkFingerprint network = fingerprint();
+    LOGOS_ASSERT_TRUE(
+        coordinator.configureNetworkFingerprint(network, network).accepted);
+    LOGOS_ASSERT_TRUE(coordinator.activate());
+
+    const palace::PalaceLezTransactionPlanV3 plan =
+        palace::PalaceLezCodec::buildTransaction(
+            kProgramId,
+            kSigner,
+            palace::PalaceLezInstructionV3{
+                palace::PalaceLezRevokeCapabilityV3{
+                    7U, bytes(0x12U)}});
+    LOGOS_ASSERT_TRUE(plan.accepted);
+
+    const std::string transactionHash = hash(99U);
+    const RootFixture root = rootFixture();
+    LOGOS_ASSERT_TRUE(coordinator.registerSubmission(
+        plan,
+        "{\"success\":true,\"tx_hash\":\"" + transactionHash
+            + "\",\"secrets\":[],\"error\":\"\"}",
+        hash(1234U)).accepted);
+
+    const palace::PalaceLezCoordinatorUpdate strictObserved =
+        coordinator.observeStableRoot(
+            transactionHash,
+            42,
+            rootAccountJson(root.dataHex),
+            42);
+    LOGOS_ASSERT_FALSE(strictObserved.accepted);
+    LOGOS_ASSERT_EQ(
+        strictObserved.reason,
+        std::string("observation-mismatch"));
+
+}
+
 palace::PalaceLezTransactionPlanV3 initializePlan()
 {
     palace::PalaceLezInitializeV3 initialize;

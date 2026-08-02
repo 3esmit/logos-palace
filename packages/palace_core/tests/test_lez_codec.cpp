@@ -150,6 +150,12 @@ std::string submissionJson(const std::string& transactionHash)
         + "\",\"secrets\":[],\"error\":\"\"}";
 }
 
+std::string transferSubmissionJson(const std::string& transactionHash)
+{
+    return "{\"success\":true,\"tx_hash\":\"" + transactionHash
+        + "\",\"error\":\"\"}";
+}
+
 std::string publicAccountJson(const std::string& dataHex)
 {
     return "{\"program_owner\":\"" + std::string(kProgramId)
@@ -675,6 +681,36 @@ LOGOS_TEST(palace_lez_v3_rejects_word_padding_bounds_and_malformed_json) {
     LOGOS_ASSERT_FALSE(PalaceLezCodec::decodePublicAccount(
         "{\"program_owner\":1}",
         palace_lez_test::kProgramId).accepted);
+}
+
+LOGOS_TEST(
+    palace_lez_parses_both_public_account_registration_response_contracts) {
+    using namespace palace;
+    using namespace palace_lez_test;
+    const std::string transactionHash = hash(42U);
+
+    const PalaceLezSubmissionResult convenience =
+        PalaceLezCodec::parsePublicAccountRegistrationSubmissionResult(
+            transferSubmissionJson(transactionHash));
+    LOGOS_ASSERT_TRUE(convenience.accepted);
+    LOGOS_ASSERT_EQ(convenience.transactionHash, transactionHash);
+    LOGOS_ASSERT_FALSE(PalaceLezCodec::parseSubmissionResult(
+        transferSubmissionJson(transactionHash)).accepted);
+
+    const PalaceLezSubmissionResult program =
+        PalaceLezCodec::parseSubmissionResult(submissionJson(transactionHash));
+    LOGOS_ASSERT_TRUE(program.accepted);
+    LOGOS_ASSERT_EQ(program.transactionHash, transactionHash);
+    const PalaceLezSubmissionResult genericRegistration =
+        PalaceLezCodec::parsePublicAccountRegistrationSubmissionResult(
+            submissionJson(transactionHash));
+    LOGOS_ASSERT_TRUE(genericRegistration.accepted);
+    LOGOS_ASSERT_EQ(genericRegistration.transactionHash, transactionHash);
+    LOGOS_ASSERT_FALSE(
+        PalaceLezCodec::parsePublicAccountRegistrationSubmissionResult(
+            "{\"success\":true,\"tx_hash\":\"" + transactionHash
+            + "\",\"secrets\":[\"unexpected\"],\"error\":\"\"}")
+            .accepted);
 }
 
 LOGOS_TEST(palace_lez_v3_rebuilds_only_strict_chronological_finalized_history) {

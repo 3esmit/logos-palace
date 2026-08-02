@@ -604,6 +604,7 @@ async function waitForModerationControl(
     throw new Error("moderation control name is invalid");
   }
   const deadline = Date.now() + timeout;
+  let lastState = "unobserved";
   while (Date.now() < deadline) {
     if (shuttingDown) throw new Error("moderation interaction interrupted");
     let found;
@@ -633,13 +634,29 @@ async function waitForModerationControl(
     } catch {
       throw new Error(`moderation ${description} control properties failed`);
     }
+    let rootState = {};
+    try {
+      rootState = await rootProperties();
+    } catch {
+      rootState = {};
+    }
+    lastState = [
+      `visible=${String(properties.visible)}`,
+      `enabled=${String(properties.enabled)}`,
+      `onboarding=${String(rootState.onboardingPhase ?? "")}`,
+      `roomUsable=${String(rootState.roomUsable)}`,
+      `palaceOpen=${String(rootState.palaceOpen)}`,
+      `panelOpen=${String(rootState.backgroundModerationOpen)}`,
+    ].join(";");
     if (properties.visible === false || properties.enabled !== true) {
       await sleep(50);
       continue;
     }
     return objectId;
   }
-  throw new Error(`moderation ${description} control is unavailable`);
+  throw new Error(
+    `moderation ${description} control is unavailable: ${lastState}`,
+  );
 }
 
 async function clickModerationControl(objectName, description) {
@@ -687,9 +704,12 @@ async function waitForModerationPanel(open, description) {
 }
 
 async function ensureModerationPanelOpen() {
-  if ((await rootProperties()).backgroundModerationOpen === true) return;
+  const properties = await rootProperties();
+  if (properties.backgroundModerationOpen === true) return;
   await clickModerationControl(
-    "palaceBackgroundModerationButton",
+    properties.roomUsable !== true || properties.palaceOpen !== true
+      ? "palaceOnboardingOpenButton"
+      : "palaceBackgroundModerationButton",
     "panel open",
   );
   await waitForModerationPanel(true, "open");

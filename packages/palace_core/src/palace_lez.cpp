@@ -2025,6 +2025,47 @@ PalaceLezExpectedRootV3 PalaceLezCodec::expectedAdvancedRoot(
     };
 }
 
+PalaceLezSubmissionResult
+PalaceLezCodec::parsePublicAccountRegistrationSubmissionResult(
+    const std::string& responseJson)
+{
+    if (responseJson.empty() || responseJson.size() > 64U * 1024U)
+        return {false, "invalid-submit-response", {}};
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(QByteArray::fromStdString(responseJson), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
+        return {false, "invalid-submit-response", {}};
+    const QJsonObject object = document.object();
+    const bool convenienceResponse =
+        exactKeys(object, {"success", "tx_hash", "error"});
+    const bool genericResponse =
+        exactKeys(object, {"success", "tx_hash", "secrets", "error"});
+    if ((!convenienceResponse && !genericResponse)
+        || !object.value(QStringLiteral("success")).isBool()
+        || !object.value(QStringLiteral("tx_hash")).isString()
+        || !object.value(QStringLiteral("error")).isString()) {
+        return {false, "invalid-submit-response", {}};
+    }
+    if (genericResponse) {
+        const QJsonValue secrets = object.value(QStringLiteral("secrets"));
+        if (!secrets.isArray())
+            return {false, "invalid-submit-response", {}};
+        if (!secrets.toArray().empty())
+            return {false, "unexpected-public-transaction-secrets", {}};
+    }
+    const bool success = object.value(QStringLiteral("success")).toBool();
+    const std::string hash =
+        object.value(QStringLiteral("tx_hash")).toString().toStdString();
+    const std::string rejection =
+        object.value(QStringLiteral("error")).toString().toStdString();
+    if (!success || !rejection.empty())
+        return {false, "module-rejected", {}};
+    if (!isLowerHex(hash, 64U))
+        return {false, "invalid-transaction-hash", {}};
+    return {true, "accepted", hash};
+}
+
 PalaceLezSubmissionResult PalaceLezCodec::parseSubmissionResult(
     const std::string& responseJson)
 {

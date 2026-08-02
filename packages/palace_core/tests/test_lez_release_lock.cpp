@@ -14,8 +14,10 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
     LOGOS_ASSERT_EQ(network.programBytecodeSha256Hex.size(), 64U);
     LOGOS_ASSERT_EQ(
         network.moduleRevision,
-        std::string("e50f1628dff936b017ee2ec69e8c99b0cafb69a6"));
-    LOGOS_ASSERT_EQ(network.runtimeRevision.size(), 40U);
+        std::string("10c6c1dd76107cb96e99f651fec3f61c35e09901"));
+    LOGOS_ASSERT_EQ(
+        network.runtimeRevision,
+        std::string("3a96a23f7feecfc32b3f31beafd4f1768c691e42"));
     LOGOS_ASSERT_EQ(network.publicContractRevision.size(), 40U);
 
     const auto& explorer = palace::PalaceLezReleaseLock::explorer();
@@ -50,8 +52,11 @@ LOGOS_TEST(lez_release_lock_rejects_any_live_surface_drift)
     LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
         "lez_core", "0.4.0-alpha.2",
         "https://testnet.lez.logos.co/other"));
-    LOGOS_ASSERT_TRUE(
-        palace::PalaceLezReleaseLock::walletConfigJson().find(
-            palace::PalaceLezReleaseLock::expectedSequencerOrigin())
+    const std::string& walletConfig =
+        palace::PalaceLezReleaseLock::walletConfigJson();
+    LOGOS_ASSERT_TRUE(walletConfig.find(
+        "\"sequencer_addr\":\"https://testnet.lez.logos.co\"")
         != std::string::npos);
+    LOGOS_ASSERT_EQ(walletConfig.find("\"sequencers\""), std::string::npos);
+    LOGOS_ASSERT_EQ(walletConfig.find("\"calibration_limit\""), std::string::npos);
 }

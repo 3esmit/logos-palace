@@ -6,8 +6,10 @@
 
 namespace palace {
 
-// Exact finalized authority fields that bind an on-disk catalog to the LEZ
-// snapshot that authorized its root manifest.
+// Authority fields that bind an on-disk catalog to the LEZ snapshot that
+// authorized its root manifest. Public-finality recovery compares every field
+// exactly. Local-committed recovery has a separate, explicitly named path for
+// harmless empty-block advancement.
 struct PalaceStorageMvpCatalogBindingV1 {
   std::string networkId;
   std::string programIdHex;
@@ -67,6 +69,16 @@ public:
   PalaceStorageMvpCatalogStoreStatus
   load(const PalaceStorageMvpCatalogBindingV1 &expectedBinding,
        PalaceStorageMvpCatalogRecordV1 &record) const;
+
+  // Local-development-only recovery for a current local-committed authority.
+  // The sealed record must have the exact network, program, root, and active
+  // root-manifest binding, and cannot be ahead of the current local tip. An
+  // equal-height record must also have the exact tip hash. Callers must obtain
+  // expectedBinding from a complete local history and re-verify every fetched
+  // CID before making the catalog active. This never relaxes load().
+  PalaceStorageMvpCatalogStoreStatus
+  loadLocalCommitted(const PalaceStorageMvpCatalogBindingV1 &expectedBinding,
+                     PalaceStorageMvpCatalogRecordV1 &record) const;
 
 private:
   std::string instancePersistenceRoot_;

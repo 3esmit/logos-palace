@@ -3,17 +3,17 @@
     "basecamp": {
       "flake": false,
       "locked": {
-        "lastModified": 1785579522,
-        "narHash": "sha256-ys1iEP1O82JXAuuEEomxt4otkUl5M7Y6wHrQQs2Nj5Y=",
+        "lastModified": 1785639685,
+        "narHash": "sha256-su4TBS/FXEWN2GZdZ85ONy2O7mGPW7+GdmR7UROx2C4=",
         "owner": "3esmit",
         "repo": "logos-basecamp",
-        "rev": "3de3c4476b7061e36760b39f97653766ef4434f0",
+        "rev": "98888ed952dd3c147c66aab48aeec6fe41329af3",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-basecamp",
-        "rev": "3de3c4476b7061e36760b39f97653766ef4434f0",
+        "rev": "98888ed952dd3c147c66aab48aeec6fe41329af3",
         "type": "github"
       }
     },
@@ -536,17 +536,17 @@
         "nix-bundle-lgx": "nix-bundle-lgx_32"
       },
       "locked": {
-        "lastModified": 1785584695,
-        "narHash": "sha256-6AR9zKCyHCwaj5Jg0kEP48diCzSaYwtxWWdeEizWgJQ=",
+        "lastModified": 1785614493,
+        "narHash": "sha256-wBTGzneTwFfLLUZQMDAjM/v36WNVqwawVjddZhQRs5I=",
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
-        "rev": "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
+        "rev": "10c6c1dd76107cb96e99f651fec3f61c35e09901",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
-        "rev": "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
+        "rev": "10c6c1dd76107cb96e99f651fec3f61c35e09901",
         "type": "github"
       }
     },
@@ -9017,17 +9017,17 @@
         "rust-rapidsnark": "rust-rapidsnark"
       },
       "locked": {
-        "lastModified": 1785268089,
-        "narHash": "sha256-gNTvGsRrwZ6IHOsnu4SQx/V9pe/J20CQ/FS4yGAOQ2c=",
+        "lastModified": 1785613650,
+        "narHash": "sha256-lGh9fMClqOwHzuHVzpeft8b7qdHJFlYfCsZTCmbQB9A=",
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "e923315c020d4966807849f9db10536b628d5739",
+        "rev": "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "e923315c020d4966807849f9db10536b628d5739",
+        "rev": "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
         "type": "github"
       }
     },

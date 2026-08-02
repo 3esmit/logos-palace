@@ -71,6 +71,78 @@ VerifiedAsset reject(const std::string& reason)
     return {false, {}, reason, 0U, 0U};
 }
 
+bool ensureCanonicalDirectoryUnderRoot(const QString& root,
+                                       const QString& directory)
+{
+    if (root.isEmpty() || directory.isEmpty())
+        return false;
+    if (!QDir().mkpath(directory))
+        return false;
+    const QString canonicalDirectory = QDir(directory).canonicalPath();
+    return isUnder(canonicalDirectory, root);
+}
+
+bool stageVerifiedPngAt(const QString& instanceRoot,
+                        const QString& assetDirectory,
+                        const palace::VerifiedAsset& verified,
+                        const std::string& encoded,
+                        std::string& reason)
+{
+    reason.clear();
+    if (!ensureCanonicalDirectoryUnderRoot(instanceRoot, assetDirectory)) {
+        reason = "asset-directory-create-failed";
+        return false;
+    }
+
+    const QString canonicalAssetDirectory = QDir(assetDirectory).canonicalPath();
+    if (!isUnder(canonicalAssetDirectory, instanceRoot)) {
+        reason = "asset-directory-escaped-instance-root";
+        return false;
+    }
+
+    const QString destination =
+        canonicalAssetDirectory + QLatin1Char('/')
+        + QString::fromStdString(verified.handle)
+        + QStringLiteral(".png");
+    const QFileInfo existing(destination);
+    if (existing.isSymLink()) {
+        reason = "asset-destination-symlink";
+        return false;
+    }
+    if (existing.exists()) {
+        const QString canonicalExisting = existing.canonicalFilePath();
+        if (!existing.isFile()
+            || !isUnder(canonicalExisting, canonicalAssetDirectory)) {
+            reason = "asset-destination-escaped-store";
+            return false;
+        }
+        QFile file(canonicalExisting);
+        if (!file.open(QIODevice::ReadOnly)) {
+            reason = "asset-destination-read-failed";
+            return false;
+        }
+        const QByteArray existingBytes = file.readAll();
+        if (crypto::sha256Hex(
+                std::string(existingBytes.constData(),
+                            static_cast<std::size_t>(existingBytes.size())))
+            != verified.handle) {
+            reason = "asset-destination-digest-mismatch";
+            return false;
+        }
+        return true;
+    }
+
+    QSaveFile output(destination);
+    if (!output.open(QIODevice::WriteOnly)
+        || output.write(encoded.data(), static_cast<qint64>(encoded.size()))
+            != static_cast<qint64>(encoded.size())
+        || !output.commit()) {
+        reason = "asset-atomic-stage-failed";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 VerifiedAssetStore::VerifiedAssetStore(std::string instancePersistencePath)
@@ -124,68 +196,57 @@ VerifiedAsset VerifiedAssetStore::stagePngDerivative(const AssetRefV1& reference
 
     const QString instanceRoot = QString::fromStdString(m_instancePersistencePath);
     const QString assetDirectory = QString::fromStdString(m_directory);
-    if (!QDir().mkpath(assetDirectory))
-        return reject("asset-directory-create-failed");
-
-    const QString canonicalAssetDirectory = QDir(assetDirectory).canonicalPath();
-    if (!isUnder(canonicalAssetDirectory, instanceRoot))
-        return reject("asset-directory-escaped-instance-root");
-
-    const QString destination = canonicalAssetDirectory + QLatin1Char('/') + QString::fromStdString(verified.handle)
-        + QStringLiteral(".png");
-    const QFileInfo existing(destination);
-    if (existing.isSymLink())
-        return reject("asset-destination-symlink");
-    if (existing.exists()) {
-        const QString canonicalExisting = existing.canonicalFilePath();
-        if (!existing.isFile() || !isUnder(canonicalExisting, canonicalAssetDirectory))
-            return reject("asset-destination-escaped-store");
-        QFile file(canonicalExisting);
-        if (!file.open(QIODevice::ReadOnly))
-            return reject("asset-destination-read-failed");
-        const QByteArray existingBytes = file.readAll();
-        if (crypto::sha256Hex(std::string(existingBytes.constData(), static_cast<std::size_t>(existingBytes.size())))
-            != verified.handle) {
-            return reject("asset-destination-digest-mismatch");
-        }
-        return verified;
-    }
-
-    QSaveFile output(destination);
-    if (!output.open(QIODevice::WriteOnly)
-        || output.write(encoded.data(), static_cast<qint64>(encoded.size())) != static_cast<qint64>(encoded.size())
-        || !output.commit()) {
-        return reject("asset-atomic-stage-failed");
+    std::string reason;
+    if (!stageVerifiedPngAt(
+            instanceRoot, assetDirectory, verified, encoded, reason)) {
+        return reject(reason);
     }
     return verified;
 }
 
 std::optional<std::string> VerifiedAssetStore::verifiedPngPath(const std::string& handle) const
 {
-    if (m_instancePersistencePath.empty() || m_directory.empty() || !isLowerHexDigest(handle))
+    if (m_instancePersistencePath.empty() || m_directory.empty()
+        || !isLowerHexDigest(handle))
         return std::nullopt;
 
-    const QString instanceRoot = QString::fromStdString(m_instancePersistencePath);
-    const QString assetDirectory = QDir(QString::fromStdString(m_directory)).canonicalPath();
-    if (!isUnder(assetDirectory, instanceRoot))
-        return std::nullopt;
+    const auto resolveFromDirectory =
+        [&](const QString& instanceRoot, const QString& directory)
+            -> std::optional<std::string> {
+        const QString assetDirectory =
+            QDir(directory).canonicalPath();
+        if (!isUnder(assetDirectory, instanceRoot))
+            return std::nullopt;
 
-    const QFileInfo candidate(assetDirectory + QLatin1Char('/')
-                              + QString::fromStdString(handle) + QStringLiteral(".png"));
-    const QString canonicalPath = candidate.canonicalFilePath();
-    if (candidate.isSymLink() || !candidate.isFile() || !isUnder(canonicalPath, assetDirectory))
-        return std::nullopt;
+        const QFileInfo candidate(
+            assetDirectory + QLatin1Char('/')
+            + QString::fromStdString(handle)
+            + QStringLiteral(".png"));
+        const QString canonicalPath = candidate.canonicalFilePath();
+        if (candidate.isSymLink() || !candidate.isFile()
+            || !isUnder(canonicalPath, assetDirectory)) {
+            return std::nullopt;
+        }
 
-    QFile input(canonicalPath);
-    if (!input.open(QIODevice::ReadOnly))
-        return std::nullopt;
-    const QByteArray encoded = input.read(10 * 1024 * 1024 + 1);
-    if (!input.atEnd() || encoded.size() > 10 * 1024 * 1024)
-        return std::nullopt;
-    const std::string bytes(encoded.constData(), static_cast<std::size_t>(encoded.size()));
-    if (crypto::sha256Hex(bytes) != handle)
-        return std::nullopt;
-    return canonicalPath.toStdString();
+        QFile input(canonicalPath);
+        if (!input.open(QIODevice::ReadOnly))
+            return std::nullopt;
+        const QByteArray encoded = input.read(10 * 1024 * 1024 + 1);
+        if (!input.atEnd() || encoded.size() > 10 * 1024 * 1024)
+            return std::nullopt;
+        const std::string bytes(
+            encoded.constData(), static_cast<std::size_t>(encoded.size()));
+        if (crypto::sha256Hex(bytes) != handle)
+            return std::nullopt;
+        return canonicalPath.toStdString();
+    };
+
+    if (const auto primary = resolveFromDirectory(
+            QString::fromStdString(m_instancePersistencePath),
+            QString::fromStdString(m_directory))) {
+        return primary;
+    }
+    return std::nullopt;
 }
 
 const std::string& VerifiedAssetStore::directory() const

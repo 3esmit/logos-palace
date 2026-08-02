@@ -34,6 +34,10 @@ const uiRep = readFileSync(
   join(root, "packages/logos_palace_ui/src/logos_palace_ui.rep"),
   "utf8",
 );
+const uiMetadata = JSON.parse(readFileSync(
+  join(root, "packages/logos_palace_ui/metadata.json"),
+  "utf8",
+));
 
 test("preview ready transitions never go negative and balance destroy", () => {
   let count = 0;
@@ -121,6 +125,150 @@ test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /objectName:\s*"palacePropBagPanel"/);
   assert.match(mainQml, /objectName:\s*"palaceUserListToggle"/);
   assert.match(mainQml, /Users:\s*"\s*\+\s*root\.participants\.length/);
+});
+
+test("Palace selects verified assets from its active persistence profile", () => {
+  assert.deepEqual(uiMetadata.verified_asset_producers, ["palace_core"]);
+  assert.deepEqual(uiMetadata.verified_asset_profile, {
+    directory: "palace-profiles",
+    environment: "PALACE_LEZ_PROFILE",
+    default: "release",
+    allowed_profiles: ["release", "local-development"],
+  });
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceRoomBackground"[\s\S]{0,420}image:\/\/basecamp-verified\//,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceRoomBackgroundPlaceholder"[\s\S]{0,800}roomBackground\.status !== Image\.Ready/,
+  );
+});
+
+test("local development keeps its unavailable public finality visible", () => {
+  assert.match(
+    mainQml,
+    /readonly property bool localDevelopmentMode:[\s\S]{0,180}locallyCommittedAuthority[\s\S]{0,180}localDevelopmentProfile/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceLocalDevelopmentIndicator"[\s\S]{0,180}visible:\s*root\.localDevelopmentMode/,
+  );
+  assert.match(mainQml, /Local development · public finality unavailable/);
+});
+
+test("creator onboarding retries only sequencer visibility races", () => {
+  assert.match(
+    mainQml,
+    /function retryableCreatorActionRejection\(receipt\)/,
+  );
+  assert.match(
+    mainQml,
+    /rejected=lez-stable-account-read;reason=/,
+  );
+  assert.match(
+    mainQml,
+    /rejected=lez-observation;reason=/,
+  );
+  assert.match(mainQml, /transaction-not-materialized/);
+  assert.match(
+    mainQml,
+    /updateCreatorActionRejection\(receipt\)/,
+  );
+  assert.match(
+    mainQml,
+    /Waiting for LEZ to expose the new Palace…/,
+  );
+});
+
+test("creator onboarding materializes the entry-room state before enabling its door", () => {
+  assert.match(uiRep, /SLOT\(QString createInitialRoomState\(\)\)/);
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::createInitialRoomState\(\)[\s\S]{0,280}modules\(\)\.palace_core\.createInitialRoomState\(\)/,
+  );
+  const initialRoomStateStart = coreImpl.indexOf(
+    "std::string PalaceCoreImpl::createInitialRoomState()",
+  );
+  const initialRoomStateEnd = coreImpl.indexOf(
+    "std::string PalaceCoreImpl::openPalace(",
+    initialRoomStateStart,
+  );
+  assert.ok(initialRoomStateStart >= 0 && initialRoomStateEnd > initialRoomStateStart);
+  const initialRoomState = coreImpl.slice(
+    initialRoomStateStart,
+    initialRoomStateEnd,
+  );
+  assert.match(initialRoomState, /buildPalaceInitialRoomStateV1/);
+  assert.match(initialRoomState, /submitPalaceInstruction/);
+  assert.match(mainQml, /function prepareInitialRoomState\(\)/);
+  assert.match(mainQml, /function createInitialRoomState\(\)/);
+  assert.match(
+    mainQml,
+    /onboardingCreatorActionId === "0"[\s\S]{0,180}prepareInitialRoomState\(\)/,
+  );
+  const createInitialRoomStateStart = mainQml.indexOf(
+    "function createInitialRoomState()",
+  );
+  const createInitialRoomStateEnd = mainQml.indexOf(
+    "function activateOnboarding()",
+    createInitialRoomStateStart,
+  );
+  assert.ok(
+    createInitialRoomStateStart >= 0
+      && createInitialRoomStateEnd > createInitialRoomStateStart,
+  );
+  const createInitialRoomState = mainQml.slice(
+    createInitialRoomStateStart,
+    createInitialRoomStateEnd,
+  );
+  assert.match(createInitialRoomState, /backend\.createInitialRoomState\(\)/);
+  assert.match(createInitialRoomState, /confirming-initial-room-state/);
+  assert.match(
+    mainQml,
+    /readonly property bool roomUsable:[\s\S]{0,180}entryRoomStateReady[\s\S]{0,180}onboardingInitialRoomStatePending/,
+  );
+});
+
+test("creator onboarding can resume room setup from existing LEZ identity", () => {
+  assert.match(
+    mainQml,
+    /readonly property bool onboardingResumeReady:[\s\S]{0,220}onboardingLezReady[\s\S]{0,220}onboardingIdentityReady/,
+  );
+  assert.match(
+    mainQml,
+    /function onboardingInputReady\(\)\s*{[\s\S]{0,120}if \(onboardingResumeReady\)\s*return true/,
+  );
+  assert.match(
+    mainQml,
+    /function startOnboarding\(\)\s*{[\s\S]{0,1200}if \(onboardingResumeReady\)[\s\S]{0,400}enterCreatorMode\(\)/,
+  );
+  assert.match(mainQml, /Continue room setup/);
+});
+
+test("Storage attachment stays explicit and reports a stopped Control node", () => {
+  assert.match(uiRep, /SLOT\(QString connectStorage\(\)\)/);
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::connectStorage\(\)[\s\S]{0,280}modules\(\)\.palace_core\.connectStorage\(\)/,
+  );
+  assert.match(
+    mainQml,
+    /function connectStorage\(\)[\s\S]{0,520}backend\.connectStorage\(\)/,
+  );
+  assert.match(mainQml, /objectName:\s*"palaceConnectStorage"/);
+  assert.match(
+    mainQml,
+    /Start Storage in Logos Control first\. Palace only connects to an already running node\./,
+  );
+  assert.match(
+    coreImpl,
+    /std::string PalaceCoreImpl::connectStorage\(\)[\s\S]{0,1600}sessionConfig\.externallyManaged\s*=\s*true/,
+  );
+  assert.match(
+    coreImpl,
+    /executeStorageCommands\(attached\.commands\);[\s\S]{0,220}if \(!m_storageSession\.running\(\)\)[\s\S]{0,180}rejected=storage-attach/,
+  );
 });
 
 test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
@@ -275,9 +423,9 @@ test("backend stops poll timers on teardown", () => {
   assert.match(backendCpp, /m_nodeEvidencePollTimer->stop\(\)/);
 });
 
-test("LEZ moderation controls reflect Core finalized capability only", () => {
+test("LEZ moderation controls reflect Core materialized capability only", () => {
   const authorityOffset = coreImpl.indexOf(
-    "PalaceCoreImpl::finalizedHumanModerationAuthority(",
+    "PalaceCoreImpl::humanModerationAuthority(",
   );
   const capabilityOffset = coreImpl.indexOf(
     "std::string PalaceCoreImpl::moderationCapabilityStatus() const",
@@ -319,24 +467,25 @@ test("LEZ moderation controls reflect Core finalized capability only", () => {
   assert.match(capabilitySource, /currentHumanModerationContext\(\)/);
   assert.match(
     capabilitySource,
-    /finalizedHumanModerationAuthority\(\s*context, kModerateUserCapability\s*\)/,
+    /humanModerationAuthority\(\s*context, kModerateUserCapability\s*\)/,
   );
   assert.match(
     capabilitySource,
-    /finalizedHumanModerationAuthority\(\s*context, kModerateAssetCapability\s*\)/,
+    /humanModerationAuthority\(\s*context, kModerateAssetCapability\s*\)/,
   );
   assert.match(
     capabilitySource,
     /if \(!user\.accepted \|\| !prop\.accepted\)[\s\S]{0,280}authority=unavailable;can_ban_user=0;can_ban_prop=0/,
   );
+  assert.match(capabilitySource, /authoritySnapshotSourceName/);
   assert.ok(
-    capabilitySource.indexOf('return "authority=finalized')
+    capabilitySource.indexOf('return "authority="')
       > capabilitySource.indexOf("if (!user.accepted || !prop.accepted)"),
   );
   assert.match(submitSource, /currentHumanModerationContext\(\)/);
   assert.match(
     submitSource,
-    /finalizedHumanModerationAuthority\(context, requiredCapability\)/,
+    /humanModerationAuthority\(context, requiredCapability\)/,
   );
 
   assert.match(
@@ -352,6 +501,7 @@ test("LEZ moderation controls reflect Core finalized capability only", () => {
     mainQml,
     /readonly property bool canBanUser:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_user"\)\s*=== "1"/,
   );
+  assert.match(mainQml, /authority"\)\s*=== "local-committed"/);
   assert.match(
     mainQml,
     /readonly property bool canBanProp:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_prop"\)\s*=== "1"/,

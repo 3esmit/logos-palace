@@ -33,6 +33,8 @@
 #include "palace_human_moderation.h"
 #include "palace_identity.h"
 #include "palace_lez_finality_expectation.h"
+#include "palace_lez_local_history.h"
+#include "palace_lez_profile.h"
 #include "palace_lez_submission_intent_store.h"
 #include "palace_projection.h"
 #include "palace_room_transition.h"
@@ -67,6 +69,12 @@ struct PalaceVmPromotionRecoveryResultV1 {
     bool accepted = false;
     std::string reason;
     std::string finalizedReceipt;
+};
+
+struct PalaceVmLocalCommittedRecoveryResultV1 {
+    bool accepted = false;
+    std::string reason;
+    std::string palaceUri;
 };
 
 struct PalaceLezTrackedSubmissionRecoveryResultV1 {
@@ -162,6 +170,54 @@ persistTrackedPalaceSubmissionV1(
     return store == nullptr
         ? PalaceLezCoordinatorStoreStatus::InvalidArgument
         : store->save(coordinator);
+}
+
+inline PalaceVmLocalCommittedRecoveryResultV1
+recoverLocalCommittedPalaceUriV1(
+    const std::string& actionId,
+    const std::string& turnActionId,
+    const std::string& palaceIdHex,
+    const std::string& rootAccountIdHex,
+    const std::string& programIdHex,
+    const std::string& expectedProgramIdHex)
+{
+    if (actionId != turnActionId) {
+        return {
+            false,
+            "local-committed-turn-mismatch",
+            {},
+        };
+    }
+    if (!canonicalPalaceLezTransactionHashV1(palaceIdHex)
+        || palaceIdHex == std::string(64U, '0')) {
+        return {
+            false,
+            "local-committed-palace-id-invalid",
+            {},
+        };
+    }
+    if (!canonicalPalaceLezTransactionHashV1(programIdHex)
+        || programIdHex != expectedProgramIdHex) {
+        return {
+            false,
+            "local-committed-program-mismatch",
+            {},
+        };
+    }
+    if (!canonicalPalaceLezTransactionHashV1(rootAccountIdHex)
+        || rootAccountIdHex
+            != PalaceLezCodec::deriveRootPda(programIdHex)) {
+        return {
+            false,
+            "local-committed-root-mismatch",
+            {},
+        };
+    }
+    return {
+        true,
+        "accepted",
+        "palace://" + palaceIdHex,
+    };
 }
 
 // Repairs the crash boundary where the accepted transaction coordinator was
@@ -363,6 +419,14 @@ public:
     std::string lezStatus() const;
     std::string createIdentity(const std::string& displayName);
     std::string identityStatus() const;
+    // Creates the initial Palace transition from the current local identity
+    // and complete, user-authored Storage bundle. The UI supplies only a
+    // human-readable title; it cannot supply authority or transition bytes.
+    std::string createPalace(const std::string& title);
+    // Creates the entry-room interaction state after the initial Palace
+    // transition has materialized. Core derives every LEZ field from the
+    // materialized owner, room, and required room behavior.
+    std::string createInitialRoomState();
     std::string openPalace(const std::string& palaceUri);
     std::string palaceStatus() const;
     std::string startDelivery(const std::string& nodeConfig);
@@ -543,7 +607,10 @@ private:
         std::string palaceUri;
         std::string palaceIdHex;
         palace::PalaceLezExplorerHistoryExpectationV1 expectation;
+        bool localCommitted = false;
         palace::PalaceLezExplorerHistorySession session;
+        palace::PalaceLezLocalCommittedHistorySession localSession;
+        std::uint8_t localRetryCount = 0U;
         bool authorityApplied = false;
         std::string reason = "not-started";
     };
@@ -586,7 +653,7 @@ private:
         bool navigationApplied = false;
     };
 
-    // This context is created only from the current finalized LEZ authority
+    // This context is created only from the current materialized LEZ authority
     // snapshot and the locally registered delivery identity. It is shared by
     // the human moderation command and the read-only UI capability surface so
     // the latter cannot advertise an authority the command would reject.
@@ -599,7 +666,7 @@ private:
         std::uint64_t nextActionId = 0U;
     };
 
-    struct FinalizedHumanModerationAuthority {
+    struct HumanModerationAuthority {
         bool accepted = false;
         std::string reason;
         std::optional<palace::PalaceLezRootRecordV3> root;
@@ -714,13 +781,12 @@ private:
         palace::PalaceHumanModerationTargetV1 targetKind,
         const std::string& selectedTarget);
     HumanModerationContext currentHumanModerationContext() const;
-    FinalizedHumanModerationAuthority
-    finalizedHumanModerationAuthority(
+    HumanModerationAuthority humanModerationAuthority(
         const HumanModerationContext& context,
         std::uint32_t requiredCapability) const;
     AssetAuthoringAuthorityStatus currentAssetAuthoringAuthorityStatus(
         bool includeDraftCreatorBinding);
-    bool currentFinalizedAssetAuthoringRoot(
+    bool currentAuthorityAssetAuthoringRoot(
         palace::PalaceLezRootRecordV3& root,
         std::string& reason) const;
     bool repairTrackedPalaceSubmissionIntent(
@@ -731,7 +797,31 @@ private:
         const std::string& actionId,
         const std::string& transactionHash,
         std::string& reason);
+    std::string submitPalaceInstruction(
+        const std::string& actionId,
+        const std::string& stateAccountIdHex,
+        const std::string& callerAccountIdHex,
+        const std::string& programIdHex,
+        const palace::PalaceLezInstructionV3& instruction);
     bool completePalaceHistoryRebuild(std::string& reason);
+    bool materializeAuthority(
+        palace::AuthoritySnapshotSource source,
+        const std::string& networkId,
+        const std::string& programIdHex,
+        const std::string& rootAccountIdHex,
+        std::uint64_t committedBlockId,
+        const std::string& committedBlockHashHex,
+        std::uint64_t lastOrderedActionId,
+        const std::vector<std::string>& accountIdsHex,
+        const std::vector<std::string>& accountResponseJson,
+        palace::AuthorityProjection& destination,
+        palace::PalaceLezAuthorityMaterializationV1& materialization,
+        std::string& reason) const;
+    bool readLocalCommittedLezAccountIds(
+        const std::vector<std::string>& accountIdsHex,
+        std::uint64_t snapshotBlockId,
+        std::vector<std::string>& accountResponseJson,
+        std::string& reason);
     bool readStableLezAccountIds(
         const std::vector<std::string>& accountIdsHex,
         std::int64_t minimumFinalizedHeight,
@@ -751,7 +841,9 @@ private:
     bool submitPalaceVmTurn(std::string& reason);
     bool recoverFinalizedPalaceVmTurn(
         std::string& reason);
-    bool promoteFinalizedPalaceVmTurn(
+    // Promotion requires either public finality or a fully rebuilt local
+    // commitment. Both paths validate the same materialized authority data.
+    bool promoteCommittedPalaceVmTurn(
         const std::string& actionId,
         std::string& reason);
     std::map<std::string, std::string>
@@ -798,9 +890,9 @@ private:
     bool completeStorageMvpPublicationFromKnownBytes(
         const std::string& objectId,
         const std::string& cid);
-    // Co-located harness assist: load object bytes from storage_publications /
-    // verified_assets after materialize (no downloadToUrlV2 — local=true still
-    // hangs after writing bytes on this host stack).
+    // Load an exact byte candidate from this profile's prior Storage
+    // publication or verified-asset cache. The caller must still validate it
+    // against the restored catalog before enabling room content.
     bool loadColocatedMaterializedObjectBytes(
         const palace::PalaceStorageMvpArtifactV1& artifact,
         std::string& bytes) const;
@@ -821,6 +913,8 @@ protected:
     void onContextReady() override;
 
 private:
+    const std::string& persistenceRoot() const;
+    const palace::PalaceLezProfileV1* selectedLezProfile() const;
     palace::ActionJournal m_actionJournal;
     std::unique_ptr<palace::ActionJournalStore> m_actionJournalStore;
     palace::PalaceProjection m_projection;
@@ -848,6 +942,8 @@ private:
         m_lezAuthorityBundleStore;
     palace::PalaceLezFinalizedAuthorityBundleV1
         m_lezAuthorityBundle;
+    palace::PalaceLezAuthorityMaterializationV1
+        m_lezAuthorityMaterialization;
     std::shared_ptr<palace::CallbackLifetime<PalaceCoreImpl>>
         m_callbackLifetime;
     std::unique_ptr<palace::PalaceLezExplorerQtTransport>
@@ -886,6 +982,9 @@ private:
     std::string m_deliveryProfile;
     std::string m_deliveryDisplayName;
     std::int64_t m_deliveryKeyEpoch = 0;
+    std::optional<palace::PalaceLezProfileV1> m_lezProfile;
+    std::string m_persistenceRoot;
+    std::string m_lezProfileBindingReason = "not-bound";
     std::string m_lezWalletState = "closed";
     std::string m_lezSyncState = "not-started";
     std::string m_lezAuthorityState = "missing";

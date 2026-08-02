@@ -239,6 +239,40 @@ LOGOS_TEST(core_vm_cold_replay_uses_configured_room_entry_path) {
             "finalized-navigation-persistence-failed"));
 }
 
+LOGOS_TEST(core_vm_local_reconcile_recovers_palace_uri_from_persisted_turn) {
+    const std::string programIdHex(64U, '1');
+    const auto recovered =
+        palace::core_detail::recoverLocalCommittedPalaceUriV1(
+            "10",
+            "10",
+            std::string(64U, '7'),
+            palace::PalaceLezCodec::deriveRootPda(programIdHex),
+            programIdHex,
+            programIdHex);
+    LOGOS_ASSERT_TRUE(recovered.accepted);
+    LOGOS_ASSERT_EQ(recovered.reason, std::string("accepted"));
+    LOGOS_ASSERT_EQ(
+        recovered.palaceUri,
+        std::string("palace://") + std::string(64U, '7'));
+}
+
+LOGOS_TEST(core_vm_local_reconcile_rejects_persisted_turn_root_mismatch) {
+    const std::string programIdHex(64U, '1');
+    const auto recovered =
+        palace::core_detail::recoverLocalCommittedPalaceUriV1(
+            "10",
+            "10",
+            std::string(64U, '7'),
+            std::string(64U, '8'),
+            programIdHex,
+            programIdHex);
+    LOGOS_ASSERT_FALSE(recovered.accepted);
+    LOGOS_ASSERT_EQ(
+        recovered.reason,
+        std::string("local-committed-root-mismatch"));
+    LOGOS_ASSERT_TRUE(recovered.palaceUri.empty());
+}
+
 LOGOS_TEST(core_vm_recovery_rejects_any_promoted_evidence_mismatch) {
     const auto exact = recoveryInput();
 

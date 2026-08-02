@@ -619,32 +619,32 @@ std::string canonicalPalaceLezRecordDigestV3(
     return crypto::sha256Hex(std::string(canonical.begin(), canonical.end()));
 }
 
-PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
-    const PalaceLezNamedFinalizedAccountV1& finalizedRoot,
-    const std::vector<PalaceLezNamedFinalizedAccountV1>& finalizedChildren)
+PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
+    const PalaceLezNamedAuthorityAccountV1& root,
+    const std::vector<PalaceLezNamedAuthorityAccountV1>& children)
 {
-    const PalaceLezPublicAccountV3& rootAccount = finalizedRoot.account;
+    const PalaceLezPublicAccountV3& rootAccount = root.account;
     if (!isLowerHex(rootAccount.programOwnerHex, 64U)
         || rootAccount.programOwnerHex
             == std::string(rootAccount.programOwnerHex.size(), '0')
         || !namedAccountIdValid(
-            finalizedRoot,
+            root,
             PalaceLezCodec::deriveRootPda(rootAccount.programOwnerHex))
         || !accountMetadataValid(rootAccount, rootAccount.programOwnerHex)
         || rootAccount.recordType != PalaceLezRecordTypeV3::PalaceRoot) {
-        return reject("invalid-finalized-root");
+        return reject("invalid-authority-root");
     }
-    const auto* root =
+    const auto* rootRecord =
         std::get_if<PalaceLezRootRecordV3>(&rootAccount.record);
-    if (root == nullptr || !validRoot(*root))
-        return reject("invalid-finalized-root-record");
+    if (rootRecord == nullptr || !validRoot(*rootRecord))
+        return reject("invalid-authority-root-record");
 
     const std::uint64_t expectedChildren =
-        static_cast<std::uint64_t>(root->userCount)
-        + 2U + static_cast<std::uint64_t>(root->grantCount)
-        + static_cast<std::uint64_t>(root->banCount)
-        + static_cast<std::uint64_t>(root->sharedStateCount);
-    if (finalizedChildren.size() != expectedChildren)
+        static_cast<std::uint64_t>(rootRecord->userCount)
+        + 2U + static_cast<std::uint64_t>(rootRecord->grantCount)
+        + static_cast<std::uint64_t>(rootRecord->banCount)
+        + static_cast<std::uint64_t>(rootRecord->sharedStateCount);
+    if (children.size() != expectedChildren)
         return reject("child-count-mismatch");
 
     std::vector<PalaceLezUserProfileRecordV3> profiles;
@@ -652,20 +652,20 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
     std::vector<PalaceLezCapabilityGrantRecordV3> grants;
     std::vector<PalaceLezBanRecordV3> bans;
     std::vector<PalaceLezRoomSharedStateRecordV3> sharedStates;
-    profiles.reserve(root->userCount);
+    profiles.reserve(rootRecord->userCount);
     rooms.reserve(2U);
-    grants.reserve(root->grantCount);
-    bans.reserve(root->banCount);
-    sharedStates.reserve(root->sharedStateCount);
+    grants.reserve(rootRecord->grantCount);
+    bans.reserve(rootRecord->banCount);
+    sharedStates.reserve(rootRecord->sharedStateCount);
 
     std::set<std::string> dataDigests;
-    std::set<std::string> accountIds{finalizedRoot.accountIdHex};
+    std::set<std::string> accountIds{root.accountIdHex};
     std::set<std::string> stableIds{
-        bytesHex(root->palaceId),
-        bytesHex(root->roomIds[0]),
-        bytesHex(root->roomIds[1]),
+        bytesHex(rootRecord->palaceId),
+        bytesHex(rootRecord->roomIds[0]),
+        bytesHex(rootRecord->roomIds[1]),
     };
-    for (const PalaceLezNamedFinalizedAccountV1& namedChild : finalizedChildren) {
+    for (const PalaceLezNamedAuthorityAccountV1& namedChild : children) {
         const PalaceLezPublicAccountV3& child = namedChild.account;
         const std::string tag = recordTag(child.recordType);
         const PalaceLezBytes32* stableId =
@@ -675,7 +675,7 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             ? std::string{}
             : PalaceLezCodec::deriveRecordPda(
                 rootAccount.programOwnerHex, tag,
-                finalizedRoot.accountIdHex, *stableId);
+                root.accountIdHex, *stableId);
         if (!accountMetadataValid(child, rootAccount.programOwnerHex)
             || child.recordType == PalaceLezRecordTypeV3::PalaceRoot
             || !namedAccountIdValid(namedChild, expectedAccountId)
@@ -688,8 +688,8 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             const auto* value =
                 std::get_if<PalaceLezUserProfileRecordV3>(&child.record);
             if (value == nullptr || !validProfile(*value)
-                || value->palaceId != root->palaceId
-                || value->profileRevision > root->revision
+                || value->palaceId != rootRecord->palaceId
+                || value->profileRevision > rootRecord->revision
                 || !stableIds.insert(bytesHex(value->userId)).second) {
                 return reject("invalid-user-profile");
             }
@@ -699,13 +699,13 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
         case PalaceLezRecordTypeV3::Room: {
             const auto* value = std::get_if<PalaceLezRoomRecordV3>(&child.record);
             if (value == nullptr || !validRoom(*value)
-                || value->palaceId != root->palaceId
-                || value->revision > root->revision) {
+                || value->palaceId != rootRecord->palaceId
+                || value->revision > rootRecord->revision) {
                 return reject("invalid-room-record");
             }
             const std::string id = bytesHex(value->roomId);
-            if (id != bytesHex(root->roomIds[0])
-                && id != bytesHex(root->roomIds[1])) {
+            if (id != bytesHex(rootRecord->roomIds[0])
+                && id != bytesHex(rootRecord->roomIds[1])) {
                 return reject("unknown-room-record");
             }
             rooms.push_back(*value);
@@ -715,9 +715,9 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             const auto* value =
                 std::get_if<PalaceLezCapabilityGrantRecordV3>(&child.record);
             if (value == nullptr || !validGrant(*value)
-                || value->palaceId != root->palaceId
-                || value->revision > root->revision
-                || !scopeNamesRoom(value->scope, root->roomIds)
+                || value->palaceId != rootRecord->palaceId
+                || value->revision > rootRecord->revision
+                || !scopeNamesRoom(value->scope, rootRecord->roomIds)
                 || !stableIds.insert(bytesHex(value->grantId)).second) {
                 return reject("invalid-capability-grant");
             }
@@ -727,9 +727,9 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
         case PalaceLezRecordTypeV3::Ban: {
             const auto* value = std::get_if<PalaceLezBanRecordV3>(&child.record);
             if (value == nullptr || !validBan(*value)
-                || value->palaceId != root->palaceId
-                || value->revision > root->revision
-                || !scopeNamesRoom(value->scope, root->roomIds)
+                || value->palaceId != rootRecord->palaceId
+                || value->revision > rootRecord->revision
+                || !scopeNamesRoom(value->scope, rootRecord->roomIds)
                 || !stableIds.insert(bytesHex(value->banId)).second) {
                 return reject("invalid-ban-record");
             }
@@ -740,10 +740,10 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             const auto* value =
                 std::get_if<PalaceLezRoomSharedStateRecordV3>(&child.record);
             if (value == nullptr || !validSharedState(*value)
-                || value->palaceId != root->palaceId
-                || value->lastOrderedActionId > root->lastOrderedActionId
-                || (value->roomId != root->roomIds[0]
-                    && value->roomId != root->roomIds[1])
+                || value->palaceId != rootRecord->palaceId
+                || value->lastOrderedActionId > rootRecord->lastOrderedActionId
+                || (value->roomId != rootRecord->roomIds[0]
+                    && value->roomId != rootRecord->roomIds[1])
                 || !stableIds.insert(bytesHex(value->sharedStateId)).second) {
                 return reject("invalid-shared-state-record");
             }
@@ -756,9 +756,10 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
         }
     }
 
-    if (profiles.size() != root->userCount || rooms.size() != 2U
-        || grants.size() != root->grantCount || bans.size() != root->banCount
-        || sharedStates.size() != root->sharedStateCount) {
+    if (profiles.size() != rootRecord->userCount || rooms.size() != 2U
+        || grants.size() != rootRecord->grantCount
+        || bans.size() != rootRecord->banCount
+        || sharedStates.size() != rootRecord->sharedStateCount) {
         return reject("record-count-mismatch");
     }
 
@@ -776,10 +777,11 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
                 return shared.roomId == roomId;
             }));
     };
-    if (roomCount(root->roomIds[0]) != 1U || roomCount(root->roomIds[1]) != 1U)
+    if (roomCount(rootRecord->roomIds[0]) != 1U
+        || roomCount(rootRecord->roomIds[1]) != 1U)
         return reject("room-record-mismatch");
-    if (sharedCount(root->roomIds[0]) > 1U
-        || sharedCount(root->roomIds[1]) > 1U) {
+    if (sharedCount(rootRecord->roomIds[0]) > 1U
+        || sharedCount(rootRecord->roomIds[1]) > 1U) {
         return reject("ambiguous-room-shared-state");
     }
 
@@ -792,13 +794,13 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
     if (static_cast<std::size_t>(std::count_if(
             profiles.begin(), profiles.end(),
             [&](const PalaceLezUserProfileRecordV3& profile) {
-                return profile.userId == root->owner;
+                return profile.userId == rootRecord->owner;
             })) != 1U) {
         return reject("missing-owner-profile");
     }
     for (const PalaceLezCapabilityGrantRecordV3& grant : grants) {
         if (!knownUser(grant.subjectUserId) || !knownUser(grant.issuedBy)
-            || grant.issuedBy != root->owner) {
+            || grant.issuedBy != rootRecord->owner) {
             return reject("grant-user-mismatch");
         }
     }
@@ -806,16 +808,16 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
         if (!knownUser(ban.issuer)
             || (ban.targetKind == PalaceLezBanTargetKindV3::User
                 && (!knownUser(ban.targetUserId)
-                    || ban.targetUserId == root->owner))
-            || !banAuthorized(ban, *root, grants)) {
+                    || ban.targetUserId == rootRecord->owner))
+            || !banAuthorized(ban, *rootRecord, grants)) {
             return reject("unauthorized-or-unknown-ban");
         }
     }
 
     AuthoritySnapshotV1 snapshot;
-    snapshot.palaceId = bytesHex(root->palaceId);
-    snapshot.ownerUserId = bytesHex(root->owner);
-    snapshot.entryRoomId = bytesHex(root->entryRoomId);
+    snapshot.palaceId = bytesHex(rootRecord->palaceId);
+    snapshot.ownerUserId = bytesHex(rootRecord->owner);
+    snapshot.entryRoomId = bytesHex(rootRecord->entryRoomId);
     for (const PalaceLezUserProfileRecordV3& profile : profiles) {
         snapshot.users.push_back({
             bytesHex(profile.userId),
@@ -823,7 +825,7 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             static_cast<std::int64_t>(profile.keyEpoch),
         });
     }
-    for (const PalaceLezBytes32& roomId : root->roomIds) {
+    for (const PalaceLezBytes32& roomId : rootRecord->roomIds) {
         const auto room = std::find_if(
             rooms.begin(), rooms.end(),
             [&](const PalaceLezRoomRecordV3& value) {
@@ -845,16 +847,16 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
     }
     for (const PalaceLezCapabilityGrantRecordV3& grant : grants) {
         appendMappedGrant(
-            snapshot, grant, *root, kCapModerateUser,
+            snapshot, grant, *rootRecord, kCapModerateUser,
             CapabilityKind::ModerateUser, ":moderate-user");
         appendMappedGrant(
-            snapshot, grant, *root, kCapModerateAsset,
+            snapshot, grant, *rootRecord, kCapModerateAsset,
             CapabilityKind::ModerateAsset, ":moderate-asset");
         appendMappedGrant(
-            snapshot, grant, *root, kCapSetRoomLock,
+            snapshot, grant, *rootRecord, kCapSetRoomLock,
             CapabilityKind::SetRoomLock, ":set-room-lock");
         appendMappedGrant(
-            snapshot, grant, *root, kCapRoomEdit,
+            snapshot, grant, *rootRecord, kCapRoomEdit,
             CapabilityKind::RoomEdit, ":room-edit");
     }
     for (const PalaceLezBanRecordV3& ban : bans) {
@@ -868,9 +870,9 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
             projected.assetCid = ban.targetAssetCid;
         projected.issuedBy = bytesHex(ban.issuer);
         projected.active = ban.active;
-        if (ban.issuer != root->owner) {
+        if (ban.issuer != rootRecord->owner) {
             const PalaceLezCapabilityGrantRecordV3* grant =
-                banAuthorizingGrant(ban, *root, grants);
+                banAuthorizingGrant(ban, *rootRecord, grants);
             projected.authorizationGrantId =
                 bytesHex(grant->grantId)
                 + (ban.targetKind == PalaceLezBanTargetKindV3::User
@@ -887,21 +889,48 @@ PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
     return result;
 }
 
+PalaceLezAuthorityProjectionResultV1 replaceLezAuthorityV1(
+    AuthorityProjection& destination,
+    const PalaceLezNamedAuthorityAccountV1& root,
+    const std::vector<PalaceLezNamedAuthorityAccountV1>& children,
+    const AuthoritySnapshotSource source,
+    const std::int64_t committedAt)
+{
+    PalaceLezAuthorityProjectionResultV1 result =
+        projectLezAuthorityV1(root, children);
+    if (!result.accepted)
+        return result;
+    const bool replaced = source == AuthoritySnapshotSource::Finalized
+        ? destination.replaceFinalized(result.snapshot, committedAt)
+        : source == AuthoritySnapshotSource::LocalCommitted
+        ? destination.replaceLocalCommitted(result.snapshot, committedAt)
+        : false;
+    if (!replaced) {
+        result.accepted = false;
+        result.reason = "authority-snapshot-rejected";
+    }
+    return result;
+}
+
+PalaceLezAuthorityProjectionResultV1 projectFinalizedLezAuthorityV1(
+    const PalaceLezNamedFinalizedAccountV1& finalizedRoot,
+    const std::vector<PalaceLezNamedFinalizedAccountV1>& finalizedChildren)
+{
+    return projectLezAuthorityV1(finalizedRoot, finalizedChildren);
+}
+
 PalaceLezAuthorityProjectionResultV1 replaceFinalizedLezAuthorityV1(
     AuthorityProjection& destination,
     const PalaceLezNamedFinalizedAccountV1& finalizedRoot,
     const std::vector<PalaceLezNamedFinalizedAccountV1>& finalizedChildren,
     const std::int64_t finalizedAt)
 {
-    PalaceLezAuthorityProjectionResultV1 result =
-        projectFinalizedLezAuthorityV1(finalizedRoot, finalizedChildren);
-    if (!result.accepted)
-        return result;
-    if (!destination.replaceFinalized(result.snapshot, finalizedAt)) {
-        result.accepted = false;
-        result.reason = "authority-snapshot-rejected";
-    }
-    return result;
+    return replaceLezAuthorityV1(
+        destination,
+        finalizedRoot,
+        finalizedChildren,
+        AuthoritySnapshotSource::Finalized,
+        finalizedAt);
 }
 
 } // namespace palace

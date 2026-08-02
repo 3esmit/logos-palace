@@ -161,6 +161,14 @@ test("runner publishes only through completed-claim finalization", async () => {
   ]);
 });
 
+test("runner roots the production Core artifact only", async () => {
+  const source = await readFile(runnerPath, "utf8");
+  assert.match(source, /#palace-core-lgx-portable/);
+  assert.doesNotMatch(source, /#palace-core-acceptance-lgx-portable/);
+  assert.doesNotMatch(source, /PALACE_GATE2_ACCEPTANCE_CORE_LGX/);
+  assert.match(source, /select\(length == 12\)/);
+});
+
 test("runner attests a unique stopped scope before each gate executes", async () => {
   const source = await readFile(runnerPath, "utf8");
   const start = source.indexOf("run_gate() {");
@@ -532,7 +540,7 @@ test("Gate 2 signal handlers precede first worker spawn", async () => {
 
 test("Gate 2 publication binds accepted traffic to persisted sequences", async () => {
   const source = await readFile(runnerPath, "utf8");
-  const validatorStart = source.indexOf("def valid_gate2_core:");
+  const validatorStart = source.indexOf("def valid_gate2_evidence:");
   const validatorEnd = source.indexOf(
     "\n\n      .[0] as $candidate",
     validatorStart,
@@ -541,6 +549,11 @@ test("Gate 2 publication binds accepted traffic to persisted sequences", async (
   assert.notEqual(validatorEnd, -1);
   const validator = source.slice(validatorStart, validatorEnd);
   for (const marker of [
+    "$report.runtimeVariants",
+    "test-only-acceptance-fixtures",
+    "$report.productionLgxPackages",
+    "$production_core.sha256",
+    "$installed_core.sha256",
     ".orderedSpeech.baselineStability",
     '"minimumQuietWindowMs",',
     '"observedQuietWindowMs",',
@@ -611,6 +624,18 @@ test("Gate 2 publication binds accepted traffic to persisted sequences", async (
   assert.doesNotMatch(
     validator,
     /received_accepted\s*\+\s*300/,
+  );
+  assert.match(
+    validator,
+    /\$report\.runtimeVariants == \{[\s\S]*?runtimeOutput: "palace-core-acceptance-lgx"[\s\S]*?productionSha256: \$production_core\.sha256,[\s\S]*?installedSha256: \$installed_core\.sha256/,
+  );
+  assert.match(
+    validator,
+    /\$production_core\.sha256\s*!= \$installed_core\.sha256/,
+  );
+  assert.match(
+    validator,
+    /\$report\.lgxPackages[\s\S]*?\.file != "logos-palace_core-module-lib\.lgx"[\s\S]*?\$report\.productionLgxPackages[\s\S]*?\.file != "logos-palace_core-module-lib\.lgx"/,
   );
 });
 
@@ -1019,7 +1044,7 @@ test("Gate 4 approves and binds the exact LEZ dependency before work", async () 
   assert.ok(approval < priorReportRead);
   assert.match(
     gate4,
-    /const approvedLezModuleRevision =\s*"e50f1628dff936b017ee2ec69e8c99b0cafb69a6";/,
+    /const approvedLezModuleRevision =\s*"10c6c1dd76107cb96e99f651fec3f61c35e09901";/,
   );
   assert.match(
     gate4,
@@ -1035,7 +1060,7 @@ test("Gate 4 approves and binds the exact LEZ dependency before work", async () 
   );
   assert.match(
     runner,
-    /lezModuleRevision:\s*"e50f1628dff936b017ee2ec69e8c99b0cafb69a6"/,
+    /lezModuleRevision:\s*"10c6c1dd76107cb96e99f651fec3f61c35e09901"/,
   );
 });
 

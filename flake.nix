@@ -6,12 +6,12 @@
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
-    basecamp.url = "github:3esmit/logos-basecamp/3de3c4476b7061e36760b39f97653766ef4434f0";
+    basecamp.url = "github:3esmit/logos-basecamp/98888ed952dd3c147c66aab48aeec6fe41329af3";
     basecamp.flake = false;
     delivery_module.url = "github:3esmit/logos-delivery-module/891c43bd6176e17b0aa536ef1aa369bb47e918f4";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
     storage_module.url = "github:3esmit/logos-storage-module/1c75ad9d1f02f562e845a2c445421bee6ea425ad";
-    lez_core.url = "github:3esmit/logos-execution-zone-module/e50f1628dff936b017ee2ec69e8c99b0cafb69a6";
+    lez_core.url = "github:3esmit/logos-execution-zone-module/10c6c1dd76107cb96e99f651fec3f61c35e09901";
   };
 
   outputs = inputs@{ nixpkgs, logos-module-builder, ... }:

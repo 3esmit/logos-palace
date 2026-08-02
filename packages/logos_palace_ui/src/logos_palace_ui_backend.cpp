@@ -12,6 +12,7 @@
 namespace {
 
 constexpr int kMaximumSpotReconcilePolls = 1'200;
+constexpr int kMaximumModerationReconcilePolls = 120;
 
 QString statusValue(const QString& status, const QString& name)
 {
@@ -72,6 +73,26 @@ bool isAssetIdentifier(const QString& value)
             });
 }
 
+bool isTerminalModerationState(const QString& state)
+{
+    return state == QStringLiteral("finalized")
+        || state == QStringLiteral("local-committed")
+        || state == QStringLiteral("rejected")
+        || state == QStringLiteral("degraded");
+}
+
+bool isRetryableLocalModerationReceipt(const QString& receipt)
+{
+    return receipt.startsWith(
+               QStringLiteral("rejected=lez-stable-account-read;reason=sync-"))
+        || receipt.startsWith(
+               QStringLiteral("rejected=lez-stable-account-read;reason=height-"))
+        || receipt.startsWith(
+               QStringLiteral("rejected=lez-stable-account-read;reason=wallet-height-raced"))
+        || receipt.startsWith(
+               QStringLiteral("rejected=lez-observation;reason=unstable-height"));
+}
+
 } // namespace
 
 QString LogosPalaceUiBackend::applicationRoundTrip(
@@ -102,6 +123,8 @@ void LogosPalaceUiBackend::stopPollingTimers()
     }
     m_spotTracking = false;
     m_spotDriveActive = false;
+    m_moderationTracking = false;
+    m_moderationDriveActive = false;
 }
 
 void LogosPalaceUiBackend::onContextReady()
@@ -127,6 +150,8 @@ void LogosPalaceUiBackend::onContextReady()
             refreshPalaceState();
             refreshModerationState();
             refreshSpotState();
+            if (m_moderationTracking)
+                driveLocalModerationAction();
             if (m_spotTracking)
                 driveSpotAction();
         });
@@ -663,6 +688,26 @@ QString LogosPalaceUiBackend::createIdentity(QString displayName)
     return rememberLezReceipt(result);
 }
 
+QString LogosPalaceUiBackend::createPalace(QString title)
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.createPalace(title);
+    refreshLezState();
+    refreshPalaceState();
+    return rememberLezReceipt(result);
+}
+
+QString LogosPalaceUiBackend::createInitialRoomState()
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.createInitialRoomState();
+    refreshLezState();
+    refreshPalaceState();
+    return rememberLezReceipt(result);
+}
+
 QString LogosPalaceUiBackend::openPalace(QString palaceUri)
 {
     if (!isContextReady())
@@ -725,10 +770,12 @@ QString LogosPalaceUiBackend::banUser(QString subjectUserIdHex)
     refreshLezState();
     setModerationCapabilityState(
         modules().palace_core.moderationCapabilityStatus());
-    return rememberModerationReceipt(
+    const QString receipt = rememberModerationReceipt(
         QStringLiteral("user"),
         subjectUserIdHex,
         result);
+    startLocalModerationTracking(receipt);
+    return receipt;
 }
 
 QString LogosPalaceUiBackend::banProp(QString propId)
@@ -749,8 +796,10 @@ QString LogosPalaceUiBackend::banProp(QString propId)
     refreshLezState();
     setModerationCapabilityState(
         modules().palace_core.moderationCapabilityStatus());
-    return rememberModerationReceipt(
+    const QString receipt = rememberModerationReceipt(
         QStringLiteral("prop"), propId, result);
+    startLocalModerationTracking(receipt);
+    return receipt;
 }
 
 QString LogosPalaceUiBackend::refreshModeration()
@@ -890,6 +939,10 @@ void LogosPalaceUiBackend::applyModerationActionStatus(
     QString state = QStringLiteral("pending");
     if (durable == QStringLiteral("finalized"))
         state = QStringLiteral("finalized");
+    else if (durable == QStringLiteral("observed")
+             && m_localDevelopmentProfile) {
+        state = QStringLiteral("local-committed");
+    }
     else if (durable == QStringLiteral("rejected")
              || durable == QStringLiteral("expired")
              || durable == QStringLiteral("orphaned")) {
@@ -956,7 +1009,11 @@ void LogosPalaceUiBackend::refreshLezState()
 {
     if (!isContextReady())
         return;
-    setLezState(modules().palace_core.lezStatus());
+    const QString status = modules().palace_core.lezStatus();
+    setLezState(status);
+    m_localDevelopmentProfile =
+        statusValue(status, QStringLiteral("profile"))
+        == QStringLiteral("local-development");
     setIdentityState(modules().palace_core.identityStatus());
 }
 
@@ -982,6 +1039,92 @@ void LogosPalaceUiBackend::refreshModerationState()
         statusValue(status, QStringLiteral("kind"));
     m_moderationTarget =
         statusValue(status, QStringLiteral("target"));
+    const QString state = statusValue(status, QStringLiteral("state"));
+    if (!m_localDevelopmentProfile || m_moderationActionId.isEmpty()
+        || isTerminalModerationState(state)) {
+        m_moderationTracking = false;
+    } else if (!m_moderationDriveActive) {
+        m_moderationTracking = true;
+    }
+}
+
+void LogosPalaceUiBackend::startLocalModerationTracking(
+    const QString& receipt)
+{
+    if (!m_localDevelopmentProfile
+        || !receipt.startsWith(QStringLiteral("ok;"))
+        || m_moderationActionId.isEmpty()) {
+        m_moderationTracking = false;
+        return;
+    }
+    m_moderationPollCount = 0;
+    m_moderationTracking = true;
+}
+
+QString LogosPalaceUiBackend::driveLocalModerationAction()
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    if (!m_localDevelopmentProfile || !m_moderationTracking)
+        return refreshModeration();
+    if (m_moderationDriveActive) {
+        return rememberLezReceipt(
+            QStringLiteral("rejected=moderation-reconcile-reentrant"));
+    }
+
+    const QString before = modules().palace_core.moderationStatus();
+    const QString actionId =
+        statusValue(before, QStringLiteral("action"));
+    const QString state = statusValue(before, QStringLiteral("state"));
+    if (actionId.isEmpty() || isTerminalModerationState(state)) {
+        setModerationState(before);
+        m_moderationTracking = false;
+        refreshPalaceState();
+        refreshAssetAuthoringCapabilityState();
+        return rememberLezReceipt(before);
+    }
+    if (actionId != m_moderationActionId) {
+        m_moderationTracking = false;
+        return rememberLezReceipt(
+            QStringLiteral("rejected=moderation-action-changed"));
+    }
+    if (m_moderationPollCount >= kMaximumModerationReconcilePolls) {
+        m_moderationTracking = false;
+        setModerationState(
+            QStringLiteral("state=degraded;kind=") + m_moderationKind
+            + QStringLiteral(";action=") + actionId
+            + QStringLiteral(";target=") + m_moderationTarget
+            + QStringLiteral(";reason=reconcile-budget-exhausted"));
+        return rememberLezReceipt(
+            QStringLiteral("rejected=moderation-reconcile-budget-exhausted;action=")
+            + actionId
+            + QStringLiteral(";attempts=")
+            + QString::number(m_moderationPollCount));
+    }
+
+    m_moderationDriveActive = true;
+    const QString durable =
+        statusValue(before, QStringLiteral("durable"));
+    const QString receipt = durable == QStringLiteral("submitted_to_lez")
+        ? modules().palace_core.observePalaceTransition(actionId)
+        : modules().palace_core.reconcilePalaceTransition(actionId);
+    m_moderationDriveActive = false;
+    ++m_moderationPollCount;
+    refreshLezState();
+    refreshPalaceState();
+    refreshModerationState();
+    refreshAssetAuthoringCapabilityState();
+
+    if (receipt.startsWith(QStringLiteral("rejected="))
+        && !isRetryableLocalModerationReceipt(receipt)) {
+        m_moderationTracking = false;
+        setModerationState(
+            QStringLiteral("state=degraded;kind=") + m_moderationKind
+            + QStringLiteral(";action=") + actionId
+            + QStringLiteral(";target=") + m_moderationTarget
+            + QStringLiteral(";reason=core-reconcile-rejected"));
+    }
+    return rememberLezReceipt(receipt);
 }
 
 void LogosPalaceUiBackend::refreshRoomProjection()

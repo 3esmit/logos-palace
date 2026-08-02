@@ -11,6 +11,7 @@ logos_test(
     MODULE_SOURCES
         ../src/palace_availability.cpp
         ../src/palace_sha256.cpp
+        ../src/palace_initial_authoring.cpp
         ../src/palace_application_round_trip.cpp
         ../src/palace_authority.cpp
         ../src/palace_delivery.cpp
@@ -39,6 +40,8 @@ logos_test(
         ../src/palace_lez_authority_state.cpp
         ../src/palace_lez_intent.cpp
         ../src/palace_lez_release_lock.cpp
+        ../src/palace_lez_profile.cpp
+        ../src/palace_lez_local_history.cpp
         ../src/palace_lez_submission_intent_store.cpp
         ../src/palace_human_moderation.cpp
         ../src/palace_vm_finalized_replay.cpp
@@ -52,6 +55,7 @@ logos_test(
         main.cpp
         test_availability.cpp
         test_application_round_trip.cpp
+        test_initial_authoring.cpp
         test_authority_delivery.cpp
         test_delivery_session.cpp
         test_delivery_bridge.cpp
@@ -77,6 +81,8 @@ logos_test(
         test_lez_authority_state.cpp
         test_lez_intent.cpp
         test_lez_release_lock.cpp
+        test_lez_profile.cpp
+        test_lez_local_history.cpp
         test_lez_submission_intent_store.cpp
         test_human_moderation.cpp
         test_lez_explorer_finality.cpp

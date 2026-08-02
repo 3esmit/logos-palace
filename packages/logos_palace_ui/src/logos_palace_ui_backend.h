@@ -72,6 +72,8 @@ public:
     QString markStorageMaterialized() override;
     QString startLez(QString password) override;
     QString createIdentity(QString displayName) override;
+    QString createPalace(QString title) override;
+    QString createInitialRoomState() override;
     QString openPalace(QString palaceUri) override;
     QString refreshPalace() override;
     QString refreshLez() override;
@@ -104,6 +106,8 @@ private:
     void applyModerationActionStatus(
         const QString& actionId,
         const QString& status);
+    void startLocalModerationTracking(const QString& receipt);
+    QString driveLocalModerationAction();
     void refreshDeliveryState();
     void refreshDeliveryNodeEvidence();
     void refreshStorageState();
@@ -126,6 +130,10 @@ private:
     bool m_spotDriveActive = false;
     bool m_spotPollBudgetExceeded = false;
     int m_spotPollCount = 0;
+    bool m_localDevelopmentProfile = false;
+    bool m_moderationTracking = false;
+    bool m_moderationDriveActive = false;
+    int m_moderationPollCount = 0;
     QString m_moderationActionId;
     QString m_moderationKind;
     QString m_moderationTarget;

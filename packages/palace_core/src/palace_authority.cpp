@@ -42,13 +42,13 @@ bool hasCapability(const AuthoritySnapshotV1& snapshot,
 bool banWasAuthorizedAtIssuance(const AuthoritySnapshotV1& snapshot,
                                 const BanV1& ban,
                                 CapabilityKind capability,
-                                std::int64_t finalizedAt)
+                                const std::int64_t committedAt)
 {
     if (ban.issuedBy == snapshot.ownerUserId)
         return ban.authorizationGrantId.empty();
     if (ban.authorizationGrantId.empty())
         return hasCapability(
-            snapshot, ban.issuedBy, capability, ban.roomId, finalizedAt);
+            snapshot, ban.issuedBy, capability, ban.roomId, committedAt);
     const auto grant = std::find_if(
         snapshot.grants.begin(),
         snapshot.grants.end(),
@@ -83,9 +83,11 @@ bool isLowerHex64(const std::string& value)
             });
 }
 
-bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalizedAt)
+bool validateSnapshot(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt)
 {
-    if (snapshot.palaceId.empty() || snapshot.ownerUserId.empty() || finalizedAt <= 0)
+    if (snapshot.palaceId.empty() || snapshot.ownerUserId.empty() || committedAt <= 0)
         return false;
 
     std::vector<std::string> roomIds;
@@ -132,11 +134,11 @@ bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalize
             return false;
         }
         if (namesUser && !banWasAuthorizedAtIssuance(
-                snapshot, ban, CapabilityKind::ModerateUser, finalizedAt)) {
+                snapshot, ban, CapabilityKind::ModerateUser, committedAt)) {
             return false;
         }
         if (namesAsset && !banWasAuthorizedAtIssuance(
-                snapshot, ban, CapabilityKind::ModerateAsset, finalizedAt)) {
+                snapshot, ban, CapabilityKind::ModerateAsset, committedAt)) {
             return false;
         }
         banIds.push_back(ban.banId);
@@ -147,12 +149,33 @@ bool validateSnapshot(const AuthoritySnapshotV1& snapshot, std::int64_t finalize
 } // namespace
 
 bool AuthorityProjection::replaceFinalized(const AuthoritySnapshotV1& snapshot,
-                                           std::int64_t finalizedAt)
+                                           const std::int64_t finalizedAt)
 {
-    if (!validateSnapshot(snapshot, finalizedAt))
+    return replace(snapshot, finalizedAt, AuthoritySnapshotSource::Finalized);
+}
+
+bool AuthorityProjection::replaceLocalCommitted(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt)
+{
+    return replace(
+        snapshot,
+        committedAt,
+        AuthoritySnapshotSource::LocalCommitted);
+}
+
+bool AuthorityProjection::replace(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt,
+    const AuthoritySnapshotSource source)
+{
+    if (source == AuthoritySnapshotSource::None
+        || !validateSnapshot(snapshot, committedAt)) {
         return false;
+    }
     m_snapshot = snapshot;
-    m_finalizedAt = finalizedAt;
+    m_committedAt = committedAt;
+    m_source = source;
     m_hasSnapshot = true;
     return true;
 }
@@ -228,7 +251,31 @@ std::int64_t AuthorityProjection::roomEpoch(
 
 std::int64_t AuthorityProjection::finalizedAt() const
 {
-    return m_finalizedAt;
+    return m_source == AuthoritySnapshotSource::Finalized
+        ? m_committedAt : 0;
+}
+
+std::int64_t AuthorityProjection::committedAt() const
+{
+    return m_committedAt;
+}
+
+AuthoritySnapshotSource AuthorityProjection::source() const
+{
+    return m_source;
+}
+
+const char* authoritySnapshotSourceName(const AuthoritySnapshotSource source)
+{
+    switch (source) {
+    case AuthoritySnapshotSource::None:
+        return "none";
+    case AuthoritySnapshotSource::Finalized:
+        return "finalized";
+    case AuthoritySnapshotSource::LocalCommitted:
+        return "local-committed";
+    }
+    return "none";
 }
 
 } // namespace palace

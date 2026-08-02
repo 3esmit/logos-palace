@@ -109,6 +109,22 @@ LOGOS_TEST(finalized_authority_rejects_unauthorized_bans_and_applies_delegated_b
     LOGOS_ASSERT_FALSE(authority.isAssetBanned("cid-test-prop", "lounge"));
 }
 
+LOGOS_TEST(local_committed_authority_keeps_its_source_distinct_from_finality) {
+    palace::AuthorityProjection authority;
+
+    LOGOS_ASSERT_TRUE(authority.replaceLocalCommitted(baseSnapshot(), 900));
+    LOGOS_ASSERT_TRUE(
+        authority.source()
+        == palace::AuthoritySnapshotSource::LocalCommitted);
+    LOGOS_ASSERT_EQ(
+        std::string(palace::authoritySnapshotSourceName(authority.source())),
+        std::string("local-committed"));
+    LOGOS_ASSERT_EQ(authority.committedAt(), 900);
+    LOGOS_ASSERT_EQ(authority.finalizedAt(), 0);
+    LOGOS_ASSERT_TRUE(authority.can(
+        "alice", palace::CapabilityKind::ModerateUser, "atrium", 901));
+}
+
 LOGOS_TEST(delivery_accepts_ordered_messages_then_rejects_replay_and_invalid_raw_input) {
     palace::AuthorityProjection authority;
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(baseSnapshot(), 900));

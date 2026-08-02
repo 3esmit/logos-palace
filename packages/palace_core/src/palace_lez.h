@@ -434,6 +434,12 @@ public:
         const PalaceLezInstructionV3& instruction);
     static std::vector<std::uint8_t> encodeRootRecord(
         const PalaceLezRootRecordV3& record);
+    // LEZ public-account registration uses the generic transaction response
+    // on testnet and the convenience-transfer response for local development.
+    // Keep that endpoint-specific union distinct from Palace program
+    // submissions, which always use parseSubmissionResult().
+    static PalaceLezSubmissionResult parsePublicAccountRegistrationSubmissionResult(
+        const std::string& responseJson);
     static PalaceLezSubmissionResult parseSubmissionResult(const std::string& responseJson);
     static PalaceLezRawAccountV1 parsePublicAccountSnapshot(
         const std::string& responseJson);

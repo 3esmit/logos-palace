@@ -10,6 +10,8 @@
 
 namespace palace {
 
+struct AssetAuthoringStateV1;
+
 enum class PalaceStorageMvpArtifactType : std::uint8_t {
     BackgroundPng = 0U,
     PropPng = 1U,
@@ -109,6 +111,11 @@ public:
     // this bundle and binds bytes to the published source CID.
     const PalaceStorageMvpArtifactV1* fetchedPngArtifactForCid(
         const std::string& sourceCid) const;
+    // A locally restored catalog is transport data, never creator authority.
+    // Before draft initialization, require each assigned administrator asset
+    // to match the exact verified PNG leaf and published Storage CID.
+    bool matchesAuthoringAssignments(
+        const AssetAuthoringStateV1& authoring) const;
     bool assignPublicationCid(
         const std::string& objectId,
         const std::string& cid);

@@ -1,5 +1,6 @@
 #include "logos_test.h"
 
+#include "palace_asset_authoring.h"
 #include "palace_sha256.h"
 #include "palace_storage_mvp.h"
 
@@ -150,6 +151,59 @@ bool publishAll(palace::PalaceStorageMvpBundle& bundle)
         }
     }
     return true;
+}
+
+palace::AssetAuthoringStateV1 authoringStateFor(
+    const palace::PalaceStorageMvpBundle& bundle,
+    const Backgrounds& images,
+    bool includeProp)
+{
+    palace::AssetAuthoringStateV1 state;
+    state.bundleLocked = true;
+    const auto addAsset =
+        [&state](const std::string& handle,
+                 const std::string& png,
+                 const std::string& publishedCid) {
+            palace::AssetAuthoringAssetV1 asset;
+            asset.handle = handle;
+            asset.label = "selected-image";
+            asset.width = QImage::fromData(
+                QByteArray(png.data(), static_cast<qsizetype>(png.size())),
+                "PNG").width();
+            asset.height = QImage::fromData(
+                QByteArray(png.data(), static_cast<qsizetype>(png.size())),
+                "PNG").height();
+            asset.byteLength = png.size();
+            asset.reviewState = "approved";
+            asset.publishedCid = publishedCid;
+            state.assets.emplace(handle, std::move(asset));
+        };
+
+    const auto* atrium = bundle.artifact("background-atrium");
+    const auto* lounge = bundle.artifact("background-lounge");
+    if (atrium == nullptr || lounge == nullptr)
+        return {};
+    const std::string atriumHandle = palace::crypto::sha256Hex(images.atrium);
+    const std::string loungeHandle = palace::crypto::sha256Hex(images.lounge);
+    addAsset(atriumHandle, images.atrium, atrium->cid);
+    addAsset(loungeHandle, images.lounge, lounge->cid);
+    state.roomAssignments.emplace("atrium", atriumHandle);
+    state.roomAssignments.emplace("lounge", loungeHandle);
+    if (includeProp) {
+        const auto* prop = bundle.artifact(propImageObjectId());
+        if (prop == nullptr)
+            return {};
+        const std::string propHandle = palace::crypto::sha256Hex(images.prop);
+        addAsset(propHandle, images.prop, prop->cid);
+        state.propAssignment = palace::AssetAuthoringPropAssignmentV1{
+            kTestPropId,
+            propHandle,
+            4U,
+            7U,
+            "head",
+        };
+    }
+    return state;
 }
 
 } // namespace
@@ -475,6 +529,35 @@ LOGOS_TEST(storage_mvp_resolves_only_fully_fetched_published_png_by_cid)
         cid(palace::crypto::sha256Hex("not-in-catalog"))) == nullptr);
     LOGOS_ASSERT_TRUE(visitor.fetchedPngArtifactForCid(
         sourceManifest->cid) == nullptr);
+}
+
+LOGOS_TEST(storage_mvp_requires_exact_local_authoring_assignments)
+{
+    const Backgrounds images = backgrounds();
+    palace::PalaceStorageMvpBundle source;
+    LOGOS_ASSERT_TRUE(initialize(source, images));
+    LOGOS_ASSERT_TRUE(publishAll(source));
+
+    palace::AssetAuthoringStateV1 authored =
+        authoringStateFor(source, images, true);
+    LOGOS_ASSERT_TRUE(source.matchesAuthoringAssignments(authored));
+
+    palace::AssetAuthoringStateV1 foreignCatalog = authored;
+    foreignCatalog.assets.at(
+        foreignCatalog.roomAssignments.at("atrium")).publishedCid =
+        cid(palace::crypto::sha256Hex("foreign-atrium"));
+    LOGOS_ASSERT_FALSE(source.matchesAuthoringAssignments(foreignCatalog));
+
+    palace::AssetAuthoringStateV1 missingProp = authored;
+    missingProp.propAssignment.reset();
+    LOGOS_ASSERT_FALSE(source.matchesAuthoringAssignments(missingProp));
+
+    palace::PalaceStorageMvpBundle noProp;
+    LOGOS_ASSERT_TRUE(initializeWithoutProp(noProp, images));
+    LOGOS_ASSERT_TRUE(publishAll(noProp));
+    palace::AssetAuthoringStateV1 noPropAuthoring =
+        authoringStateFor(noProp, images, false);
+    LOGOS_ASSERT_TRUE(noProp.matchesAuthoringAssignments(noPropAuthoring));
 }
 
 LOGOS_TEST(storage_mvp_background_and_prop_digests_are_runtime_inputs)

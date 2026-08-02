@@ -243,7 +243,6 @@ const runtimeOutputNames = Object.freeze([
   "basecamp",
   "delivery-module-lgx",
   "lez-core-lgx",
-  "palace-core-acceptance-lgx",
   "palace-core-contracts",
   "palace-core-lgx",
   "palace-ui-lgx",
@@ -380,8 +379,8 @@ const networkContract = Object.freeze({
   storageTopology: "private-loopback-bootstrap-mesh",
   lezNetworkId: "logos-lez-testnet-v0.2.0",
   lezModuleApiVersion: "0.4.0-alpha.2",
-  lezModuleRevision: "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
-  lezRuntimeRevision: "e923315c020d4966807849f9db10536b628d5739",
+  lezModuleRevision: "10c6c1dd76107cb96e99f651fec3f61c35e09901",
+  lezRuntimeRevision: "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
   lezSchemaId: "palace-schema-v3",
   lezPublicContractRevision:
     "2b67563baf590c32dd82e50e3252815ec56bdaec",
@@ -1069,7 +1068,7 @@ function publicLgxPackages(compiled, reports) {
   const candidates = [
     compiled.packageHashes,
     reports.gate1.value.lgxPackages,
-    reports.gate2.value.productionLgxPackages,
+    reports.gate2.value.lgxPackages,
     reports.gate3.value.packageHashes,
     reports.gate4To6.value.packageHashes,
   ];
@@ -1100,51 +1099,6 @@ function publicLgxPackages(compiled, reports) {
     file,
     sha256: digest,
   }));
-}
-
-function publicTestOnlyVariants(gate2, productionPackages) {
-  const palaceCoreFile = "logos-palace_core-module-lib.lgx";
-  const installedPackages = gate2.lgxPackages;
-  const declaredProduction = gate2.productionLgxPackages;
-  const installedCore = installedPackages?.find(
-    ({ file }) => file === palaceCoreFile,
-  );
-  const productionCore = declaredProduction?.find(
-    ({ file }) => file === palaceCoreFile,
-  );
-  const installedNonCore = installedPackages?.filter(
-    ({ file }) => file !== palaceCoreFile,
-  );
-  const productionNonCore = declaredProduction?.filter(
-    ({ file }) => file !== palaceCoreFile,
-  );
-  const expectedBinding = {
-    kind: "test-only-acceptance-fixtures",
-    file: palaceCoreFile,
-    runtimeOutput: "palace-core-acceptance-lgx",
-    productionSha256: productionCore?.sha256,
-    installedSha256: installedCore?.sha256,
-  };
-  if (
-    !Array.isArray(installedPackages)
-    || installedPackages.length !== lgxPackageNames.length
-    || !exactJson(declaredProduction, productionPackages)
-    || !exactJson(installedNonCore, productionNonCore)
-    || !installedCore
-    || !productionCore
-    || !isSha256(installedCore.sha256)
-    || installedCore.sha256 === productionCore.sha256
-    || !exactJson(gate2.runtimeVariants, {
-      palaceCore: expectedBinding,
-    })
-  ) {
-    throw new Error(
-      "Gate 2 test-only Palace Core replacement is not exact",
-    );
-  }
-  return {
-    gate2PalaceCore: expectedBinding,
-  };
 }
 
 async function completedActiveClaim({
@@ -5060,7 +5014,6 @@ export function validatePublicEvidence(evidence) {
         "sourceSnapshot",
         "runtime",
         "lgxPackages",
-        "testOnlyVariants",
         "dependencies",
         "basecamp",
         "sandboxTest",
@@ -5135,40 +5088,6 @@ export function validatePublicEvidence(evidence) {
         || entry.file !== lgxPackageNames[index]
         || !isSha256(entry.sha256),
     )
-    || !exactKeys(evidence.testOnlyVariants, ["gate2PalaceCore"])
-    || !exactKeys(
-      evidence.testOnlyVariants.gate2PalaceCore,
-      [
-        "kind",
-        "file",
-        "runtimeOutput",
-        "productionSha256",
-        "installedSha256",
-      ],
-    )
-    || evidence.testOnlyVariants.gate2PalaceCore.kind
-      !== "test-only-acceptance-fixtures"
-    || evidence.testOnlyVariants.gate2PalaceCore.file
-      !== "logos-palace_core-module-lib.lgx"
-    || evidence.testOnlyVariants.gate2PalaceCore.runtimeOutput
-      !== "palace-core-acceptance-lgx"
-    || !evidence.runtime.outputs.some(
-      ({ name }) =>
-        name === evidence.testOnlyVariants.gate2PalaceCore.runtimeOutput,
-    )
-    || !isSha256(
-      evidence.testOnlyVariants.gate2PalaceCore.productionSha256,
-    )
-    || !isSha256(
-      evidence.testOnlyVariants.gate2PalaceCore.installedSha256,
-    )
-    || evidence.testOnlyVariants.gate2PalaceCore.productionSha256
-      === evidence.testOnlyVariants.gate2PalaceCore.installedSha256
-    || evidence.testOnlyVariants.gate2PalaceCore.productionSha256
-      !== evidence.lgxPackages.find(
-        ({ file }) => file
-          === evidence.testOnlyVariants.gate2PalaceCore.file,
-      )?.sha256
     || !exactKeys(
       evidence.dependencies,
       dependencySpecs.map(([, outputName]) => outputName),
@@ -6007,10 +5926,6 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     processScopeEvidence,
   );
   const lgxPackages = publicLgxPackages(compiled.value, reports);
-  const testOnlyVariants = publicTestOnlyVariants(
-    reports.gate2.value,
-    lgxPackages,
-  );
   const processProof = publicProcessProof(reports.gate4To6.value);
   const recoveryEvidence = publicRecoveryEvidence(
     compiled.value,
@@ -6080,7 +5995,6 @@ export async function buildPublicEvidence(runArgument, outputArgument) {
     },
     runtime,
     lgxPackages,
-    testOnlyVariants,
     dependencies,
     basecamp,
     sandboxTest,

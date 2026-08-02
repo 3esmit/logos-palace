@@ -18,6 +18,8 @@ logos_module(
         src/palace_availability.cpp
         src/palace_sha256.h
         src/palace_sha256.cpp
+        src/palace_initial_authoring.h
+        src/palace_initial_authoring.cpp
         src/palace_application_round_trip.h
         src/palace_application_round_trip.cpp
         src/palace_authority.h
@@ -73,6 +75,10 @@ logos_module(
         src/palace_lez_intent.cpp
         src/palace_lez_release_lock.h
         src/palace_lez_release_lock.cpp
+        src/palace_lez_profile.h
+        src/palace_lez_profile.cpp
+        src/palace_lez_local_history.h
+        src/palace_lez_local_history.cpp
         src/palace_lez_submission_intent_store.h
         src/palace_lez_submission_intent_store.cpp
         src/palace_human_moderation.h

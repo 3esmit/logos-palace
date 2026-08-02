@@ -288,7 +288,7 @@ const dependencyRevisions = {
     narHash: "sha256-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD=",
   },
   lez_core: {
-    revision: "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
+    revision: "10c6c1dd76107cb96e99f651fec3f61c35e09901",
     narHash: "sha256-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=",
   },
 };
@@ -298,7 +298,6 @@ const runtimeOutputNames = [
   "basecamp",
   "delivery-module-lgx",
   "lez-core-lgx",
-  "palace-core-acceptance-lgx",
   "palace-core-contracts",
   "palace-core-lgx",
   "palace-ui-lgx",
@@ -320,11 +319,6 @@ const lgxPackages = lgxPackageNames.map((file, index) => ({
   file,
   sha256: String(index + 4).repeat(64),
 }));
-const gate2LgxPackages = lgxPackages.map((entry) => (
-  entry.file === "logos-palace_core-module-lib.lgx"
-    ? { ...entry, sha256: "f".repeat(64) }
-    : entry
-));
 const runtimeManifestFixture = {
   schema: "logos.palace.runtime-output-manifest",
   version: 1,
@@ -355,8 +349,8 @@ const networkContract = {
   storageTopology: "private-loopback-bootstrap-mesh",
   lezNetworkId: "logos-lez-testnet-v0.2.0",
   lezModuleApiVersion: "0.4.0-alpha.2",
-  lezModuleRevision: "e50f1628dff936b017ee2ec69e8c99b0cafb69a6",
-  lezRuntimeRevision: "e923315c020d4966807849f9db10536b628d5739",
+  lezModuleRevision: "10c6c1dd76107cb96e99f651fec3f61c35e09901",
+  lezRuntimeRevision: "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
   lezSchemaId: "palace-schema-v3",
   lezPublicContractRevision:
     "2b67563baf590c32dd82e50e3252815ec56bdaec",
@@ -1172,23 +1166,7 @@ async function fixture() {
       deliveryEnvelope: "PalaceDeliveryEnvelopeV1",
       deliveryNetworkId: "logos.test",
     },
-    runtimeVariants: {
-      palaceCore: {
-        kind: "test-only-acceptance-fixtures",
-        file: "logos-palace_core-module-lib.lgx",
-        runtimeOutput: "palace-core-acceptance-lgx",
-        productionSha256: lgxPackages.find(
-          ({ file }) => file
-            === "logos-palace_core-module-lib.lgx",
-        ).sha256,
-        installedSha256: gate2LgxPackages.find(
-          ({ file }) => file
-            === "logos-palace_core-module-lib.lgx",
-        ).sha256,
-      },
-    },
-    lgxPackages: gate2LgxPackages,
-    productionLgxPackages: lgxPackages,
+    lgxPackages,
     timings: { restartRecoveryMs: 30 },
     orderedSpeech: {
       count: 300,
@@ -2443,23 +2421,7 @@ test("builds exact allowlist-only public evidence", async () => {
       vmCommit: candidateCommit,
     });
     assert.equal(reopened.lgxPackages.length, 6);
-    assert.equal(reopened.runtime.outputs.length, 13);
-    assert.deepEqual(
-      reopened.testOnlyVariants.gate2PalaceCore,
-      {
-        kind: "test-only-acceptance-fixtures",
-        file: "logos-palace_core-module-lib.lgx",
-        runtimeOutput: "palace-core-acceptance-lgx",
-        productionSha256: lgxPackages.find(
-          ({ file }) => file
-            === "logos-palace_core-module-lib.lgx",
-        ).sha256,
-        installedSha256: gate2LgxPackages.find(
-          ({ file }) => file
-            === "logos-palace_core-module-lib.lgx",
-        ).sha256,
-      },
-    );
+    assert.equal(reopened.runtime.outputs.length, 12);
     assert.equal(reopened.processProof.exactProcessInventory, true);
     assert.equal(reopened.processProof.exactPinnedRuntimeArtifacts, true);
     assert.equal(reopened.processProof.exactWrapperExecution, true);
@@ -3079,17 +3041,16 @@ test("rejects one raw LGX digest differing from compiled evidence", async () => 
   });
 });
 
-test("rejects test-only Core bound to a different runtime output", async () => {
+test("rejects Gate 2 LGX digest differing from compiled evidence", async () => {
   await withFixture(async ({ runDir, output }) => {
     const path = join(runDir, "gate2/gate2-report.json");
     const report = await readJson(path);
-    report.runtimeVariants.palaceCore.runtimeOutput =
-      "palace-core-lgx";
+    report.lgxPackages[0].sha256 = "f".repeat(64);
     await writeJson(path, report);
     await writeCompiled(runDir);
     await assert.rejects(
       buildPublicEvidence(runDir, output),
-      /test-only Palace Core replacement is not exact/,
+      /LGX package evidence differs/,
     );
     await assert.rejects(access(output));
   });

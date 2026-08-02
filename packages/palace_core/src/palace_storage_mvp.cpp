@@ -1,5 +1,6 @@
 #include "palace_storage_mvp.h"
 
+#include "palace_asset_authoring.h"
 #include "palace_sha256.h"
 #include "palace_storage.h"
 #include "palace_storage_cid.h"
@@ -663,6 +664,77 @@ PalaceStorageMvpBundle::fetchedPngArtifactForCid(
         return &artifact;
     }
     return nullptr;
+}
+
+bool PalaceStorageMvpBundle::matchesAuthoringAssignments(
+    const AssetAuthoringStateV1& authoring) const
+{
+    if (!authoring.bundleLocked
+        || authoring.roomAssignments.size() != 2U
+        || !complete() || !fetchedContentValid()) {
+        return false;
+    }
+
+    const auto matchesRoom =
+        [this, &authoring](const std::string& roomId,
+                           const std::string& objectId) {
+            const auto assignment = authoring.roomAssignments.find(roomId);
+            if (assignment == authoring.roomAssignments.end())
+                return false;
+            const auto asset = authoring.assets.find(assignment->second);
+            const PalaceStorageMvpArtifactV1* artifact =
+                this->artifact(objectId);
+            return asset != authoring.assets.end()
+                && asset->second.handle == assignment->second
+                && asset->second.reviewState == "approved"
+                && asset->second.byteLength > 0U
+                && isCanonicalStorageCid(asset->second.publishedCid)
+                && artifact != nullptr
+                && artifact->type
+                    == PalaceStorageMvpArtifactType::BackgroundPng
+                && artifact->mediaType == "image/png"
+                && artifact->specification.contentSha256
+                    == asset->second.handle
+                && artifact->specification.byteLength
+                    == asset->second.byteLength
+                && artifact->cid == asset->second.publishedCid;
+        };
+    if (!matchesRoom("atrium", "background-atrium")
+        || !matchesRoom("lounge", "background-lounge")) {
+        return false;
+    }
+
+    const std::optional<PalaceStorageMvpPropAssetV1> bundleProp =
+        propAsset();
+    if (!authoring.propAssignment.has_value())
+        return !bundleProp.has_value();
+    if (!bundleProp.has_value())
+        return false;
+
+    const AssetAuthoringPropAssignmentV1& assignment =
+        *authoring.propAssignment;
+    const auto asset = authoring.assets.find(assignment.handle);
+    if (asset == authoring.assets.end()
+        || asset->second.handle != assignment.handle
+        || asset->second.reviewState != "approved"
+        || asset->second.byteLength == 0U
+        || !isCanonicalStorageCid(asset->second.publishedCid)
+        || bundleProp->propId != assignment.propId
+        || bundleProp->handle != assignment.handle
+        || bundleProp->width != asset->second.width
+        || bundleProp->height != asset->second.height
+        || bundleProp->anchorX != assignment.anchorX
+        || bundleProp->anchorY != assignment.anchorY
+        || bundleProp->layer != assignment.layer) {
+        return false;
+    }
+    const PalaceStorageMvpArtifactV1* prop =
+        fetchedPngArtifactForCid(asset->second.publishedCid);
+    return prop != nullptr
+        && prop->type == PalaceStorageMvpArtifactType::PropPng
+        && prop->mediaType == "image/png"
+        && prop->specification.contentSha256 == assignment.handle
+        && prop->specification.byteLength == asset->second.byteLength;
 }
 
 bool PalaceStorageMvpBundle::assignPublicationCid(

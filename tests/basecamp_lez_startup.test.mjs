@@ -253,6 +253,15 @@ test("Gate 3 resume restarts Storage for its fresh provider worker", async () =>
   assert.doesNotMatch(providerBootstrap, /if \(!report\.storageStartup\.b\)/);
 });
 
+test("Gate 3 worker reopens creator asset authoring through onboarding before Palace open", async () => {
+  const worker = await readFile(workerPath, "utf8");
+  assert.match(
+    worker,
+    /properties\.roomUsable !== true \|\| properties\.palaceOpen !== true[\s\S]{0,120}"palaceOnboardingOpenButton"/,
+  );
+  assert.match(worker, /"palaceBackgroundModerationButton"/);
+});
+
 test("Gate 4 invocations are authorized by the Palace worker", async () => {
   const [worker, gate4] = await Promise.all([
     readFile(workerPath, "utf8"),

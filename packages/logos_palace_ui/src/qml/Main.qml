@@ -136,6 +136,39 @@ Item {
         spotActionId.length > 0
         && gate5VmPhase !== "promoted"
         && gate5VmPhase !== "idle"
+    readonly property bool palaceOpen:
+        encodedStatusValue(palaceState, "palace") === "open"
+    readonly property bool entryRoomStateReady:
+        encodedStatusValue(palaceState, "entry_state") === "ready"
+    readonly property string palaceAuthoritySource:
+        encodedStatusValue(palaceState, "authority")
+    readonly property bool locallyCommittedAuthority:
+        palaceAuthoritySource === "local-committed"
+    readonly property bool localDevelopmentProfile:
+        encodedStatusValue(lezState, "profile") === "local-development"
+    // A local profile deliberately has no public-finality source. Keep that
+    // distinction visible without changing what local authority can do.
+    readonly property bool localDevelopmentMode:
+        locallyCommittedAuthority || localDevelopmentProfile
+    // Module readiness keeps the existing automation contract intact. Room
+    // controls additionally require a successfully opened Palace and its
+    // materialized entry-room state.
+    readonly property bool onboardingInitialRoomStatePending:
+        onboardingPhase === "preparing-initial-room-state"
+        || onboardingPhase === "waiting-initial-room-state"
+        || onboardingPhase === "creating-initial-room-state"
+        || onboardingPhase === "confirming-initial-room-state"
+    readonly property bool roomUsable: ready && palaceOpen
+        && entryRoomStateReady && !onboardingInitialRoomStatePending
+    readonly property bool onboardingLezReady:
+        encodedStatusValue(lezState, "ready") === "1"
+    readonly property bool onboardingIdentityReady:
+        encodedStatusValue(identityState, "identity") !== "none"
+    readonly property bool onboardingResumeReady:
+        onboardingLezReady
+        && onboardingIdentityReady
+        && (onboardingUsesExistingPalace
+            || onboardingPalaceTitle.trim().length > 0)
 
     readonly property var participants: parseParticipants(participantProjection)
     readonly property var authoringAssets:
@@ -149,21 +182,61 @@ Item {
         && encodedStatusValue(
             assetAuthoringCapabilityState, "can_author_assets")
             === "1"
+    readonly property string roomSetupPublishReadiness:
+        roomSetupPublishReadinessValue()
+    readonly property bool canPublishRoomSetup:
+        roomSetupPublishReadiness === "ready"
     // Human moderation is an admin-only LEZ command. Never infer it from
-    // display identity or room state; Core derives it from finalized authority.
+    // display identity or room state; Core derives it from materialized LEZ
+    // authority and labels local committed state explicitly.
     readonly property bool canBanUser: ready
-        && encodedStatusValue(moderationCapabilityState, "authority")
-            === "finalized"
+        && (encodedStatusValue(moderationCapabilityState, "authority")
+                === "finalized"
+            || encodedStatusValue(moderationCapabilityState, "authority")
+                === "local-committed")
         && encodedStatusValue(moderationCapabilityState, "can_ban_user")
             === "1"
     readonly property bool canBanProp: ready
-        && encodedStatusValue(moderationCapabilityState, "authority")
-            === "finalized"
+        && (encodedStatusValue(moderationCapabilityState, "authority")
+                === "finalized"
+            || encodedStatusValue(moderationCapabilityState, "authority")
+                === "local-committed")
         && encodedStatusValue(moderationCapabilityState, "can_ban_prop")
             === "1"
     readonly property int connectedPeerCount:
         parseConnectedPeerCount(deliveryNodeEvidence)
     property bool ready: false
+    property string onboardingPassword: ""
+    property string onboardingDisplayName: ""
+    property string onboardingPalaceAddress: ""
+    property string onboardingPalaceTitle: "My Palace"
+    property string onboardingPhase: "details"
+    property string onboardingError: ""
+    property string onboardingReceipt: ""
+    property string onboardingFailureStep: ""
+    property string onboardingBundleStatus: ""
+    property string onboardingCreatedPalaceUri: ""
+    property bool onboardingBundlePolling: false
+    property bool onboardingBundlePollPending: false
+    property bool onboardingFinalityPolling: false
+    property bool onboardingFinalityPollPending: false
+    property bool onboardingCreatorActionObserved: false
+    property string onboardingCreatorActionId: "0"
+    readonly property bool onboardingUsesExistingPalace:
+        onboardingPalaceAddress.trim().length > 0
+    readonly property bool onboardingWorking:
+        onboardingPhase === "starting-lez"
+        || onboardingPhase === "creating-identity"
+        || onboardingPhase === "opening-palace"
+        || onboardingPhase === "publishing-room-setup"
+        || onboardingPhase === "checking-room-setup"
+        || onboardingPhase === "creating-palace"
+        || onboardingPhase === "confirming-creation"
+        || onboardingPhase === "preparing-initial-room-state"
+        || onboardingPhase === "waiting-initial-room-state"
+        || onboardingPhase === "creating-initial-room-state"
+        || onboardingPhase === "confirming-initial-room-state"
+        || onboardingPhase === "opening-created-palace"
     property bool backgroundModerationOpen: false
     property int backgroundPreviewEpoch: 0
     property int backgroundReadyImageCount: 0
@@ -270,7 +343,7 @@ Item {
     }
 
     function focusChatWhenUnobstructed() {
-        if (ready && !backgroundModerationOpen && !propBagOpen
+        if (roomUsable && !backgroundModerationOpen && !propBagOpen
                 && !roomListOpen && !userListOpen)
             chatInput.forceActiveFocus()
     }
@@ -293,6 +366,506 @@ Item {
             return true
         }
         return false
+    }
+
+    function onboardingInputReady() {
+        if (onboardingResumeReady)
+            return true
+        return onboardingPassword.length > 0
+            && onboardingDisplayName.trim().length > 0
+            && (onboardingUsesExistingPalace
+                || onboardingPalaceTitle.trim().length > 0)
+    }
+
+    function clearOnboardingPassword() {
+        onboardingPassword = ""
+        onboardingPasswordInput.clear()
+    }
+
+    function resetOnboardingAfterEdit() {
+        onboardingError = ""
+        if (onboardingPhase === "error") {
+            onboardingPhase = "details"
+            onboardingFailureStep = ""
+        }
+    }
+
+    function onboardingFailureMessage(step, receipt) {
+        var result = String(receipt)
+        if (result.indexOf("ui-remote-call") >= 0)
+            return "Palace could not reach its module. Try again."
+        if (step === "lez") {
+            if (result.indexOf("lez-invalid-password") >= 0)
+                return "Enter a LEZ password with up to 1,024 characters."
+            return "Could not start LEZ. Check Logos Control and try again."
+        }
+        if (step === "identity") {
+            if (result.indexOf("identity-invalid-display-name") >= 0)
+                return "Enter a display name with up to 48 characters."
+            if (result.indexOf("identity-already-exists") >= 0)
+                return "This device already has a different display name."
+            if (result.indexOf("identity-registration-pending") >= 0)
+                return "Your identity is still being confirmed. Try again shortly."
+            return "Could not create your identity. Try again."
+        }
+        if (step === "palace") {
+            if (result.indexOf("invalid-palace-uri") >= 0)
+                return "Enter the full Palace address, starting with palace://."
+            if (result.indexOf("palace-history-busy") >= 0)
+                return "This Palace is still opening. Please wait."
+            return "Could not open this Palace. Check the address and try again."
+        }
+        if (step === "bundle") {
+            if (result.indexOf("storage-not-running") >= 0)
+                return "Storage is not ready to publish the room setup."
+            return "Could not publish the room setup. Check both backgrounds and try again."
+        }
+        if (step === "create") {
+            if (result.indexOf("palace-storage-graph-not-ready") >= 0)
+                return "Room setup is still being prepared. Please wait and try again."
+            return "Could not create the Palace. Try again."
+        }
+        if (step === "finality")
+            return "The Palace creation is still being confirmed. Try again shortly."
+        if (step === "created-palace")
+            return "The Palace was created but could not be opened yet. Try again."
+        return "Could not complete setup. Try again."
+    }
+
+    function onboardingRecordSuccess(receipt) {
+        onboardingReceipt = String(receipt)
+        invocationError = ""
+        watchedActionReceipt = onboardingReceipt
+        ++invocationSequence
+    }
+
+    function onboardingFail(step, cause) {
+        onboardingBundlePolling = false
+        onboardingBundlePollPending = false
+        onboardingFinalityPolling = false
+        onboardingFinalityPollPending = false
+        onboardingPhase = "error"
+        onboardingFailureStep = step
+        onboardingError = onboardingFailureMessage(step, cause)
+        onboardingReceipt = ""
+        invocationError = String(cause)
+        watchedActionReceipt = ""
+        ++invocationSequence
+    }
+
+    function invokeOnboardingStep(phase, step, pendingCall, next) {
+        onboardingPhase = phase
+        logos.watch(pendingCall, function (value) {
+            var receipt = String(value)
+            if (receipt.indexOf("rejected=") === 0) {
+                onboardingFail(step, receipt)
+                return
+            }
+            onboardingRecordSuccess(receipt)
+            next(receipt)
+        }, function (error) {
+            onboardingFail(step, "rejected=ui-remote-call;" + String(error))
+        })
+    }
+
+    function finishOnboardingOpen(receipt, waitingPhase, failureStep) {
+        var state = encodedStatusValue(receipt, "palace")
+        if (failureStep === "created-palace"
+                && retryableCreatedPalaceOpenState(receipt)) {
+            onboardingPhase = waitingPhase
+            onboardingError = ""
+            if (!onboardingCreatedPalaceRetryTimer.running)
+                onboardingCreatedPalaceRetryTimer.start()
+            return
+        }
+        if (state === "rejected" || state === "degraded") {
+            onboardingFail(failureStep, receipt)
+            return
+        }
+        onboardingPhase = palaceOpen ? "complete" : waitingPhase
+        if (palaceOpen)
+            clearOnboardingPassword()
+    }
+
+    function openExistingPalace() {
+        invokeOnboardingStep(
+            "opening-palace", "palace",
+            backend.openPalace(onboardingPalaceAddress.trim()),
+            function (receipt) {
+                finishOnboardingOpen(receipt, "waiting-palace", "palace")
+            })
+    }
+
+    function enterCreatorMode() {
+        clearOnboardingPassword()
+        onboardingFailureStep = ""
+        onboardingError = ""
+        onboardingPhase = "authoring-rooms"
+        backgroundModerationOpen = true
+    }
+
+    function startOnboarding() {
+        if (!ready || !backend) {
+            onboardingPhase = "error"
+            onboardingError =
+                "Palace is still starting. Try again in a moment."
+            return "rejected=ui-not-ready"
+        }
+        if (onboardingResumeReady) {
+            onboardingError = ""
+            onboardingReceipt = ""
+            onboardingFailureStep = ""
+            if (onboardingUsesExistingPalace)
+                openExistingPalace()
+            else
+                enterCreatorMode()
+            return "pending"
+        }
+        if (!onboardingInputReady()) {
+            onboardingPhase = "details"
+            onboardingError =
+                "Enter a LEZ password and display name, then choose a Palace address or title."
+            return "rejected=onboarding-details-required"
+        }
+
+        onboardingError = ""
+        onboardingReceipt = ""
+        onboardingFailureStep = ""
+        invokeOnboardingStep(
+            "starting-lez", "lez",
+            backend.startLez(String(onboardingPassword)),
+            function () {
+                invokeOnboardingStep(
+                    "creating-identity", "identity",
+                    backend.createIdentity(
+                        onboardingDisplayName.trim()),
+                    function () {
+                        if (onboardingUsesExistingPalace)
+                            openExistingPalace()
+                        else
+                            enterCreatorMode()
+                    })
+            })
+        return "pending"
+    }
+
+    function publishRoomSetup() {
+        if (onboardingPhase !== "authoring-rooms")
+            return gate3PublishBundle()
+        if (!canPublishRoomSetup) {
+            onboardingError = roomSetupPublishMessage()
+            return "rejected=room-setup-not-ready"
+        }
+        onboardingError = ""
+        onboardingPhase = "publishing-room-setup"
+        backgroundModerationOpen = false
+        return publishRoomSetupBundle(function (receipt) {
+            onboardingBundleStatus = receipt
+            onboardingPhase = "checking-room-setup"
+            onboardingBundlePolling = true
+            pollRoomSetupPublication()
+        }, function (receipt) {
+            onboardingFail("bundle", receipt)
+        })
+    }
+
+    function updateRoomSetupPublication(receipt) {
+        var status = String(receipt)
+        onboardingBundleStatus = status
+        if (status.indexOf("rejected=") === 0) {
+            onboardingFail("bundle", status)
+            return
+        }
+        var state = encodedStatusValue(status, "state")
+        var catalog = encodedStatusValue(status, "catalog")
+        if (state === "degraded") {
+            onboardingFail("bundle", status)
+            return
+        }
+        if ((state === "verified" || state === "retained")
+                && catalog.length > 0) {
+            onboardingBundlePolling = false
+            onboardingBundlePollPending = false
+            createOnboardingPalace()
+        }
+    }
+
+    function pollRoomSetupPublication() {
+        if (!onboardingBundlePolling || onboardingBundlePollPending
+                || !ready || !backend) {
+            return
+        }
+        onboardingBundlePollPending = true
+        watchAction(backend.mvpStorageBundleStatus(), function (receipt) {
+            onboardingBundlePollPending = false
+            updateRoomSetupPublication(receipt)
+        }, function (receipt) {
+            onboardingBundlePollPending = false
+            onboardingFail("bundle", receipt)
+        })
+    }
+
+    function createOnboardingPalace() {
+        var title = onboardingPalaceTitle.trim()
+        if (title.length === 0) {
+            onboardingFail("create", "rejected=palace-title-empty")
+            return "rejected=palace-title-empty"
+        }
+        onboardingPhase = "creating-palace"
+        onboardingError = ""
+        return watchAction(backend.createPalace(title), function (receipt) {
+            var palaceUri = encodedStatusValue(receipt, "palace_uri")
+            if (!/^palace:\/\/[0-9a-f]{64}$/.test(palaceUri)) {
+                onboardingFail("create", "rejected=palace-uri-missing")
+                return
+            }
+            onboardingCreatedPalaceUri = palaceUri
+            onboardingCreatorActionId = "0"
+            onboardingCreatorActionObserved =
+                encodedStatusValue(receipt, "durable") === "observed"
+            onboardingPhase = "confirming-creation"
+            onboardingFinalityPolling = true
+            pollCreatorAction()
+        }, function (receipt) {
+            onboardingFail("create", receipt)
+        })
+    }
+
+    function updateCreatorAction(receipt) {
+        var status = String(receipt)
+        if (status.indexOf("rejected=") === 0) {
+            updateCreatorActionRejection(status)
+            return
+        }
+        var durable = encodedStatusValue(status, "durable")
+        if (durable === "finalized"
+                || encodedStatusValue(status, "completion")
+                    === "local-committed") {
+            onboardingFinalityPolling = false
+            onboardingFinalityPollPending = false
+            if (onboardingCreatorActionId === "0") {
+                prepareInitialRoomState()
+                return
+            }
+            if (onboardingCreatorActionId !== "0") {
+                openCreatedPalace()
+                return
+            }
+            onboardingFail("finality", status)
+            return
+        }
+        if (durable === "observed")
+            onboardingCreatorActionObserved = true
+        else if (durable !== "submitted_to_lez") {
+            onboardingFail("finality", status)
+        }
+    }
+
+    // A submitted LEZ action can briefly be absent from a stable account
+    // snapshot while the sequencer applies it. Keep the creation flow alive
+    // for only those transport/visibility races; malformed or mismatched
+    // authority data remains a terminal user-visible failure.
+    function retryableCreatorActionRejection(receipt) {
+        var status = String(receipt)
+        return /^rejected=lez-stable-account-read;reason=(sync-[^;]+|height-before|height-after|wallet-height-raced|account-[0-9]+)$/.test(status)
+            || /^rejected=lez-observation;reason=(transaction-not-materialized|invalid-account-response|invalid-account-field|invalid-account-data|invalid-record|unexpected-observation-record|observation-mismatch|unstable-height)$/.test(status)
+    }
+
+    function retryableCreatedPalaceOpenState(receipt) {
+        var status = String(receipt)
+        return encodedStatusValue(status, "palace") === "rejected"
+            && encodedStatusValue(status, "reason")
+                === "local-committed-initialize-not-found"
+    }
+
+    function updateCreatorActionRejection(receipt) {
+        if (!retryableCreatorActionRejection(receipt)) {
+            onboardingFail("finality", receipt)
+            return
+        }
+        // Retain a narrowly scoped diagnostic without exposing it as a setup
+        // failure. The active poll will either observe the action or return a
+        // non-retryable reason to the user.
+        onboardingReceipt = String(receipt)
+        invocationError = ""
+        watchedActionReceipt = onboardingReceipt
+    }
+
+    function pollCreatorAction() {
+        if (!onboardingFinalityPolling || onboardingFinalityPollPending
+                || !ready || !backend) {
+            return
+        }
+        onboardingFinalityPollPending = true
+        if (!onboardingCreatorActionObserved) {
+            observeCreatorAction(onboardingCreatorActionId, function (receipt) {
+                onboardingFinalityPollPending = false
+                updateCreatorAction(receipt)
+            }, function (receipt) {
+                onboardingFinalityPollPending = false
+                updateCreatorActionRejection(receipt)
+            })
+            return
+        }
+        reconcileCreatorAction(onboardingCreatorActionId, function (receipt) {
+            onboardingFinalityPollPending = false
+            updateCreatorAction(receipt)
+        }, function (receipt) {
+            onboardingFinalityPollPending = false
+            updateCreatorActionRejection(receipt)
+        })
+    }
+
+    function openCreatedPalace() {
+        if (!/^palace:\/\/[0-9a-f]{64}$/.test(
+                onboardingCreatedPalaceUri)) {
+            onboardingFail("created-palace", "rejected=palace-uri-missing")
+            return "rejected=palace-uri-missing"
+        }
+        onboardingPhase = "opening-created-palace"
+        return watchAction(
+            backend.openPalace(onboardingCreatedPalaceUri),
+            function (receipt) {
+                finishOnboardingOpen(
+                    receipt, "waiting-created-palace", "created-palace")
+            }, function (receipt) {
+                onboardingFail("created-palace", receipt)
+            })
+    }
+
+    function prepareInitialRoomState() {
+        if (!/^palace:\/\/[0-9a-f]{64}$/.test(
+                onboardingCreatedPalaceUri)) {
+            onboardingFail("created-palace", "rejected=palace-uri-missing")
+            return "rejected=palace-uri-missing"
+        }
+        onboardingPhase = "preparing-initial-room-state"
+        return watchAction(
+            backend.openPalace(onboardingCreatedPalaceUri),
+            function (receipt) {
+                continueInitialRoomStatePreparation(receipt)
+            }, function (receipt) {
+                onboardingFail("finality", receipt)
+            })
+    }
+
+    function continueInitialRoomStatePreparation(receipt) {
+        var state = encodedStatusValue(receipt, "palace")
+        if (state === "rejected" || state === "degraded") {
+            onboardingFail("finality", receipt)
+            return
+        }
+        if (state !== "open") {
+            onboardingPhase = "waiting-initial-room-state"
+            if (!onboardingCreatedPalaceRetryTimer.running)
+                onboardingCreatedPalaceRetryTimer.start()
+            return
+        }
+        createInitialRoomState()
+    }
+
+    function createInitialRoomState() {
+        onboardingPhase = "creating-initial-room-state"
+        return watchAction(backend.createInitialRoomState(),
+            function (receipt) {
+                var status = String(receipt)
+                if (encodedStatusValue(status, "initial_room_state")
+                        === "ready") {
+                    openCreatedPalace()
+                    return
+                }
+                var actionId = encodedStatusValue(status, "action")
+                if (!/^[1-9][0-9]*$/.test(actionId)) {
+                    onboardingFail(
+                        "finality", "rejected=initial-room-state-action")
+                    return
+                }
+                onboardingCreatorActionId = actionId
+                if (encodedStatusValue(status, "durable")
+                        === "finalized") {
+                    openCreatedPalace()
+                    return
+                }
+                onboardingCreatorActionObserved =
+                    encodedStatusValue(status, "durable") === "observed"
+                onboardingPhase = "confirming-initial-room-state"
+                onboardingFinalityPolling = true
+                pollCreatorAction()
+            }, function (receipt) {
+                onboardingFail("finality", receipt)
+            })
+    }
+
+    function activateOnboarding() {
+        if (onboardingPhase === "authoring-rooms") {
+            backgroundModerationOpen = true
+            return "pending"
+        }
+        if (onboardingPhase === "error") {
+            if (onboardingFailureStep === "bundle") {
+                onboardingPhase = "authoring-rooms"
+                backgroundModerationOpen = true
+                return "pending"
+            }
+            if (onboardingFailureStep === "create")
+                return createOnboardingPalace()
+            if (onboardingFailureStep === "finality") {
+                onboardingPhase = onboardingCreatorActionId === "0"
+                    ? "confirming-creation"
+                    : "confirming-initial-room-state"
+                onboardingFinalityPolling = true
+                pollCreatorAction()
+                return "pending"
+            }
+            if (onboardingFailureStep === "created-palace")
+                return openCreatedPalace()
+        }
+        return startOnboarding()
+    }
+
+    function onboardingProgressText() {
+        if (!ready)
+            return "Connecting to Logos Control…"
+        if (onboardingPhase === "starting-lez")
+            return "Starting LEZ…"
+        if (onboardingPhase === "creating-identity")
+            return "Creating your identity…"
+        if (onboardingPhase === "opening-palace")
+            return "Opening the Palace…"
+        if (onboardingPhase === "authoring-rooms")
+            return "Choose Atrium and Lounge backgrounds in Assets, then publish the room setup."
+        if (onboardingPhase === "publishing-room-setup"
+                || onboardingPhase === "checking-room-setup")
+            return "Publishing and checking the room setup…"
+        if (onboardingPhase === "creating-palace")
+            return "Creating the Palace…"
+        if (onboardingPhase === "confirming-creation"
+                && retryableCreatorActionRejection(onboardingReceipt)) {
+            return "Waiting for LEZ to expose the new Palace…"
+        }
+        if (onboardingPhase === "confirming-creation")
+            return "Confirming the Palace creation…"
+        if (onboardingPhase === "preparing-initial-room-state"
+                || onboardingPhase === "waiting-initial-room-state")
+            return "Preparing the first room…"
+        if (onboardingPhase === "creating-initial-room-state"
+                || onboardingPhase === "confirming-initial-room-state")
+            return "Preparing the first room…"
+        if (onboardingPhase === "opening-created-palace")
+            return "Opening your new Palace…"
+        if (onboardingPhase === "waiting-palace") {
+            if (encodedStatusValue(palaceState, "palace") === "scanning")
+                return "Confirming the Palace details…"
+            return "Waiting for the Palace to open…"
+        }
+        if (onboardingPhase === "waiting-created-palace") {
+            if (encodedStatusValue(palaceState, "palace") === "scanning")
+                return "Confirming your new Palace…"
+            return "Waiting for your new Palace to open…"
+        }
+        if (onboardingPhase === "error")
+            return onboardingError
+        return "Open an existing Palace or create a new one."
     }
 
     function parseAuthoringAssets(encoded) {
@@ -795,12 +1368,83 @@ Item {
     }
 
     function assetAuthoringReadOnlyMessage() {
-        if (encodedStatusValue(
-                assetAuthoringCapabilityState, "authority")
-                === "finalized") {
+        var authority = encodedStatusValue(
+            assetAuthoringCapabilityState, "authority")
+        if (authority === "finalized" || authority === "local-committed") {
             return "Read-only. Only Palace owner can approve, upload, or assign assets."
         }
         return "Read-only. Only current draft creator can change assets."
+    }
+
+    function roomSetupPublishReadinessValue() {
+        if (!canManageAssets)
+            return "owner-required"
+        if (encodedStatusValue(storageStatus, "storage") !== "running"
+                || encodedStatusValue(
+                    storageStatus, "callback_registration") !== "ready"
+                || encodedStatusValue(
+                    storageStatus, "reconciliation_required") !== "0") {
+            return "storage-not-ready"
+        }
+
+        var state
+        try {
+            state = JSON.parse(assetAuthoringState)
+        } catch (error) {
+            return "assignments-unavailable"
+        }
+        if (!state || !state.roomAssignments
+                || !Array.isArray(state.assets)) {
+            return "assignments-unavailable"
+        }
+        if (state.bundleLocked === true)
+            return "locked"
+
+        var atriumHandle = String(state.roomAssignments.atrium || "")
+        var loungeHandle = String(state.roomAssignments.lounge || "")
+        if (!/^[0-9a-f]{64}$/.test(atriumHandle)
+                || !/^[0-9a-f]{64}$/.test(loungeHandle)) {
+            return "room-backgrounds-needed"
+        }
+
+        var handles = [atriumHandle, loungeHandle]
+        for (var handleIndex = 0; handleIndex < handles.length;
+             ++handleIndex) {
+            var published = false
+            for (var assetIndex = 0; assetIndex < state.assets.length;
+                 ++assetIndex) {
+                var asset = state.assets[assetIndex] || ({})
+                if (String(asset.handle || "") === handles[handleIndex]
+                        && asset.reviewState === "approved"
+                        && asset.publicationState === "published"
+                        && String(asset.cid || "").length > 0) {
+                    published = true
+                    break
+                }
+            }
+            if (!published)
+                return "room-backgrounds-not-published"
+        }
+        return "ready"
+    }
+
+    function roomSetupPublishMessage() {
+        switch (roomSetupPublishReadiness) {
+        case "ready":
+            return "Both room backgrounds are ready to publish."
+        case "locked":
+            return "Room setup is publishing. Background assignments are locked."
+        case "storage-not-ready":
+            return "Start Storage in Logos Control, then choose Connect Storage."
+        case "room-backgrounds-needed":
+            return "Assign published backgrounds to Atrium and Lounge first."
+        case "room-backgrounds-not-published":
+            return "Both room backgrounds must be approved and uploaded first."
+        case "assignments-unavailable":
+            return "Room background assignments are not available yet."
+        default:
+            return assetAuthoringReadOnlyMessage()
+        }
     }
 
     function rejectAssetAuthoringReadOnly() {
@@ -1369,6 +2013,15 @@ Item {
         return watchAction(backend.publishMvpStorageBundle(), null)
     }
 
+    function publishRoomSetupBundle(onAccepted, onRejected) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        if (!canManageAssets)
+            return rejectAssetAuthoringReadOnly()
+        return watchAction(
+            backend.publishMvpStorageBundle(), onAccepted, onRejected)
+    }
+
     function gate3BundleStatus() {
         if (!ready || !backend)
             return rejectedNotReady()
@@ -1508,6 +2161,22 @@ Item {
             backend.reconcilePalaceTransition(String(actionId)), null)
     }
 
+    function observeCreatorAction(actionId, onAccepted, onRejected) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.observePalaceTransition(String(actionId)),
+            onAccepted, onRejected)
+    }
+
+    function reconcileCreatorAction(actionId, onAccepted, onRejected) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.reconcilePalaceTransition(String(actionId)),
+            onAccepted, onRejected)
+    }
+
     function gate4ActionStatus(actionId) {
         if (!ready || !backend)
             return rejectedNotReady()
@@ -1633,6 +2302,41 @@ Item {
         }
     }
 
+    Timer {
+        id: onboardingBundlePollTimer
+        interval: 500
+        repeat: true
+        running: root.onboardingBundlePolling
+            && root.ready && root.backend !== null
+        onTriggered: root.pollRoomSetupPublication()
+    }
+
+    Timer {
+        id: onboardingFinalityPollTimer
+        interval: 500
+        repeat: true
+        running: root.onboardingFinalityPolling
+            && root.ready && root.backend !== null
+        onTriggered: root.pollCreatorAction()
+    }
+
+    Timer {
+        id: onboardingCreatedPalaceRetryTimer
+        interval: 500
+        repeat: false
+        onTriggered: {
+            if (root.onboardingPhase === "waiting-created-palace"
+                    && root.ready && root.backend !== null
+                    && !root.palaceOpen) {
+                root.openCreatedPalace()
+            } else if (root.onboardingPhase
+                    === "waiting-initial-room-state"
+                    && root.ready && root.backend !== null) {
+                root.prepareInitialRoomState()
+            }
+        }
+    }
+
     Component.onDestruction: root.abandonAssetImport()
 
     onBackgroundModerationOpenChanged: {
@@ -1662,12 +2366,54 @@ Item {
             focusChatWhenUnobstructed()
     }
 
+    onPalaceStateChanged: {
+        var state = encodedStatusValue(palaceState, "palace")
+        if (palaceOpen) {
+            if (onboardingPhase === "opening-palace"
+                    || onboardingPhase === "waiting-palace"
+                    || onboardingPhase === "opening-created-palace"
+                    || onboardingPhase === "waiting-created-palace") {
+                onboardingPhase = "complete"
+                onboardingError = ""
+                clearOnboardingPassword()
+            } else if (onboardingPhase
+                    === "waiting-initial-room-state") {
+                createInitialRoomState()
+            }
+        } else if (state === "rejected" || state === "degraded") {
+            if (onboardingPhase === "waiting-palace")
+                onboardingFail("palace", palaceState)
+            else if (onboardingPhase === "waiting-created-palace"
+                    && retryableCreatedPalaceOpenState(palaceState)) {
+                if (!onboardingCreatedPalaceRetryTimer.running)
+                    onboardingCreatedPalaceRetryTimer.start()
+            } else if (onboardingPhase === "waiting-created-palace")
+                onboardingFail("created-palace", palaceState)
+            else if (onboardingPhase
+                    === "waiting-initial-room-state")
+                onboardingFail("finality", palaceState)
+        }
+    }
+
+    onRoomUsableChanged: {
+        if (!roomUsable) {
+            backgroundModerationOpen = false
+            propBagOpen = false
+            roomListOpen = false
+            userListOpen = false
+            return
+        }
+        focusChatWhenUnobstructed()
+    }
+
     onParticipantsChanged: syncSelectedModerationUser()
 
     Shortcut {
         sequence: "Esc"
-        enabled: root.backgroundModerationOpen || root.propBagOpen
+        enabled: root.roomUsable
+            && (root.backgroundModerationOpen || root.propBagOpen
             || root.roomListOpen || root.userListOpen
+                )
         onActivated: root.closeActiveUtilityPanel()
     }
 
@@ -1684,6 +2430,7 @@ Item {
     // top utility toolbar → View Screen → Users strip → input + bag/trash.
     Rectangle {
         anchors.fill: parent
+        enabled: root.roomUsable
         color: "#c0c0c0"
 
         ColumnLayout {
@@ -1833,14 +2580,36 @@ Item {
                     }
                 }
 
-                Text {
+                Row {
                     anchors.right: parent.right
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
-                    text: root.roomTitle
-                    color: "#000080"
-                    font.bold: true
-                    font.pixelSize: 12
+                    spacing: 7
+
+                    Rectangle {
+                        objectName: "palaceLocalDevelopmentIndicator"
+                        visible: root.localDevelopmentMode
+                        width: localDevelopmentIndicatorText.implicitWidth + 12
+                        height: 20
+                        radius: 2
+                        color: "#e7edf3"
+                        border.color: "#8197ad"
+
+                        Text {
+                            id: localDevelopmentIndicatorText
+                            anchors.centerIn: parent
+                            text: "Local development · public finality unavailable"
+                            color: "#24394d"
+                            font.pixelSize: 10
+                        }
+                    }
+
+                    Text {
+                        text: root.roomTitle
+                        color: "#000080"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
                 }
             }
 
@@ -2710,6 +3479,8 @@ Item {
             }
         }
 
+    }
+
         // Authoring modal: Loader unloads cards when closed (preview leak fix).
         Loader {
             id: backgroundModerationLoader
@@ -2810,6 +3581,69 @@ Item {
                         objectName: "palaceBackgroundModerationClose"
                         text: "Close"
                         onClicked: root.backgroundModerationOpen = false
+                    }
+                }
+
+                Rectangle {
+                    objectName: "palaceRoomSetupPublication"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 44
+                    color: "#2b2118"
+                    border.color: "#8c7145"
+                    radius: 4
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 8
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+
+                            Text {
+                                text: "Room setup"
+                                color: "#fff2cf"
+                                font.bold: true
+                                font.pixelSize: 11
+                            }
+                            Text {
+                                objectName: "palaceRoomSetupPublishStatus"
+                                Layout.fillWidth: true
+                                text: root.roomSetupPublishMessage()
+                                color: root.canPublishRoomSetup
+                                    ? "#a7e3a0"
+                                    : (root.roomSetupPublishReadiness
+                                       === "locked"
+                                       ? "#f3cf8a" : "#d8a18f")
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        BusyIndicator {
+                            Layout.preferredWidth: 22
+                            Layout.preferredHeight: 22
+                            running: root.roomSetupPublishReadiness
+                                === "locked"
+                            visible: running
+                        }
+
+                        Button {
+                            objectName: "palacePublishRoomSetup"
+                            text: "Publish room setup"
+                            Accessible.name: text
+                            visible: root.canManageAssets
+                            enabled: root.canPublishRoomSetup
+                            ToolTip.visible: hovered && !enabled
+                            ToolTip.text: root.roomSetupPublishMessage()
+                            onClicked: {
+                                if (root.onboardingPhase === "authoring-rooms")
+                                    root.publishRoomSetup()
+                                else
+                                    root.gate3PublishBundle()
+                            }
+                        }
                     }
                 }
 
@@ -3452,8 +4286,256 @@ Item {
                     + " · Palace "
                     + (root.encodedStatusValue(root.palaceState, "palace")
                        || "closed")
+                    + (root.localDevelopmentMode
+                       ? " · local development"
+                       : "")
                     + " · door " + (root.gate5VmPhase || "idle")
             }
         }
-    }
+
+        Rectangle {
+            id: onboardingOverlay
+            objectName: "palaceOnboardingOverlay"
+            anchors.fill: parent
+            color: "#10141de8"
+            z: 100
+            visible: !root.roomUsable
+                && !(root.onboardingPhase === "authoring-rooms"
+                     && root.backgroundModerationOpen)
+            enabled: visible
+
+            onVisibleChanged: {
+                if (!visible || !root.ready)
+                    return
+                if (root.onboardingPhase === "authoring-rooms")
+                    onboardingPalaceTitleInput.forceActiveFocus()
+                else
+                    onboardingPasswordInput.forceActiveFocus()
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: {
+                }
+            }
+
+            Rectangle {
+                id: onboardingCard
+                objectName: "palaceOnboardingCard"
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 32, 540)
+                height: onboardingContent.implicitHeight + 36
+                color: "#f5f0e6"
+                border.color: "#a88451"
+                border.width: 2
+                radius: 8
+                z: 1
+
+                ColumnLayout {
+                    id: onboardingContent
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 9
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Open a Palace"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 23
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Configure and start network nodes in Logos Control. Palace uses the running modules but does not manage them."
+                        color: "#463b2d"
+                        font.pixelSize: 13
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Use a Palace address to open an existing Palace, or leave it blank to create one after your room setup is published."
+                        color: "#463b2d"
+                        font.pixelSize: 13
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        text: "LEZ password"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+
+                    TextField {
+                        id: onboardingPasswordInput
+                        objectName: "palaceOnboardingLezPassword"
+                        Layout.fillWidth: true
+                        placeholderText: "Password for LEZ on this device"
+                        echoMode: TextInput.Password
+                        inputMethodHints: Qt.ImhNoPredictiveText
+                            | Qt.ImhSensitiveData
+                        maximumLength: 1024
+                        text: root.onboardingPassword
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "LEZ password"
+                        onTextEdited: {
+                            root.onboardingPassword = text
+                            root.resetOnboardingAfterEdit()
+                        }
+                    }
+
+                    Text {
+                        text: "Display name"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+
+                    TextField {
+                        id: onboardingDisplayNameInput
+                        objectName: "palaceOnboardingDisplayName"
+                        Layout.fillWidth: true
+                        placeholderText: "Name shown in the Palace"
+                        maximumLength: 48
+                        text: root.onboardingDisplayName
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "Display name"
+                        onTextEdited: {
+                            root.onboardingDisplayName = text
+                            root.resetOnboardingAfterEdit()
+                        }
+                    }
+
+                    Text {
+                        text: "Existing Palace address (optional)"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+
+                    TextField {
+                        id: onboardingPalaceAddressInput
+                        objectName: "palaceOnboardingPalaceAddress"
+                        Layout.fillWidth: true
+                        placeholderText: "palace://existing-palace-id"
+                        maximumLength: 80
+                        text: root.onboardingPalaceAddress
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "Palace address"
+                        onTextEdited: {
+                            root.onboardingPalaceAddress = text
+                            root.resetOnboardingAfterEdit()
+                        }
+                        onAccepted: root.activateOnboarding()
+                    }
+
+                    Text {
+                        text: "New Palace title"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+
+                    TextField {
+                        id: onboardingPalaceTitleInput
+                        objectName: "palaceOnboardingPalaceTitle"
+                        Layout.fillWidth: true
+                        placeholderText: "Name for a new Palace"
+                        text: root.onboardingPalaceTitle
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "New Palace title"
+                        onTextEdited: {
+                            root.onboardingPalaceTitle = text
+                            root.resetOnboardingAfterEdit()
+                        }
+                        onAccepted: root.activateOnboarding()
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: root.onboardingPhase === "error"
+                            ? "#f9dedc" : "#e7edf3"
+                        border.color: root.onboardingPhase === "error"
+                            ? "#b54a43" : "#8197ad"
+                        radius: 4
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 7
+
+                            BusyIndicator {
+                                Layout.preferredWidth: 22
+                                Layout.preferredHeight: 22
+                                running: root.onboardingWorking
+                                    || root.onboardingPhase
+                                        === "waiting-palace"
+                                    || root.onboardingPhase
+                                        === "waiting-created-palace"
+                                visible: running
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.onboardingProgressText()
+                                color: root.onboardingPhase === "error"
+                                    ? "#741c18" : "#24394d"
+                                font.pixelSize: 12
+                                wrapMode: Text.Wrap
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+
+                    Button {
+                        objectName: "palaceOnboardingOpenButton"
+                        Layout.alignment: Qt.AlignRight
+                        text: !root.ready
+                            ? "Connecting…"
+                            : (root.onboardingWorking
+                               ? "Working…"
+                               : (root.onboardingPhase === "waiting-palace"
+                                  || root.onboardingPhase
+                                     === "waiting-created-palace"
+                                  ? "Opening Palace…"
+                                  : (root.onboardingPhase
+                                     === "authoring-rooms"
+                                     ? "Open Assets"
+                                     : (root.onboardingResumeReady
+                                        ? (root.onboardingUsesExistingPalace
+                                           ? "Open Palace"
+                                           : "Continue room setup")
+                                     : (root.onboardingPhase === "error"
+                                        ? "Try again"
+                                        : (root.onboardingUsesExistingPalace
+                                           ? "Open Palace"
+                                           : "Start room setup"))))))
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                            && (root.onboardingPhase === "authoring-rooms"
+                                || root.onboardingPhase === "error"
+                                || root.onboardingInputReady())
+                        Accessible.name: text
+                        onClicked: root.activateOnboarding()
+                    }
+                }
+            }
+        }
 }
