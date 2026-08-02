@@ -37,8 +37,8 @@ source includes:
 The full compiled Basecamp MVP has not yet passed one final end-to-end release
 run. In particular, the LEZ-backed door flow, automatic authority rebuild when
 no local bundle exists, all restart paths, creator removal, and final
-performance/resource evidence remain release gates. Package builds, contract
-tests, and individual gate reports do not by themselves establish MVP
+performance/resource evidence remain release requirements. Package builds,
+contract tests, and individual scenario reports do not by themselves establish MVP
 completion.
 
 See [Architecture](ARCHITECTURE.md), [CHANGELOG](CHANGELOG.md),
@@ -58,7 +58,7 @@ LGX packages:
 | `storage_module` | content-addressed object transport | pinned flake input |
 | `lez_core` | wallet and LEZ runtime bridge | pinned flake input |
 
-`palace_core` has one production build path. Gate 3 always installs that
+`palace_core` has one production build path. The Storage scenario always installs that
 package and uses production identities.
 
 ## Architecture
@@ -98,7 +98,7 @@ wallet, filesystem, or UI authority.
 - Rust and the RISC Zero toolchain only for direct Palace program builds.
 
 `systemd` is used only by the official acceptance runner to create and retire
-one transient Linux process scope per gate. It is not linked into the Palace
+one transient Linux process scope per end-to-end scenario. It is not linked into the Palace
 program or LGX modules, does not define any Palace protocol or schema, and is
 not required for ordinary Basecamp execution.
 
@@ -192,15 +192,15 @@ per-run evidence under `.artifacts/`.
 
 | Harness | Scope |
 | --- | --- |
-| Gate 1 | exact-six install, module loading, verified room images, local room transition, and projection restart |
-| Gate 2 | three Palace instances, signed Delivery traffic, adversarial input, ordering/replay behavior, and restart |
-| Gate 3 | typed Storage publication, peer fetch, local verification, creator shutdown, retained fetch, and cold-peer recovery |
-| Gate 4 | public LEZ finality, restart/cold rebuild, moderation, creator removal, and exact screenshot/resource evidence |
+| Scenario 1 | exact-six install, module loading, verified room images, local room transition, and projection restart |
+| Scenario 2 | three Palace instances, signed Delivery traffic, adversarial input, ordering/replay behavior, and restart |
+| Scenario 3 | typed Storage publication, peer fetch, local verification, creator shutdown, retained fetch, and cold-peer recovery |
+| Scenario 4 | public LEZ finality, restart/cold rebuild, moderation, creator removal, and exact screenshot/resource evidence |
 
-Gate 1 and Gate 2 have standalone scoped launchers. Production Gate 3 and
-Gate 4 are claim-bound and run only through the full runner. Read each
+The first two scenarios have standalone scoped launchers. Production scenarios
+three and four are claim-bound and run only through the full runner. Read each
 generated JSON report before citing a result, and state the source snapshot
-and remaining unverified gates.
+and remaining unverified behavior.
 
 Before creating a scope, each standalone launcher attests its exact lock
 chain. It reopens the supervisor and runner parent relationship, start times,
@@ -227,8 +227,9 @@ and technical constraints:
    decode before atomically staging the bytes inside that Core instance.
 2. Basecamp accepted only
    `image://basecamp-verified/<lowercase-sha256>` from a declared direct Core
-   dependency, proved canonical producer-root containment, and rechecked the
-   digest, PNG format, bounded decode, dimensions, and pixel budget.
+   dependency, proved canonical selected-profile producer-root containment,
+   and rechecked the digest, PNG format, bounded decode, dimensions, and pixel
+   budget.
 
 Image loading receives only the opaque digest handle. The authoring surface
 also receives bounded display, review, publication, and draft-assignment
@@ -241,7 +242,7 @@ provider-retention guarantee.
 
 ### Full public-testnet runner
 
-`scripts/run-basecamp-mvp.sh` compiles Gate 0–6 into one resumable report. It
+`scripts/run-basecamp-mvp.sh` compiles its internal stages 0–6 into one resumable report. It
 creates and registers three public testnet identities, initializes the fixed
 Palace root, and submits the documented LEZ actions. Those public testnet
 effects cannot be undone by deleting local artifacts.
@@ -251,17 +252,17 @@ owns that program/root pair. The runner:
 
 - stores the canonical `0600` program/root lock inside the fixed,
   owner-only `/var/tmp/logos-palace-<uid>` claim directory;
-- keeps that lock in an exact external `flock --close` supervisor so no gate
+- keeps that lock in an exact external `flock --close` supervisor so no scenario
   or application process inherits the descriptor;
 - kills the immutable runner and release mutators if the supervisor dies;
 - after lock attestation and before release mutation, validates the prior
   active claim and retires its exact v2 scope; a legacy claim passes only when
   it has no bound process;
-- archives one immutable Nix source snapshot and executes every gate from it;
-- launches every runtime gate behind a stop-before-exec barrier in a unique
+- archives one immutable Nix source snapshot and executes every scenario from it;
+- launches every runtime scenario behind a stop-before-exec barrier in a unique
   transient scope, releases only the exact sole stopped unit leader, and keeps
   a parent-death guardian holding open descriptors for that scope's
-  `cgroup.kill` and `cgroup.procs`; after the gate child exits, the guardian
+  `cgroup.kill` and `cgroup.procs`; after the scenario child exits, the guardian
   reads membership twice and kills the complete scope if daemonized residue
   remains before it can disarm; PASS requires the exact unit and run slice to
   be empty and unloaded;
@@ -275,7 +276,7 @@ owns that program/root pair. The runner:
 - publishes sanitized evidence only after the compiled report and durable run
   completion are reopened and verified;
 - stores persistent user state and reports in one owner-only run directory;
-- refuses a new production run after Gate 3 evidence exists, except for
+- refuses a new production run after Storage-scenario evidence exists, except for
   allowlisted audited pre-public-write failures with exact source and report
   digests;
 - resumes only when given that exact run directory and source snapshot.
@@ -290,11 +291,11 @@ child wait.
 ```
 
 If interrupted, use the exact resume command printed by the runner. Do not
-copy state into a new run or rerun Gate 3 separately. Review and sanitize the
-generated JSON, logs, account IDs, peer IDs, timing data, ten exact Gate 4–6
-screenshots, and the separate Gate 3 Moderation screenshot. All eleven are
+copy state into a new run or rerun the Storage scenario separately. Review and sanitize the
+generated JSON, logs, account IDs, peer IDs, timing data, ten exact stage 4–6
+screenshots, and the separate Storage moderation screenshot. All eleven are
 fully decoded 1600×900 PNG files. Until the compiled report says
-`fullMvp: "passed"` with no pending gates, this command has not established
+`fullMvp: "passed"` with no pending stages, this command has not established
 MVP completion.
 
 ## Security and limitations

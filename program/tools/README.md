@@ -47,7 +47,6 @@ PALACE_LEZ_WALLET_PASSWORD="$palace_deploy_password" \
   ./deploy_program_ffi \
   program/testnet-v0.2-wallet.json \
   "$palace_deploy_dir/wallet.json" \
-  "$palace_deploy_dir/statistics.json" \
   program/palace_program/methods/target/riscv-guest/palace-program-methods/palace-program-guest/riscv32im-risc0-zkvm-elf/release/palace.bin
 
 unset palace_deploy_password

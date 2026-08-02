@@ -56,9 +56,7 @@ Run C++ contract checks:
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
-  .#checks.x86_64-linux.palace-core-contracts \
-  .#checks.x86_64-linux.palace-core-production-fixture-audit \
-  .#checks.x86_64-linux.palace-core-acceptance-fixture-audit
+  .#checks.x86_64-linux.palace-core-contracts
 ```
 
 Run non-live acceptance-control seams:
@@ -97,10 +95,10 @@ Run the narrowest relevant Basecamp harness:
 
 The scripts fetch pinned dependencies, use temporary user directories, install
 unsigned development LGXs there, and write ignored evidence under
-`.artifacts/`. Gate 3 and Gate 4 production behavior is claim-bound and must
-run through the full runner. Never describe a package build or one gate as
+`.artifacts/`. Production scenarios three and four are claim-bound and must
+run through the full runner. Never describe a package build or one scenario as
 full MVP acceptance. Pull requests must identify the source snapshot,
-executed checks, and remaining runtime gates.
+executed checks, and remaining runtime behavior.
 
 The full runner has materially different effects:
 
@@ -112,7 +110,7 @@ It registers public testnet identities and submits irreversible public-testnet
 LEZ actions to one fixed, initially uninitialized Palace root. It holds a
 canonical owner-only program/root lock, retires any exact prior v2 run scope
 before release-state mutation, and records one immutable source snapshot.
-After production Gate 3 evidence exists, continue only with the exact resume
+After production Storage-scenario evidence exists, continue only with the exact resume
 command and run directory printed by the runner. Review and sanitize reports,
 logs, public account and peer IDs, timings, and screenshots before publication.
 
