@@ -282,6 +282,7 @@ export function validateReleaseManifest(
     throw new Error("immutable release manifest mismatch");
   }
   return {
+    platform: manifest.platform,
     programByteLength: manifest.byteLength,
     programBytecodeSha256: manifest.sha256,
     programIdHex: manifest.imageIdHex,

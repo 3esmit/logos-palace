@@ -114,6 +114,7 @@ test("release manifest validates exact pinned public metadata", () => {
     },
   );
   assert.equal(validated.packages.length, 6);
+  assert.equal(validated.platform, "x86_64-linux");
   assert.equal(validated.packages[0].artifact, "logos-palace_vm-module-lib.lgx");
   assert.equal(validated.packages[5].artifact, "logos-lez_core-module-lib.lgx");
   assert.equal(validated.schemas.palaceProgram, "palace-schema-v3");
