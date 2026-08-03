@@ -4153,8 +4153,70 @@ std::string PalaceCoreImpl::registerPalaceUser()
     return submitted + ";registration=pending;action=" + actionId;
 }
 
-std::string PalaceCoreImpl::palaceStatus() const
+void PalaceCoreImpl::refreshLocalCommittedPalaceHistory()
 {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextLocalAuthorityRefreshAt)
+        return;
+    m_nextLocalAuthorityRefreshAt = now + std::chrono::seconds(1);
+
+    const palace::PalaceLezProfileV1* profile = selectedLezProfile();
+    if (profile == nullptr
+        || profile->publicFinalityAvailable
+        || !m_lezReady
+        || !m_lezCoordinator.running()
+        || !m_lezAuthorityReady
+        || !m_lezOpenHistory.has_value()
+        || !m_lezOpenHistory->localCommitted
+        || !m_lezOpenHistory->authorityApplied
+        || m_lezAuthorityMaterialization.rootAccountIdHex.empty()
+        || m_lezAuthorityMaterialization.programIdHex.empty()) {
+        return;
+    }
+
+    std::string syncReason;
+    if (!syncLezWalletToCurrent(syncReason))
+        return;
+
+    logos::CallError rootError;
+    const std::string rootResponse =
+        modules().lez_core.get_account_public(
+            m_lezAuthorityMaterialization.rootAccountIdHex,
+            &rootError);
+    if (!rootError.ok() || rootResponse.empty())
+        return;
+    const palace::PalaceLezPublicAccountV3 currentRoot =
+        palace::PalaceLezCodec::decodePublicAccount(
+            rootResponse,
+            m_lezAuthorityMaterialization.programIdHex);
+    const auto* rootRecord = currentRoot.accepted
+        ? std::get_if<palace::PalaceLezRootRecordV3>(
+              &currentRoot.record)
+        : nullptr;
+    if (rootRecord == nullptr
+        || rootRecord->lastOrderedActionId
+            <= m_lezAuthorityMaterialization.lastOrderedActionId) {
+        return;
+    }
+
+    const PalaceLezOpenHistory previous = *m_lezOpenHistory;
+    const std::string palaceUri = previous.palaceUri;
+    m_lezOpenHistory.reset();
+    const std::string reopened = openPalace(palaceUri);
+    if (reopened.rfind("ok;", 0U) == 0U
+        && m_lezOpenHistory.has_value()
+        && m_lezOpenHistory->authorityApplied) {
+        return;
+    }
+
+    // Keep the last verified projection serving while a refresh cannot yet
+    // materialize a newer local checkpoint.
+    m_lezOpenHistory = previous;
+}
+
+std::string PalaceCoreImpl::palaceStatus()
+{
+    refreshLocalCommittedPalaceHistory();
     const std::string authoritySource =
         palace::authoritySnapshotSourceName(m_deliveryAuthority.source());
     if (!m_lezOpenHistory.has_value()) {

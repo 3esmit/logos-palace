@@ -431,7 +431,7 @@ public:
     // Registers the current local identity in an opened Palace. Joiners use
     // this Core-owned transition before Delivery or VM actions are allowed.
     std::string registerPalaceUser();
-    std::string palaceStatus() const;
+    std::string palaceStatus();
     std::string startDelivery(const std::string& nodeConfig);
     std::string subscribeRoom(const std::string& networkId,
                               const std::string& palaceId,
@@ -745,6 +745,7 @@ private:
     void finishDownloadedAsset(
         const palace::PendingStorageAsset& pending);
     bool syncLezWalletToCurrent(std::string& reason);
+    void refreshLocalCommittedPalaceHistory();
     std::optional<palace::PalaceLezTrackedTransaction>
     trackedLezTransaction(const std::string& transactionHash) const;
     bool readStableLezAccounts(
@@ -961,6 +962,8 @@ private:
     std::optional<PalaceLezFinalizedEvidence>
         m_lezLatestFinalizedEvidence;
     std::optional<PalaceLezOpenHistory> m_lezOpenHistory;
+    std::chrono::steady_clock::time_point
+        m_nextLocalAuthorityRefreshAt{};
     std::optional<PalaceLezPendingSubmissionRecovery>
         m_lezPendingSubmissionRecovery;
     std::optional<PalaceVmTurn> m_palaceVmTurn;
