@@ -103,6 +103,45 @@
         let
           pkgs = import nixpkgs { inherit system; };
           palaceImageId = palaceImageIdFor system;
+          lgxPackageOutputs = [
+            {
+              artifact = "logos-palace_vm-module-lib.lgx";
+              output = palaceVm.packages.${system}.lgx-portable;
+            }
+            {
+              artifact = "logos-palace_core-module-lib.lgx";
+              output = palaceCore.packages.${system}.lgx-portable;
+            }
+            {
+              artifact = "logos-logos_palace_ui-module.lgx";
+              output = palaceUi.packages.${system}.lgx-portable;
+            }
+            {
+              artifact = "logos-delivery_module-module-lib.lgx";
+              output = inputs.delivery_module.packages.${system}.lgx-portable;
+            }
+            {
+              artifact = "logos-storage_module-module-lib.lgx";
+              output = inputs.storage_module.packages.${system}.lgx-portable;
+            }
+            {
+              artifact = "logos-lez_core-module-lib.lgx";
+              output = inputs.lez_core.packages.${system}.lgx-portable;
+            }
+          ];
+          lgxHashChecks = pkgs.lib.concatStringsSep "\n" (map
+            (package: ''
+              expected_hash=$(jq -er --arg artifact "${package.artifact}" \
+                '.packages[] | select(.artifact == $artifact) | .sha256' \
+                "$source_manifest")
+              actual_hash=$(sha256sum "${package.output}/${package.artifact}" \
+                | cut -d' ' -f1)
+              if [ "$actual_hash" != "$expected_hash" ]; then
+                printf 'release LGX hash mismatch: %s\\n' \
+                  "${package.artifact}" >&2
+                exit 1
+              fi
+            '') lgxPackageOutputs);
           releasePreflightTests = pkgs.lib.fileset.toSource {
             root = ./tests;
             fileset = pkgs.lib.fileset.unions [
@@ -114,6 +153,7 @@
           "logos-palace-risc0-release"
           {
             nativeBuildInputs = [
+              pkgs.coreutils
               pkgs.jq
               pkgs.nodejs
               palaceImageId
@@ -130,21 +170,19 @@
               --arg sha "$expected_sha" \
               --arg image "$expected_image" \
               '
-                (keys | sort) == ([
-                  "schema",
-                  "version",
-                  "risc0BinfmtVersion",
-                  "byteLength",
-                  "sha256",
-                  "imageIdHex"
-                ] | sort)
-                and .schema == "logos.palace.risc0-release"
-                and .version == 1
+                .schema == "logos.palace.release"
+                and .version == 2
                 and .risc0BinfmtVersion == "3.0.5"
                 and .byteLength == $size
                 and .sha256 == $sha
                 and .imageIdHex == $image
+                and (.packages | length == 6)
+                and (.schemas.vmProfile == "classic-mvp-v1")
+                and (.schemas.lezVmProfile == "iptscrae_mvp_v1")
+                and (.network.lezNetworkId == "logos-lez-testnet-v0.2.0")
               ' "$source_manifest" >/dev/null
+
+            ${lgxHashChecks}
 
             mkdir -p "$out/bin" "$out/share/logos-palace"
             install -m 0555 \

@@ -137,15 +137,18 @@ cargo build --manifest-path program/palace_program/methods/Cargo.toml --release
 
 ## Pinned deployed release
 
-Production preflight trusts one reviewed public manifest and one Nix-built
-RISC Zero image-ID verifier. Deployed bytecode is fetched directly from the
+Production preflight trusts one reviewed public release manifest and one
+Nix-built RISC Zero image-ID verifier. The manifest binds the six installed
+LGX artifacts, their source revisions and SHA-256 digests, the Palace schema
+and Delivery/Storage/VM profiles, the LEZ network endpoints, and the deployed
+program/root identity. Deployed bytecode is fetched directly from the
 pinned finalized explorer transaction and streamed to the verifier over
 standard input. The deployed binary is intentionally not stored in this
 repository.
 
 | Field | Pinned value |
 | --- | --- |
-| repository manifest | `program/release/release.json` |
+| repository manifest | `program/release/release.json` (schema `logos.palace.release`, version 2) |
 | byte length | `297312` |
 | SHA-256 | `69099492e8f860ab338846f33762f5fb563ffc40121779ec1e15ef0b35da7171` |
 | RISC Zero image / program ID | `e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61` |

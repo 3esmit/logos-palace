@@ -29,6 +29,88 @@ export const palaceRelease = Object.freeze({
   systemProgramBase58: "11111111111111111111111111111111",
 });
 
+const releasePackageBindings = Object.freeze([
+  Object.freeze({
+    name: "palace_vm",
+    artifact: "logos-palace_vm-module-lib.lgx",
+    type: "core",
+    version: "0.1.0",
+    sha256: "5815634576998f931458d6748eb85b3bb4cf218b7238ffd5641049f3bbedc68a",
+    source: "3esmit/logos-palace@2f3b169be4b7d263bb778a22f75d425fbb1c56c0",
+    dependencies: Object.freeze([]),
+  }),
+  Object.freeze({
+    name: "palace_core",
+    artifact: "logos-palace_core-module-lib.lgx",
+    type: "core",
+    version: "0.1.0",
+    sha256: "adcdeecbf86090075b15d2e007e4eeb224dda7a899c2c40b3818380cd5690f7d",
+    source: "3esmit/logos-palace@2f3b169be4b7d263bb778a22f75d425fbb1c56c0",
+    dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
+  }),
+  Object.freeze({
+    name: "logos_palace_ui",
+    artifact: "logos-logos_palace_ui-module.lgx",
+    type: "ui_qml",
+    version: "0.1.0",
+    sha256: "d8ae6dcef4bf274033a4b10e26aced962d3da215b76ea29b3a5e8d1fea55436b",
+    source: "3esmit/logos-palace@2f3b169be4b7d263bb778a22f75d425fbb1c56c0",
+    dependencies: Object.freeze(["palace_core"]),
+  }),
+  Object.freeze({
+    name: "delivery_module",
+    artifact: "logos-delivery_module-module-lib.lgx",
+    type: "core",
+    version: "0.1.8",
+    sha256: "986a6a81ad65d42c9b174c1e3c6530a9b2b3174efff57e8dc6de078e37101da2",
+    source: "3esmit/logos-delivery-module@891c43bd6176e17b0aa536ef1aa369bb47e918f4",
+    dependencies: Object.freeze([]),
+  }),
+  Object.freeze({
+    name: "storage_module",
+    artifact: "logos-storage_module-module-lib.lgx",
+    type: "core",
+    version: "2.3.0",
+    sha256: "97077662328ee9df6fc3188e8d1444e2cdf011e6a9ee6ca50e8a2848b5cc178f",
+    source: "3esmit/logos-storage-module@1c75ad9d1f02f562e845a2c445421bee6ea425ad",
+    dependencies: Object.freeze([]),
+  }),
+  Object.freeze({
+    name: "lez_core",
+    artifact: "logos-lez_core-module-lib.lgx",
+    type: "core",
+    version: "0.4.0-alpha.2",
+    sha256: "6ac67c2864bb2cb7d2993a0498d1b45bb8de234b55f3c00c8cff6522999c9833",
+    source: "3esmit/logos-execution-zone-module@10c6c1dd76107cb96e99f651fec3f61c35e09901",
+    dependencies: Object.freeze([]),
+  }),
+]);
+
+const releaseSchemaBindings = Object.freeze({
+  palaceProgram: "palace-schema-v3",
+  catalogManifest: "logos-palace-catalog-manifest-v1",
+  roomManifest: "logos-palace-room-v1",
+  propManifest: "logos-palace-prop-v1",
+  deliveryEnvelope: "logos-palace-room-v1",
+  vmProfile: "classic-mvp-v1",
+  lezVmProfile: "iptscrae_mvp_v1",
+});
+
+const releaseNetworkBindings = Object.freeze({
+  lezNetworkId: "logos-lez-testnet-v0.2.0",
+  deliveryNetworkId: "logos-lez-testnet-v0.2.0",
+  sequencerOrigin: "https://testnet.lez.logos.co",
+  explorerOrigin: "https://explorer.testnet.lez.logos.co",
+  deliveryTopology: "participant-hosted",
+  storageTopology: "participant-hosted",
+});
+
+const releaseDependencyBindings = Object.freeze({
+  basecamp: "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
+  logosModuleBuilder: "logos-co/logos-module-builder@fd07679ecfa1b2d8cfdd06799f3e03ed385b57f6",
+  nixpkgs: "NixOS/nixpkgs@535f3e6942cb1cead3929c604320d3db54b542b9",
+});
+
 const explorerPostMaximumAttempts = 3;
 const retryableExplorerTransportCodes = new Set([
   "EAI_AGAIN",
@@ -143,6 +225,21 @@ export function validateReleaseManifest(
   release = palaceRelease,
 ) {
   const manifest = parseStrictJson(manifestBody, "release manifest");
+  const deployment = manifest?.deployment;
+  const packages = manifest?.packages;
+  const schemas = manifest?.schemas;
+  const network = manifest?.network;
+  const dependencies = manifest?.dependencies;
+  const expectedDeployment = {
+    networkId: "logos-lez-testnet-v0.2.0",
+    explorerOrigin: release.explorerOrigin,
+    transactionHash: release.deploymentTransactionHash,
+    blockId: release.deploymentBlockId,
+    blockHash: release.deploymentBlockHash,
+    rootAccountIdHex: release.rootAccountIdHex,
+    rootAccountIdBase58: release.rootAccountIdBase58,
+    systemProgramBase58: release.systemProgramBase58,
+  };
   if (
     !exactKeys(
       manifest,
@@ -153,14 +250,32 @@ export function validateReleaseManifest(
         "byteLength",
         "sha256",
         "imageIdHex",
+        "deployment",
+        "packages",
+        "schemas",
+        "network",
+        "dependencies",
       ],
     )
-    || manifest.schema !== "logos.palace.risc0-release"
-    || manifest.version !== 1
+    || manifest.schema !== "logos.palace.release"
+    || manifest.version !== 2
     || manifest.risc0BinfmtVersion !== "3.0.5"
     || manifest.byteLength !== release.programByteLength
     || manifest.sha256 !== release.programBytecodeSha256
     || manifest.imageIdHex !== release.programIdHex
+    || !exactKeys(deployment, Object.keys(expectedDeployment))
+    || !exactJson(deployment, expectedDeployment)
+    || !Array.isArray(packages)
+    || packages.length !== releasePackageBindings.length
+    || !packages.every((entry, index) =>
+      exactKeys(entry, Object.keys(releasePackageBindings[index]))
+      && exactJson(entry, releasePackageBindings[index]))
+    || !exactKeys(schemas, Object.keys(releaseSchemaBindings))
+    || !exactJson(schemas, releaseSchemaBindings)
+    || !exactKeys(network, Object.keys(releaseNetworkBindings))
+    || !exactJson(network, releaseNetworkBindings)
+    || !exactKeys(dependencies, Object.keys(releaseDependencyBindings))
+    || !exactJson(dependencies, releaseDependencyBindings)
   ) {
     throw new Error("immutable release manifest mismatch");
   }
@@ -168,6 +283,11 @@ export function validateReleaseManifest(
     programByteLength: manifest.byteLength,
     programBytecodeSha256: manifest.sha256,
     programIdHex: manifest.imageIdHex,
+    deployment,
+    packages,
+    schemas,
+    network,
+    dependencies,
   };
 }
 

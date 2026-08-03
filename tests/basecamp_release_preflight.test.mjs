@@ -99,14 +99,29 @@ function returningExplorerBody(body) {
 }
 
 test("release manifest validates exact pinned public metadata", () => {
+  const validated = validateReleaseManifest(manifest);
   assert.deepEqual(
-    validateReleaseManifest(manifest),
+    {
+      programByteLength: validated.programByteLength,
+      programBytecodeSha256: validated.programBytecodeSha256,
+      programIdHex: validated.programIdHex,
+    },
     {
       programByteLength: palaceRelease.programByteLength,
       programBytecodeSha256:
         palaceRelease.programBytecodeSha256,
       programIdHex: palaceRelease.programIdHex,
     },
+  );
+  assert.equal(validated.packages.length, 6);
+  assert.equal(validated.packages[0].artifact, "logos-palace_vm-module-lib.lgx");
+  assert.equal(validated.packages[5].artifact, "logos-lez_core-module-lib.lgx");
+  assert.equal(validated.schemas.palaceProgram, "palace-schema-v3");
+  assert.equal(validated.schemas.vmProfile, "classic-mvp-v1");
+  assert.equal(validated.network.lezNetworkId, "logos-lez-testnet-v0.2.0");
+  assert.equal(
+    validated.dependencies.basecamp,
+    "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
   );
   assertReleaseRootBindings();
 });
@@ -179,6 +194,24 @@ test("release manifest rejects hash, shape, and image drift", () => {
     () => validateReleaseManifest(
       JSON.stringify(imageMismatchManifest),
     ),
+    /immutable release manifest mismatch/,
+  );
+  const packageMismatchManifest = JSON.parse(manifest);
+  packageMismatchManifest.packages[0].sha256 = "0".repeat(64);
+  assert.throws(
+    () => validateReleaseManifest(JSON.stringify(packageMismatchManifest)),
+    /immutable release manifest mismatch/,
+  );
+  const networkMismatchManifest = JSON.parse(manifest);
+  networkMismatchManifest.network.lezNetworkId = "logos-lez-local-development-v1";
+  assert.throws(
+    () => validateReleaseManifest(JSON.stringify(networkMismatchManifest)),
+    /immutable release manifest mismatch/,
+  );
+  const schemaMismatchManifest = JSON.parse(manifest);
+  schemaMismatchManifest.schemas.vmProfile = "unbounded";
+  assert.throws(
+    () => validateReleaseManifest(JSON.stringify(schemaMismatchManifest)),
     /immutable release manifest mismatch/,
   );
 });
