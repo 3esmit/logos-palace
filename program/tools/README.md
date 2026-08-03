@@ -52,8 +52,10 @@ PALACE_LEZ_WALLET_PASSWORD="$palace_deploy_password" \
 unset palace_deploy_password
 ```
 
-The tool rejects an existing wallet/statistics path, a malformed image, and an
-image that cannot fit Testnet's 614,200-byte transaction limit.
+The tool rejects missing configuration, non-file wallet/statistics paths, a
+malformed image, and an image that cannot fit Testnet's 614,200-byte
+transaction limit. The statistics file is derived as `<storage>.statistics`
+and is passed to the LEZ wallet FFI.
 
 After recording the hash, remove only the exact temporary directory created
 above. A successful response proves Sequencer acceptance, not inclusion or

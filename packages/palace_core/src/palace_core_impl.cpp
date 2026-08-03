@@ -6619,9 +6619,9 @@ std::string PalaceCoreImpl::delegateModerator(
         "{\"kind\":\"grant_capability\",\"grant_id_hex\":\""
         + grantIdHex + "\",\"subject_user_id_hex\":\""
         + subjectUserIdHex
-        + "\",\"scope\":{\"kind\":\"palace\"},\"capabilities\":"
+        + "\",\"scope\":{\"kind\":\"palace\"},\"capabilities\":\""
         + std::to_string(kModeratorCapabilities)
-        + ",\"delegable\":false,\"valid_through_action_id\":\""
+        + "\",\"delegable\":false,\"valid_through_action_id\":\""
         + std::to_string(std::numeric_limits<std::uint64_t>::max())
         + "\"}";
     const std::string queued = submitIntent(context.actionId);

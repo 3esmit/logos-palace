@@ -78,12 +78,21 @@ int main(int argc, char** argv) {
 
     const std::filesystem::path configPath(argv[1]);
     const std::filesystem::path storagePath(argv[2]);
+    const std::filesystem::path statisticsPath =
+        storagePath.string() + ".statistics";
     const std::filesystem::path programPath(argv[3]);
     const bool storageExists = std::filesystem::exists(storagePath);
+    const bool statisticsExists =
+        std::filesystem::exists(statisticsPath);
     if (!std::filesystem::is_regular_file(configPath)
         || (storageExists
                 && !std::filesystem::is_regular_file(storagePath))) {
         std::cerr << "config must exist; storage must be absent or a file\n";
+        return 64;
+    }
+    if (statisticsExists
+        && !std::filesystem::is_regular_file(statisticsPath)) {
+        std::cerr << "statistics must be absent or a file\n";
         return 64;
     }
 
@@ -97,7 +106,8 @@ int main(int argc, char** argv) {
     if (storageExists) {
         wallet = wallet_ffi_open(
             configPath.c_str(),
-            storagePath.c_str());
+            storagePath.c_str(),
+            statisticsPath.c_str());
         if (wallet == nullptr) {
             std::cerr << "wallet open failed\n";
             return 70;
@@ -106,6 +116,7 @@ int main(int argc, char** argv) {
         FfiCreateWalletOutput created = wallet_ffi_create_new(
             configPath.c_str(),
             storagePath.c_str(),
+            statisticsPath.c_str(),
             password);
         if (created.wallet == nullptr) {
             if (created.mnemonic != nullptr) {
