@@ -75,6 +75,7 @@ public:
     QString createPalace(QString title) override;
     QString createInitialRoomState() override;
     QString openPalace(QString palaceUri) override;
+    QString registerPalaceUser() override;
     QString refreshPalace() override;
     QString refreshLez() override;
     QString refreshIdentity() override;

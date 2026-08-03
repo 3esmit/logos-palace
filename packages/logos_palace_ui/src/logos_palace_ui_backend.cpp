@@ -722,6 +722,16 @@ QString LogosPalaceUiBackend::openPalace(QString palaceUri)
     return rememberLezReceipt(result);
 }
 
+QString LogosPalaceUiBackend::registerPalaceUser()
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    const QString result = modules().palace_core.registerPalaceUser();
+    refreshLezState();
+    refreshPalaceState();
+    return rememberLezReceipt(result);
+}
+
 QString LogosPalaceUiBackend::refreshPalace()
 {
     if (!isContextReady())

@@ -441,6 +441,54 @@ impl PalaceRoot {
         Ok(profile)
     }
 
+    /// Register a participant and issue the bounded ingress capability used
+    /// by the MVP door. Moderation and room-edit capabilities remain explicit
+    /// owner grants.
+    pub fn register_user_with_default_grant(
+        &mut self,
+        caller: AccountId,
+        ordered_action_id: u64,
+        input: UserProfileInput,
+    ) -> Result<(UserProfile, CapabilityGrant), PalaceError> {
+        let mut next_root = self.advanced(ordered_action_id)?;
+        if !valid_nonzero_id(&caller) {
+            return Err(PalaceError::InvalidIdentifier);
+        }
+        input.validate()?;
+        next_root.user_count = increment_bounded(self.user_count, MAX_USERS)?;
+        next_root.grant_count = increment_bounded(self.grant_count, MAX_GRANTS)?;
+        let profile = UserProfile {
+            record_type: RecordType::UserProfile,
+            schema_version: SCHEMA_VERSION,
+            palace_id: self.palace_id,
+            user_id: caller,
+            display_name: input.display_name,
+            delivery_key: input.delivery_key,
+            key_epoch: input.key_epoch,
+            avatar_manifest_cid: input.avatar_manifest_cid,
+            profile_revision: 0,
+        };
+        profile.validate()?;
+        let grant = CapabilityGrant {
+            record_type: RecordType::CapabilityGrant,
+            schema_version: SCHEMA_VERSION,
+            palace_id: self.palace_id,
+            grant_id: caller,
+            subject_user_id: caller,
+            issued_by: self.owner,
+            scope: PalaceScope::Room(self.entry_room_id),
+            capabilities: CAP_WRITE_SHARED_STATE,
+            delegable: false,
+            valid_through_action_id: u64::MAX,
+            revoked: false,
+            revision: 0,
+        };
+        grant.validate()?;
+        next_root.validate()?;
+        *self = next_root;
+        Ok((profile, grant))
+    }
+
     pub fn update_user_profile(
         &mut self,
         caller: AccountId,
@@ -1355,6 +1403,26 @@ mod tests {
         assert_eq!(shared.revision, 2);
         assert_eq!(shared.last_ordered_action_id, 6);
         assert!(ban.active);
+    }
+
+    #[test]
+    fn registration_issues_atrium_ingress_grant() {
+        let mut root = genesis().root;
+        let (profile, grant) = root
+            .register_user_with_default_grant(BOB, 1, profile("Bob", 8))
+            .expect("Bob registers with ingress grant");
+
+        assert_eq!(profile.user_id, BOB);
+        assert_eq!(grant.grant_id, BOB);
+        assert_eq!(grant.subject_user_id, BOB);
+        assert_eq!(grant.issued_by, ALICE);
+        assert_eq!(grant.scope, PalaceScope::Room(ATRIUM));
+        assert_eq!(grant.capabilities, CAP_WRITE_SHARED_STATE);
+        assert!(!grant.delegable);
+        assert!(!grant.revoked);
+        assert_eq!(root.user_count, 2);
+        assert_eq!(root.grant_count, 2);
+        assert_eq!(root.last_ordered_action_id, 1);
     }
 
     #[test]

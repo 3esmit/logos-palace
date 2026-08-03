@@ -114,18 +114,26 @@ mod palace {
             pda = [literal("profile"), account("root"), account("user")]
         )]
         profile_account: AccountWithMetadata,
+        #[account(
+            init,
+            pda = [literal("grant"), account("root"), account("user")]
+        )]
+        ingress_grant_account: AccountWithMetadata,
         ordered_action_id: u64,
         profile: palace_program::core::UserProfileInput,
     ) -> SpelResult {
         let mut palace_root = read_record::<palace_program::core::PalaceRoot>(&root, 0)?;
-        let profile = palace_root
-            .register_user(account_id(&user), ordered_action_id, profile)
+        let (profile, ingress_grant) = palace_root
+            .register_user_with_default_grant(
+                account_id(&user), ordered_action_id, profile)
             .map_err(palace_error)?;
         let root = write_record(root, &palace_root)?;
         let profile_account = write_record(profile_account, &profile)?;
+        let ingress_grant_account =
+            write_record(ingress_grant_account, &ingress_grant)?;
 
         Ok(SpelOutput::execute(
-            vec![root, user, profile_account],
+            vec![root, user, profile_account, ingress_grant_account],
             vec![],
         ))
     }

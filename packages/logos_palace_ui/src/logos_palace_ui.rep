@@ -43,6 +43,7 @@ class LogosPalaceUi
     SLOT(QString createPalace(QString title))
     SLOT(QString createInitialRoomState())
     SLOT(QString openPalace(QString palaceUri))
+    SLOT(QString registerPalaceUser())
     SLOT(QString refreshPalace())
     SLOT(QString refreshLez())
     SLOT(QString refreshIdentity())

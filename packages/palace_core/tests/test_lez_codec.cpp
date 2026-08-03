@@ -331,12 +331,12 @@ LOGOS_TEST(palace_lez_v3_round_trips_all_variants_and_exact_account_order) {
     using namespace palace;
     using namespace palace_lez_test;
     const std::array<std::size_t, 14> expectedAccountCounts{
-        6U, 3U, 3U, 3U, 2U, 4U, 4U, 3U, 4U, 5U, 4U, 4U, 5U, 5U};
+        6U, 4U, 3U, 3U, 2U, 4U, 4U, 3U, 4U, 5U, 4U, 4U, 5U, 5U};
     // Generated with lee_core::AccountId::for_public_pda over the account
     // declarations in the Rust guest, then hashed in declared order.
     const std::array<const char*, 14> rustAccountOrderDigests{
         "c4a3b3c0aa25263764841020ac168280d3df8be7fd1ced2ac60825767e522c39",
-        "8b6ba3bf4f388fa19452a7bd9442c2e3d4254d962bcfd8f07c064674006fb8d8",
+        "e3e968addd35a8998feffc425766cc4e5f79a8657c5d5f24081c911836c76eb0",
         "8b6ba3bf4f388fa19452a7bd9442c2e3d4254d962bcfd8f07c064674006fb8d8",
         "8b6ba3bf4f388fa19452a7bd9442c2e3d4254d962bcfd8f07c064674006fb8d8",
         "ab3362ddd55db987954daa2741559c0c498786032f163bb4df5dcc58bb9b8ba4",

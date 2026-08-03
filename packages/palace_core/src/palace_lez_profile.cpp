@@ -136,12 +136,17 @@ PalaceLezProfileV1 releaseProfile()
 
 PalaceLezProfileV1 localDevelopmentProfile()
 {
-    // Local development deliberately uses the same checked Palace program
-    // image as release. It differs only in the isolated sequencer origin and
-    // in its explicit absence of public finality.
+    // Local development is deployed by the local E2E runner, so it tracks the
+    // current guest image independently of the immutable public release lock.
+    // It differs from release in its isolated sequencer origin and explicit
+    // absence of public finality.
     PalaceLezProfileV1 profile = releaseProfile();
     profile.id = kLocalDevelopmentProfileId;
     profile.network.networkId = "logos-lez-local-development-v1";
+    profile.network.programIdHex =
+        "258c2cc5ca0a938707f5ddd8735d018f4862c4a88bf86fad8161342795f12c4d";
+    profile.network.programBytecodeSha256Hex =
+        "6b83ce7b48af9ddf92c84476647772b3aca2c452e5a135fb6a12bc87aa3afb82";
     profile.walletConfigJson =
         "{\"sequencer_addr\":"
         "\"http://127.0.0.1:3040\","

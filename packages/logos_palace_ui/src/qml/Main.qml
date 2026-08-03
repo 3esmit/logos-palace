@@ -160,6 +160,8 @@ Item {
         || onboardingPhase === "confirming-initial-room-state"
     readonly property bool roomUsable: ready && palaceOpen
         && entryRoomStateReady && !onboardingInitialRoomStatePending
+        && (!onboardingUsesExistingPalace
+            || onboardingPhase === "complete")
     readonly property bool onboardingLezReady:
         encodedStatusValue(lezState, "ready") === "1"
     readonly property bool onboardingIdentityReady:
@@ -236,6 +238,9 @@ Item {
     property bool onboardingBundlePollPending: false
     property bool onboardingFinalityPolling: false
     property bool onboardingFinalityPollPending: false
+    property bool onboardingJoinRegistrationPolling: false
+    property bool onboardingJoinRegistrationPollPending: false
+    property string onboardingJoinRegistrationActionId: ""
     property bool onboardingCreatorActionObserved: false
     property string onboardingCreatorActionId: "0"
     readonly property bool onboardingUsesExistingPalace:
@@ -251,6 +256,8 @@ Item {
         || onboardingPhase === "checking-room-setup"
         || onboardingPhase === "creating-palace"
         || onboardingPhase === "confirming-creation"
+        || onboardingPhase === "registering-palace-identity"
+        || onboardingPhase === "confirming-palace-identity"
         || onboardingPhase === "preparing-initial-room-state"
         || onboardingPhase === "waiting-initial-room-state"
         || onboardingPhase === "creating-initial-room-state"
@@ -430,6 +437,11 @@ Item {
                 return "Your identity is still being confirmed. Try again shortly."
             return "Could not create your identity. Try again."
         }
+        if (step === "palace-identity") {
+            if (result.indexOf("palace-identity-conflict") >= 0)
+                return "This identity is already registered with a different key."
+            return "Could not register your identity in this Palace. Try again."
+        }
         if (step === "palace") {
             if (result.indexOf("invalid-palace-uri") >= 0)
                 return "Enter the full Palace address, starting with palace://."
@@ -480,6 +492,8 @@ Item {
         onboardingBundlePollPending = false
         onboardingFinalityPolling = false
         onboardingFinalityPollPending = false
+        onboardingJoinRegistrationPolling = false
+        onboardingJoinRegistrationPollPending = false
         onboardingPhase = "error"
         onboardingFailureStep = step
         onboardingError = onboardingFailureMessage(step, cause)
@@ -518,6 +532,11 @@ Item {
             onboardingFail(failureStep, receipt)
             return
         }
+        if (palaceOpen && failureStep === "palace"
+                && onboardingUsesExistingPalace) {
+            beginExistingPalaceRegistration()
+            return
+        }
         onboardingPhase = palaceOpen ? "complete" : waitingPhase
         if (palaceOpen)
             clearOnboardingPassword()
@@ -529,6 +548,93 @@ Item {
             backend.openPalace(onboardingPalaceAddress.trim()),
             function (receipt) {
                 finishOnboardingOpen(receipt, "waiting-palace", "palace")
+            })
+    }
+
+    function finishExistingPalaceRegistration() {
+        onboardingJoinRegistrationPolling = false
+        onboardingJoinRegistrationPollPending = false
+        onboardingJoinRegistrationActionId = ""
+        onboardingPhase = "complete"
+        onboardingError = ""
+        clearOnboardingPassword()
+    }
+
+    function updateExistingPalaceRegistration(receipt) {
+        var status = String(receipt)
+        if (status.indexOf("rejected=") === 0) {
+            onboardingFail("palace-identity", status)
+            return
+        }
+        if (encodedStatusValue(status, "registration") === "already") {
+            finishExistingPalaceRegistration()
+            return
+        }
+        var actionId = encodedStatusValue(status, "action")
+        if (!/^[1-9][0-9]*$/.test(actionId)) {
+            onboardingFail(
+                "palace-identity",
+                "rejected=palace-identity-action-missing")
+            return
+        }
+        onboardingJoinRegistrationActionId = actionId
+        onboardingPhase = "confirming-palace-identity"
+        onboardingJoinRegistrationPolling = true
+    }
+
+    function beginExistingPalaceRegistration() {
+        if (!onboardingUsesExistingPalace || !palaceOpen
+                || onboardingPhase === "complete"
+                || onboardingJoinRegistrationPolling)
+            return
+        onboardingPhase = "registering-palace-identity"
+        watchAction(
+            backend.registerPalaceUser(),
+            updateExistingPalaceRegistration,
+            function (receipt) {
+                onboardingFail("palace-identity", receipt)
+            })
+    }
+
+    function pollExistingPalaceRegistration() {
+        if (!onboardingJoinRegistrationPolling
+                || onboardingJoinRegistrationPollPending
+                || !ready || !backend)
+            return
+        onboardingJoinRegistrationPollPending = true
+        watchAction(
+            backend.registerPalaceUser(),
+            function (receipt) {
+                if (encodedStatusValue(receipt, "registration")
+                        === "already") {
+                    onboardingJoinRegistrationPollPending = false
+                    finishExistingPalaceRegistration()
+                    return
+                }
+                var actionId = encodedStatusValue(receipt, "action")
+                if (!/^[1-9][0-9]*$/.test(actionId)) {
+                    onboardingJoinRegistrationPollPending = false
+                    onboardingFail(
+                        "palace-identity",
+                        "rejected=palace-identity-action-missing")
+                    return
+                }
+                onboardingJoinRegistrationActionId = actionId
+                onboardingPhase = "confirming-palace-identity"
+                watchAction(
+                    backend.reconcilePalaceTransition(actionId),
+                    function () {
+                        onboardingJoinRegistrationPollPending = false
+                    },
+                    function (rejection) {
+                        onboardingJoinRegistrationPollPending = false
+                        if (!retryableCreatorActionRejection(rejection))
+                            onboardingFail("palace-identity", rejection)
+                    })
+            },
+            function (receipt) {
+                onboardingJoinRegistrationPollPending = false
+                onboardingFail("palace-identity", receipt)
             })
     }
 
@@ -939,6 +1045,12 @@ Item {
             }
             if (onboardingFailureStep === "created-palace")
                 return openCreatedPalace()
+            if (onboardingFailureStep === "palace-identity") {
+                onboardingPhase = "confirming-palace-identity"
+                onboardingJoinRegistrationPolling = true
+                pollExistingPalaceRegistration()
+                return "pending"
+            }
         }
         return startOnboarding()
     }
@@ -971,6 +1083,10 @@ Item {
         }
         if (onboardingPhase === "confirming-creation")
             return "Confirming the Palace creation…"
+        if (onboardingPhase === "registering-palace-identity")
+            return "Registering your identity in this Palace…"
+        if (onboardingPhase === "confirming-palace-identity")
+            return "Confirming your identity in this Palace…"
         if (onboardingPhase === "preparing-initial-room-state"
                 || onboardingPhase === "waiting-initial-room-state")
             return "Preparing the first room…"
@@ -2447,6 +2563,15 @@ Item {
     }
 
     Timer {
+        id: onboardingJoinRegistrationPollTimer
+        interval: 500
+        repeat: true
+        running: root.onboardingJoinRegistrationPolling
+            && root.ready && root.backend !== null
+        onTriggered: root.pollExistingPalaceRegistration()
+    }
+
+    Timer {
         id: onboardingCreatedPalaceRetryTimer
         interval: 500
         repeat: false
@@ -2499,9 +2624,13 @@ Item {
                     || onboardingPhase === "waiting-palace"
                     || onboardingPhase === "opening-created-palace"
                     || onboardingPhase === "waiting-created-palace") {
-                onboardingPhase = "complete"
-                onboardingError = ""
-                clearOnboardingPassword()
+                if (onboardingUsesExistingPalace)
+                    beginExistingPalaceRegistration()
+                else {
+                    onboardingPhase = "complete"
+                    onboardingError = ""
+                    clearOnboardingPassword()
+                }
             } else if (onboardingPhase
                     === "waiting-initial-room-state") {
                 createInitialRoomState()

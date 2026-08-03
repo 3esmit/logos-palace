@@ -660,11 +660,9 @@ PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
 
     std::set<std::string> dataDigests;
     std::set<std::string> accountIds{root.accountIdHex};
-    std::set<std::string> stableIds{
-        bytesHex(rootRecord->palaceId),
-        bytesHex(rootRecord->roomIds[0]),
-        bytesHex(rootRecord->roomIds[1]),
-    };
+    // Record PDAs are namespaced by record tag. A user profile and that
+    // user's ingress grant intentionally share the user ID while remaining
+    // distinct accounts (`profile` versus `grant`).
     for (const PalaceLezNamedAuthorityAccountV1& namedChild : children) {
         const PalaceLezPublicAccountV3& child = namedChild.account;
         const std::string tag = recordTag(child.recordType);
@@ -689,8 +687,7 @@ PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
                 std::get_if<PalaceLezUserProfileRecordV3>(&child.record);
             if (value == nullptr || !validProfile(*value)
                 || value->palaceId != rootRecord->palaceId
-                || value->profileRevision > rootRecord->revision
-                || !stableIds.insert(bytesHex(value->userId)).second) {
+                || value->profileRevision > rootRecord->revision) {
                 return reject("invalid-user-profile");
             }
             profiles.push_back(*value);
@@ -717,8 +714,7 @@ PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
             if (value == nullptr || !validGrant(*value)
                 || value->palaceId != rootRecord->palaceId
                 || value->revision > rootRecord->revision
-                || !scopeNamesRoom(value->scope, rootRecord->roomIds)
-                || !stableIds.insert(bytesHex(value->grantId)).second) {
+                || !scopeNamesRoom(value->scope, rootRecord->roomIds)) {
                 return reject("invalid-capability-grant");
             }
             grants.push_back(*value);
@@ -729,8 +725,7 @@ PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
             if (value == nullptr || !validBan(*value)
                 || value->palaceId != rootRecord->palaceId
                 || value->revision > rootRecord->revision
-                || !scopeNamesRoom(value->scope, rootRecord->roomIds)
-                || !stableIds.insert(bytesHex(value->banId)).second) {
+                || !scopeNamesRoom(value->scope, rootRecord->roomIds)) {
                 return reject("invalid-ban-record");
             }
             bans.push_back(*value);
@@ -743,8 +738,7 @@ PalaceLezAuthorityProjectionResultV1 projectLezAuthorityV1(
                 || value->palaceId != rootRecord->palaceId
                 || value->lastOrderedActionId > rootRecord->lastOrderedActionId
                 || (value->roomId != rootRecord->roomIds[0]
-                    && value->roomId != rootRecord->roomIds[1])
-                || !stableIds.insert(bytesHex(value->sharedStateId)).second) {
+                    && value->roomId != rootRecord->roomIds[1])) {
                 return reject("invalid-shared-state-record");
             }
             sharedStates.push_back(*value);

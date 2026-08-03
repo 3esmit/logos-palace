@@ -428,6 +428,9 @@ public:
     // materialized owner, room, and required room behavior.
     std::string createInitialRoomState();
     std::string openPalace(const std::string& palaceUri);
+    // Registers the current local identity in an opened Palace. Joiners use
+    // this Core-owned transition before Delivery or VM actions are allowed.
+    std::string registerPalaceUser();
     std::string palaceStatus() const;
     std::string startDelivery(const std::string& nodeConfig);
     std::string subscribeRoom(const std::string& networkId,

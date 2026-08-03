@@ -3980,6 +3980,88 @@ std::string PalaceCoreImpl::openPalace(
     return "ok;" + palaceStatus();
 }
 
+std::string PalaceCoreImpl::registerPalaceUser()
+{
+    drainStorageCallbacks();
+    if (!isContextReady() || !m_lezReady
+        || !m_lezCoordinator.running()) {
+        return "rejected=palace-identity-lez-not-ready";
+    }
+    if (!m_lezAuthorityReady || !m_lezOpenHistory.has_value()
+        || !m_lezOpenHistory->authorityApplied) {
+        return "rejected=palace-identity-authority-required";
+    }
+    if (!m_deliveryIdentity.valid()
+        || !m_deliveryIdentityRegistration
+        || !m_deliveryIdentityRegistration->ready()) {
+        return "rejected=palace-identity-not-ready";
+    }
+
+    const std::string accountId = m_deliveryIdentity.accountId();
+    const std::string deliveryKey = m_deliveryIdentity.publicKey();
+    const std::string registeredKey = m_deliveryAuthority.deliveryKeyFor(
+        accountId, m_deliveryIdentity.deliveryKeyEpoch());
+    if (registeredKey == deliveryKey) {
+        return "ok;registration=already;identity=" + accountId;
+    }
+    if (!registeredKey.empty()) {
+        return "rejected=palace-identity-conflict";
+    }
+
+    palace::PalaceLezBytes32 deliveryKeyBytes{};
+    if (!palace::PalaceLezCodec::parseBytes32Hex(
+            deliveryKey, deliveryKeyBytes)) {
+        return "rejected=palace-identity-key-invalid";
+    }
+
+    const std::uint64_t orderedActionId =
+        m_lezAuthorityMaterialization.lastOrderedActionId + 1U;
+    const std::string actionId = std::to_string(orderedActionId);
+    const palace::PalaceLezRegisterUserV3 registration{
+        orderedActionId,
+        {
+            m_deliveryIdentity.displayName(),
+            deliveryKeyBytes,
+            static_cast<std::uint64_t>(
+                m_deliveryIdentity.deliveryKeyEpoch()),
+            std::nullopt,
+        },
+    };
+    const palace::PalaceLezInstructionV3 instruction{registration};
+    palace::ActionStatus status = m_actionJournal.status(actionId);
+    switch (status.durableStage) {
+    case palace::DurableActionStage::LocalDraft: {
+        const std::string queued = submitIntent(actionId);
+        if (queued.rfind("rejected=", 0U) == 0U)
+            return "rejected=palace-identity-action-queue;" + queued;
+        status = m_actionJournal.status(actionId);
+        break;
+    }
+    case palace::DurableActionStage::Queued:
+        break;
+    case palace::DurableActionStage::SubmittedToLez:
+    case palace::DurableActionStage::Observed:
+    case palace::DurableActionStage::Finalized:
+        return "ok;registration=pending;action=" + actionId + ";"
+            + actionStatus(actionId);
+    case palace::DurableActionStage::Rejected:
+    case palace::DurableActionStage::Expired:
+    case palace::DurableActionStage::Orphaned:
+        return "rejected=palace-identity-action-terminal;action="
+            + actionId + ";" + actionStatus(actionId);
+    }
+
+    const std::string submitted = submitPalaceInstruction(
+        actionId,
+        m_lezAuthorityMaterialization.rootAccountIdHex,
+        accountId,
+        m_lezAuthorityMaterialization.programIdHex,
+        instruction);
+    if (submitted.rfind("ok;", 0U) != 0U)
+        return submitted;
+    return submitted + ";registration=pending;action=" + actionId;
+}
+
 std::string PalaceCoreImpl::palaceStatus() const
 {
     const std::string authoritySource =
@@ -10149,27 +10231,14 @@ bool PalaceCoreImpl::startStorageMvpCatalogDownload(
         }
         m_storageMvpColocatedMaterialized = false;
     }
-    // Peer network path: never use downloadToUrlV2(local=false) — it hangs
-    // after accept on co-located meshes (network-fetch-timeout). Prefer local
-    // verification when fetch()/exists succeeds.
-    bool useLocalVerification = localOnly;
-    if (!localOnly
-        && purpose == StorageMvpTransferPurpose::NetworkFetch) {
-        (void)modules().storage_module.fetch(operation.cid);
-        for (int probe = 0; probe < 6; ++probe) {
-            const StdLogosResult exists =
-                modules().storage_module.exists(operation.cid);
-            if (exists.success
-                && exists.value.is_boolean()
-                && exists.value.get<bool>()) {
-                useLocalVerification = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        }
-        if (!useLocalVerification)
-            return false;
-    }
+    // Network fetches must stay on Storage's network-aware v2 path. Calling
+    // fetch() first only starts a background dataset task; immediately
+    // switching to local verification races that task and can read a partial
+    // manifest forever. The joiner has a signed bootstrap peer configured, so
+    // downloadToUrlV2(local=false) can resolve providers and transfer the
+    // complete dataset. Local verification remains reserved for bytes already
+    // retained by this profile.
+    const bool useLocalVerification = localOnly;
     const palace::StorageModuleSessionTransition dispatched =
         useLocalVerification
         ? m_storageSession.beginLocalVerification(
@@ -10608,7 +10677,7 @@ PalaceCoreImpl::executeStorageCommand(
         }
         const palace::StorageModuleCodecResult decoded =
             palace::parseStorageModuleDownloadAcknowledgementV2(
-                response.value, acknowledgement);
+                response.value.dump(), acknowledgement);
         return m_storageSession.downloadToUrlV2Result(
             command.commandId,
             decoded.accepted,

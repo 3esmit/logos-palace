@@ -1838,7 +1838,9 @@ PalaceLezTransactionPlanV3 PalaceLezCodec::buildTransaction(
                 return add("profile", signer) && add("room", value.entryRoomId)
                     && add("room", value.secondaryRoomId) && add("grant", value.ownerGrantId);
             },
-            [&](const PalaceLezRegisterUserV3&) { return add("profile", signer); },
+            [&](const PalaceLezRegisterUserV3&) {
+                return add("profile", signer) && add("grant", signer);
+            },
             [&](const PalaceLezUpdateUserProfileV3&) { return add("profile", signer); },
             [&](const PalaceLezRotateDeliveryKeyV3&) { return add("profile", signer); },
             [&](const PalaceLezPublishManifestV3&) { return true; },
@@ -1981,6 +1983,10 @@ PalaceLezExpectedRootV3 PalaceLezCodec::expectedAdvancedRoot(
                 bounded = next.userCount < kMaxUsers;
                 if (bounded)
                     ++next.userCount;
+                if (bounded && next.grantCount >= kMaxGrants)
+                    bounded = false;
+                if (bounded)
+                    ++next.grantCount;
             },
             [&](const PalaceLezPublishManifestV3& value) {
                 next.activeManifestCid = value.cid;

@@ -71,6 +71,11 @@ grants the corresponding bits. Shared spot updates always require
 `CAP_WRITE_SHARED_STATE`, including updates submitted by the owner.
 Room manifest/script changes likewise require `CAP_ROOM_EDIT`.
 
+`register_user` creates the caller's profile and a non-delegable,
+Atrium-scoped `CAP_WRITE_SHARED_STATE` ingress grant together. This is the
+bounded capability used by the MVP door; moderation and room-edit authority
+still require explicit owner grants.
+
 ## Bounds
 
 The core enforces these absolute schema limits before mutation:
