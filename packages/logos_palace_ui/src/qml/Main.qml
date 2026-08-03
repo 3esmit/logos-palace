@@ -170,7 +170,8 @@ Item {
         && (onboardingUsesExistingPalace
             || onboardingPalaceTitle.trim().length > 0)
         && (!onboardingUsesExistingPalace
-            || onboardingStorageCatalog.trim().length > 0)
+            || (onboardingStorageCatalog.trim().length > 0
+                && onboardingStoragePeerEndpoint.trim().length > 0))
 
     readonly property var participants: parseParticipants(participantProjection)
     readonly property var authoringAssets:
@@ -191,6 +192,8 @@ Item {
     // Storage and are fetched by the joining Core instance.
     readonly property string sharedStorageCatalog:
         encodedStatusValue(onboardingBundleStatus, "catalog")
+    readonly property string sharedStoragePeerEndpoint:
+        onboardingStoragePeerEndpoint
     readonly property bool canPublishRoomSetup:
         roomSetupPublishReadiness === "ready"
     // Human moderation is an admin-only LEZ command. Never infer it from
@@ -219,6 +222,9 @@ Item {
     // A creator shares this bounded canonical catalog with joiners. It is
     // user-entered data, never a compiled asset manifest or path.
     property string onboardingStorageCatalog: ""
+    // Endpoint JSON is copied from the creator's running Storage node. Core
+    // validates peer IDs and multiaddrs before dispatching a connection.
+    property string onboardingStoragePeerEndpoint: ""
     property string onboardingPalaceTitle: "My Palace"
     property string onboardingPhase: "details"
     property string onboardingError: ""
@@ -238,6 +244,7 @@ Item {
         onboardingPhase === "starting-lez"
         || onboardingPhase === "creating-identity"
         || onboardingPhase === "connecting-storage"
+        || onboardingPhase === "connecting-storage-peer"
         || onboardingPhase === "fetching-storage-catalog"
         || onboardingPhase === "opening-palace"
         || onboardingPhase === "publishing-room-setup"
@@ -388,7 +395,8 @@ Item {
             && (onboardingUsesExistingPalace
                 || onboardingPalaceTitle.trim().length > 0)
             && (!onboardingUsesExistingPalace
-                || onboardingStorageCatalog.trim().length > 0)
+                || (onboardingStorageCatalog.trim().length > 0
+                    && onboardingStoragePeerEndpoint.trim().length > 0))
     }
 
     function clearOnboardingPassword() {
@@ -434,6 +442,8 @@ Item {
                 return "Start Storage in Logos Control, then try again."
             return "Could not connect to Storage. Check Logos Control and try again."
         }
+        if (step === "storage-peer")
+            return "Paste the creator's Storage peer endpoint to fetch room assets."
         if (step === "catalog") {
             if (result.indexOf("storage-catalog-required") >= 0)
                 return "Paste the shared room catalog to join this Palace."
@@ -522,6 +532,35 @@ Item {
             })
     }
 
+    function parseStoragePeerEndpoint(encoded) {
+        var value = String(encoded || "").trim()
+        if (value.indexOf("ok;") === 0)
+            value = value.slice(3)
+        try {
+            var endpoint = JSON.parse(value)
+            var peerId = String(endpoint.peerId || "")
+            var addresses = Array.isArray(endpoint.addrs)
+                ? endpoint.addrs
+                : (Array.isArray(endpoint.announceAddresses)
+                   ? endpoint.announceAddresses : [])
+            if (peerId.length === 0 || addresses.length === 0)
+                return null
+            return {
+                peerId: peerId,
+                addressesJson: JSON.stringify(addresses)
+            }
+        } catch (error) {
+            return null
+        }
+    }
+
+    function refreshSharedStoragePeerEndpoint() {
+        watchAction(backend.storagePeerEndpoint(), function (receipt) {
+            if (String(receipt).indexOf("rejected=") !== 0)
+                onboardingStoragePeerEndpoint = String(receipt)
+        }, null)
+    }
+
     function updateExistingStorageCatalog(receipt) {
         var status = String(receipt)
         onboardingBundleStatus = status
@@ -546,18 +585,29 @@ Item {
             onboardingFail("catalog", "rejected=storage-catalog-required")
             return
         }
+        var peer = parseStoragePeerEndpoint(onboardingStoragePeerEndpoint)
+        if (peer === null) {
+            onboardingFail("storage-peer", "rejected=storage-peer-endpoint-required")
+            return
+        }
         invokeOnboardingStep(
             "connecting-storage", "storage",
             backend.connectStorage(),
             function () {
                 invokeOnboardingStep(
-                    "fetching-storage-catalog", "catalog",
-                    backend.fetchMvpStorageBundle(
-                        onboardingStorageCatalog.trim()),
-                    function (receipt) {
-                        onboardingBundleStatus = receipt
-                        onboardingBundlePolling = true
-                        pollRoomSetupPublication()
+                    "connecting-storage-peer", "storage-peer",
+                    backend.connectStoragePeer(
+                        peer.peerId, peer.addressesJson),
+                    function () {
+                        invokeOnboardingStep(
+                            "fetching-storage-catalog", "catalog",
+                            backend.fetchMvpStorageBundle(
+                                onboardingStorageCatalog.trim()),
+                            function (receipt) {
+                                onboardingBundleStatus = receipt
+                                onboardingBundlePolling = true
+                                pollRoomSetupPublication()
+                            })
                     })
             })
     }
@@ -652,6 +702,7 @@ Item {
                 && catalog.length > 0) {
             onboardingBundlePolling = false
             onboardingBundlePollPending = false
+            refreshSharedStoragePeerEndpoint()
             createOnboardingPalace()
         }
     }
@@ -901,6 +952,8 @@ Item {
             return "Creating your identity…"
         if (onboardingPhase === "connecting-storage")
             return "Connecting to Storage…"
+        if (onboardingPhase === "connecting-storage-peer")
+            return "Connecting to the Palace Storage peer…"
         if (onboardingPhase === "fetching-storage-catalog")
             return "Fetching the room assets…"
         if (onboardingPhase === "opening-palace")
@@ -3746,6 +3799,31 @@ Item {
                 }
 
                 RowLayout {
+                    objectName: "palaceSharedStoragePeerRow"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: root.sharedStoragePeerEndpoint.length > 0
+
+                    Text {
+                        text: "Share peer"
+                        color: "#c9b78e"
+                        font.pixelSize: 10
+                    }
+
+                    TextField {
+                        objectName: "palaceSharedStoragePeerEndpoint"
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        maximumLength: 16384
+                        text: root.sharedStoragePeerEndpoint
+                        Accessible.name: "Shared Storage peer endpoint"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Select and copy this endpoint for Palace joiners."
+                    }
+                }
+
+                RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
 
@@ -4561,6 +4639,33 @@ Item {
                         Accessible.name: "Shared room catalog"
                         onTextEdited: {
                             root.onboardingStorageCatalog = text
+                            root.resetOnboardingAfterEdit()
+                        }
+                    }
+
+                    Text {
+                        text: "Storage peer endpoint (required for an existing Palace)"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                        visible: root.onboardingUsesExistingPalace
+                    }
+
+                    TextField {
+                        id: onboardingStoragePeerEndpointInput
+                        objectName: "palaceOnboardingStoragePeerEndpoint"
+                        Layout.fillWidth: true
+                        placeholderText: "Paste the endpoint shared by the Palace creator"
+                        maximumLength: 16384
+                        text: root.onboardingStoragePeerEndpoint
+                        visible: root.onboardingUsesExistingPalace
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "Storage peer endpoint"
+                        onTextEdited: {
+                            root.onboardingStoragePeerEndpoint = text
                             root.resetOnboardingAfterEdit()
                         }
                     }

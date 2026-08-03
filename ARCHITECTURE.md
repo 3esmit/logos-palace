@@ -171,12 +171,13 @@ Persisted assignments supply graph leaves only for administrator-authorized
 assets. Restart loading rejects checksum, record, review, publication-CID,
 permission, and symlink mismatches.
 
-The creator shares the canonical catalog value produced by publication. A
-joiner supplies the Palace address and that value through onboarding; Core
-attaches to the Control-managed Storage node, fetches every catalog object,
-and opens LEZ history only after exact verification succeeds. This keeps room
-joining a normal user story while preserving the same opaque-handle and
-fail-closed boundaries as creator authoring.
+The creator shares the canonical catalog value produced by publication and the
+running Storage peer endpoint. A joiner supplies the Palace address and both
+values through onboarding; Core attaches to the Control-managed Storage node,
+dials the shared peer, fetches every catalog object, and opens LEZ history only
+after exact verification succeeds. This keeps room joining a normal user
+story while preserving the same opaque-handle and fail-closed boundaries as
+creator authoring.
 
 When a verified graph contains an administrator-authored prop, the avatar
 renderer receives its identifier, opaque handle, dimensions, anchor, and layer

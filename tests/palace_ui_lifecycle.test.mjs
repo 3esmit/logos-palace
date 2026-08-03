@@ -253,11 +253,19 @@ test("joining an existing Palace imports its user-shared Storage catalog before 
   );
   assert.match(
     mainQml,
+    /property string onboardingStoragePeerEndpoint:\s*""/,
+  );
+  assert.match(
+    mainQml,
     /readonly property bool onboardingResumeReady:[\s\S]{0,420}onboardingStorageCatalog\.trim\(\)\.length > 0/,
   );
   assert.match(
     mainQml,
     /objectName:\s*"palaceOnboardingStorageCatalog"[\s\S]{0,520}maximumLength:\s*16384/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceOnboardingStoragePeerEndpoint"[\s\S]{0,520}maximumLength:\s*16384/,
   );
   assert.match(
     mainQml,
@@ -267,13 +275,23 @@ test("joining an existing Palace imports its user-shared Storage catalog before 
     mainQml,
     /objectName:\s*"palaceSharedStorageCatalog"[\s\S]{0,420}readOnly:\s*true/,
   );
+  assert.match(
+    mainQml,
+    /readonly property string sharedStoragePeerEndpoint:[\s\S]{0,100}onboardingStoragePeerEndpoint/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceSharedStoragePeerEndpoint"[\s\S]{0,420}readOnly:\s*true/,
+  );
   const joinStart = mainQml.indexOf("function openExistingPalace()");
   const joinEnd = mainQml.indexOf("function enterCreatorMode()", joinStart);
   assert.ok(joinStart >= 0 && joinEnd > joinStart);
   const joinFlow = mainQml.slice(joinStart, joinEnd);
   assert.match(joinFlow, /backend\.connectStorage\(\)/);
+  assert.match(joinFlow, /backend\.connectStoragePeer\(/);
   assert.match(joinFlow, /backend\.fetchMvpStorageBundle\(/);
   assert.match(joinFlow, /pollRoomSetupPublication\(\)/);
+  assert.match(mainQml, /function parseStoragePeerEndpoint\(encoded\)/);
   assert.match(
     mainQml,
     /function updateExistingStorageCatalog\(receipt\)[\s\S]{0,700}openExistingPalaceAfterCatalog\(\)/,

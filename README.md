@@ -243,10 +243,11 @@ provider-retention guarantee.
 ### Joining an existing Palace
 
 The Palace creator can select and copy the bounded room catalog shown after
-room setup publication. A joiner enters the `palace://` address and pastes
-that catalog into the onboarding form. Palace attaches to the Storage node
-started in Logos Control, fetches and verifies every catalog object, then
-opens the LEZ history. Missing, malformed, or degraded catalog data keeps the
+room setup publication, along with the running Storage peer endpoint. A
+joiner enters the `palace://` address and pastes both values into the
+onboarding form. Palace attaches to the Storage node started in Logos Control,
+dials the shared peer, fetches and verifies every catalog object, then opens
+the LEZ history. Missing, malformed, or degraded peer/catalog data keeps the
 room closed and reports the failure; it never substitutes compiled artwork or
 host paths.
 
