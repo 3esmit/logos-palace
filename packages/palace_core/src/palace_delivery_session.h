@@ -102,6 +102,7 @@ public:
 
     bool configure(const DeliverySessionConfigV1& config);
     bool hasConfiguration() const;
+    bool configurationMatchesAuthority() const;
     const DeliverySessionConfigV1& configuration() const;
     DeliverySessionTransition switchRoom(const std::string& roomId,
                                          std::int64_t roomEpoch);

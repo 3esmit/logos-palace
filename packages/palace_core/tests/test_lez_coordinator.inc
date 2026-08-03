@@ -73,6 +73,49 @@ LOGOS_TEST(palace_lez_coordinator_never_observes_across_height_race_or_state_mis
         static_cast<std::uint8_t>(PalaceLezTransactionStage::Observed));
 }
 
+LOGOS_TEST(palace_lez_coordinator_reconciles_verified_local_history_exactly) {
+    using namespace palace;
+    using namespace palace_lez_test;
+    PalaceLezTransactionCoordinator coordinator;
+    makeCompatible(coordinator);
+    const PalaceLezInstructionV3 instruction{
+        PalaceLezRevokeCapabilityV3{7U, bytes(0x12U)}};
+    const PalaceLezTransactionPlanV3 plan =
+        PalaceLezCodec::buildTransaction(kProgramId, kSigner, instruction);
+    const std::string transactionHash = hash(41U);
+    LOGOS_ASSERT_TRUE(coordinator.registerSubmission(
+        plan,
+        submissionJson(transactionHash),
+        kRootBorshSha256).accepted);
+
+    const PalaceLezCoordinatorUpdate observed =
+        coordinator.observeCommittedHistory(
+            transactionHash, 7U, kRootBorshSha256, 99U);
+    LOGOS_ASSERT_TRUE(observed.accepted);
+    LOGOS_ASSERT_TRUE(observed.changed);
+    LOGOS_ASSERT_EQ(
+        static_cast<std::uint8_t>(observed.stage),
+        static_cast<std::uint8_t>(PalaceLezTransactionStage::Observed));
+    LOGOS_ASSERT_EQ(
+        coordinator.transactions().front().observedBlockHeight, 99U);
+
+    const PalaceLezCoordinatorUpdate repeated =
+        coordinator.observeCommittedHistory(
+            transactionHash, 7U, kRootBorshSha256, 100U);
+    LOGOS_ASSERT_TRUE(repeated.accepted);
+    LOGOS_ASSERT_FALSE(repeated.changed);
+    LOGOS_ASSERT_EQ(
+        coordinator.transactions().front().observedBlockHeight, 99U);
+
+    const PalaceLezCoordinatorUpdate wrongDigest =
+        coordinator.observeCommittedHistory(
+            transactionHash, 7U, std::string(64U, 'f'), 99U);
+    LOGOS_ASSERT_FALSE(wrongDigest.accepted);
+    LOGOS_ASSERT_EQ(
+        wrongDigest.reason,
+        std::string("history-observation-mismatch"));
+}
+
 LOGOS_TEST(palace_lez_coordinator_recovered_submission_is_exact_and_idempotent) {
     using namespace palace;
     using namespace palace_lez_test;

@@ -83,8 +83,10 @@ bool isNetworkId(const std::string& value)
 }
 
 bool validConfig(const DeliverySessionConfigV1& config,
-                 const AuthorityProjection& authority)
+                 const AuthorityProjection& authority,
+                 const bool allowPendingAuthority = false)
 {
+    const bool authorityPending = authority.palaceId().empty();
     return isNetworkId(config.networkId)
         && isIdentifier(config.palaceId)
         && isIdentifier(config.roomId)
@@ -97,9 +99,11 @@ bool validConfig(const DeliverySessionConfigV1& config,
         && config.maxOutboxEntries <= kMaximumOutboxEntries
         && config.maxParticipants > 0U
         && config.maxParticipants <= kMaximumParticipants
-        && authority.palaceId() == config.palaceId
-        && !authority.deliveryKeyFor(
-                config.senderUserId, config.senderKeyEpoch).empty();
+        && ((allowPendingAuthority && authorityPending)
+            || (authority.palaceId() == config.palaceId
+                && !authority.deliveryKeyFor(
+                    config.senderUserId,
+                    config.senderKeyEpoch).empty()));
 }
 
 bool parseMotion(const std::string& payload, std::int64_t& x, std::int64_t& y)
@@ -293,6 +297,11 @@ bool PalaceDeliverySession::configure(const DeliverySessionConfigV1& config)
 bool PalaceDeliverySession::hasConfiguration() const
 {
     return m_configured;
+}
+
+bool PalaceDeliverySession::configurationMatchesAuthority() const
+{
+    return m_configured && validConfig(m_config, m_authority);
 }
 
 const DeliverySessionConfigV1& PalaceDeliverySession::configuration() const
@@ -857,7 +866,7 @@ bool PalaceDeliverySession::restoreCanonicalState(const std::string& serialized)
             restoredConfig.maxTrackedSenders = static_cast<std::size_t>(tracked);
             restoredConfig.maxOutboxEntries = static_cast<std::size_t>(outbox);
             restoredConfig.maxParticipants = static_cast<std::size_t>(participants);
-            if (!validConfig(restoredConfig, m_authority))
+            if (!validConfig(restoredConfig, m_authority, true))
                 return false;
             sawConfig = true;
             continue;

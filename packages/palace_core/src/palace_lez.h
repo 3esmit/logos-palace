@@ -535,6 +535,15 @@ public:
         std::int64_t heightBefore,
         const std::string& rootAccountJson,
         std::int64_t heightAfter);
+    // Reconciles a submitted transaction against a verified local committed
+    // history stream. The caller supplies the exact root digest predicted
+    // for that ordered action; no observation is accepted from an action id
+    // or hash alone.
+    PalaceLezCoordinatorUpdate observeCommittedHistory(
+        const std::string& transactionHash,
+        std::uint64_t orderedActionId,
+        const std::string& expectedRootDataSha256Hex,
+        std::uint64_t observedBlockHeight);
     PalaceLezCoordinatorUpdate reconcileFinality(
         const std::string& transactionHash,
         const std::string& indexerTransactionsJson);

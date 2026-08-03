@@ -758,6 +758,13 @@ private:
         palace::PalaceLezStableAccountBatchV1 stableAccounts,
         std::string& reason);
     void pumpPalaceFinality();
+    // Reopen the last Palace carried by the durable Delivery session after
+    // LEZ becomes ready. This starts finalized/local history reconstruction;
+    // it never fabricates authority when the persisted session is invalid.
+    std::string resumeConfiguredPalaceAfterLezStart();
+    bool reconcileLocalCommittedHistory(
+        const palace::PalaceLezLocalCommittedHistoryResultV1& rebuilt,
+        std::string& reason);
     void acceptPalaceFinalityResponse(
         const std::string& actionId,
         const std::string& transactionHash,

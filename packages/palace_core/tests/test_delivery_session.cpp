@@ -865,6 +865,31 @@ LOGOS_TEST(delivery_session_restart_restores_sequences_outbox_not_live_presence)
     std::filesystem::remove_all(directory);
 }
 
+LOGOS_TEST(delivery_session_restart_can_wait_for_authority_before_rebinding) {
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path()
+        / "logos-palace-delivery-session-authority-rebind";
+    std::filesystem::remove_all(directory);
+
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession original(authority);
+    LOGOS_ASSERT_TRUE(original.configure(sessionConfig()));
+    palace::DeliverySessionStore store(directory.string());
+    LOGOS_ASSERT_TRUE(store.save(original));
+
+    palace::AuthorityProjection pendingAuthority;
+    palace::PalaceDeliverySession restored(pendingAuthority);
+    LOGOS_ASSERT_TRUE(store.load(restored));
+    LOGOS_ASSERT_TRUE(restored.hasConfiguration());
+    LOGOS_ASSERT_FALSE(restored.configurationMatchesAuthority());
+
+    LOGOS_ASSERT_TRUE(
+        pendingAuthority.replaceFinalized(authoritySnapshot(), 1001));
+    LOGOS_ASSERT_TRUE(restored.configurationMatchesAuthority());
+    std::filesystem::remove_all(directory);
+}
+
 LOGOS_TEST(delivery_session_restart_rebuilds_placeholder_and_presence_checkpoint) {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path()

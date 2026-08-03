@@ -2690,6 +2690,44 @@ PalaceLezCoordinatorUpdate PalaceLezTransactionCoordinator::observeStableRoot(
     return coordinatorChanged("observed", iterator->stage);
 }
 
+PalaceLezCoordinatorUpdate
+PalaceLezTransactionCoordinator::observeCommittedHistory(
+    const std::string& transactionHash,
+    const std::uint64_t orderedActionId,
+    const std::string& expectedRootDataSha256Hex,
+    const std::uint64_t observedBlockHeight)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_)
+        return coordinatorError("coordinator-interrupted");
+    if (!isLowerHex(transactionHash, 64U)
+        || !isLowerHex(expectedRootDataSha256Hex, 64U)) {
+        return coordinatorError("invalid-history-observation");
+    }
+    auto iterator = std::find_if(
+        transactions_.begin(),
+        transactions_.end(),
+        [&](const PalaceLezTrackedTransaction& transaction) {
+            return transaction.transactionHash == transactionHash;
+        });
+    if (iterator == transactions_.end())
+        return coordinatorError("unknown-transaction");
+    if (iterator->orderedActionId != orderedActionId
+        || iterator->expectedRootDataSha256Hex
+            != expectedRootDataSha256Hex) {
+        return coordinatorError(
+            "history-observation-mismatch", iterator->stage);
+    }
+    if (iterator->stage == PalaceLezTransactionStage::Finalized
+        || iterator->stage == PalaceLezTransactionStage::Observed) {
+        return coordinatorNoChange(
+            "history-observation-already-applied", iterator->stage);
+    }
+    iterator->stage = PalaceLezTransactionStage::Observed;
+    iterator->observedBlockHeight = observedBlockHeight;
+    return coordinatorChanged("history-observed", iterator->stage);
+}
+
 PalaceLezCoordinatorUpdate PalaceLezTransactionCoordinator::reconcileFinality(
     const std::string& transactionHash,
     const std::string& indexerTransactionsJson)

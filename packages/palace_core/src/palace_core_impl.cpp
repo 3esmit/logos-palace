@@ -3364,6 +3364,7 @@ std::string PalaceCoreImpl::startLez(const std::string& password)
         std::string syncReason;
         if (!syncLezWalletToCurrent(syncReason))
             return "rejected=lez-sync;reason=" + syncReason;
+        static_cast<void>(resumeConfiguredPalaceAfterLezStart());
         return "ok;" + lezStatus();
     }
 
@@ -3441,7 +3442,133 @@ std::string PalaceCoreImpl::startLez(const std::string& password)
         return "rejected=lez-coordinator-save";
     }
     m_lezReady = true;
+    static_cast<void>(resumeConfiguredPalaceAfterLezStart());
     return "ok;" + lezStatus();
+}
+
+std::string PalaceCoreImpl::resumeConfiguredPalaceAfterLezStart()
+{
+    if (!m_lezReady || !m_lezCoordinator.running())
+        return "rejected=lez-not-ready";
+    if (m_lezOpenHistory.has_value())
+        return "ok;palace-resume=already-open";
+
+    std::string palaceId;
+    {
+        std::lock_guard<std::mutex> lock(m_deliveryMutex);
+        if (!m_deliverySession
+            || !m_deliverySession->hasConfiguration()) {
+            return "ok;palace-resume=not-configured";
+        }
+        palaceId = m_deliverySession->configuration().palaceId;
+    }
+
+    const std::string palaceUri = "palace://" + palaceId;
+    if (!palaceIdFromUri(palaceUri).has_value())
+        return "rejected=palace-resume-invalid-session";
+
+    // The session is durable evidence of the user's last Palace choice, not
+    // authority. openPalace performs the normal LEZ history and account
+    // validation before setting the authority projection.
+    const std::string reopened = openPalace(palaceUri);
+    if (reopened.rfind("rejected=", 0U) == 0U)
+        return "rejected=palace-resume;reason=" + reopened.substr(9U);
+    return "ok;palace-resume=started";
+}
+
+bool PalaceCoreImpl::reconcileLocalCommittedHistory(
+    const palace::PalaceLezLocalCommittedHistoryResultV1& rebuilt,
+    std::string& reason)
+{
+    reason.clear();
+    if (!m_lezCoordinator.running()
+        || rebuilt.actions.empty()
+        || rebuilt.latestLocalCommittedBlockHashHex.empty()) {
+        reason = "local-history-reconciliation-input";
+        return false;
+    }
+
+    std::optional<palace::PalaceLezRootRecordV3> root;
+    palace::ActionJournal candidateJournal = m_actionJournal;
+    bool journalChanged = false;
+    bool coordinatorChanged = false;
+    for (const palace::PalaceLezLocalCommittedActionV1& action
+         : rebuilt.actions) {
+        if (action.accountIdsHex.size() < 2U) {
+            reason = "local-history-reconciliation-accounts";
+            return false;
+        }
+        const palace::PalaceLezExpectedRootV3 expected =
+            root.has_value()
+            ? palace::PalaceLezCodec::expectedAdvancedRoot(
+                  *root, action.instruction)
+            : palace::PalaceLezCodec::expectedInitialRoot(
+                  action.accountIdsHex[1], action.instruction);
+        if (!expected.accepted) {
+            reason = "local-history-reconciliation-root-"
+                + expected.reason;
+            return false;
+        }
+        root = expected.record;
+
+        const std::vector<palace::PalaceLezTrackedTransaction> tracked =
+            m_lezCoordinator.transactions();
+        const auto trackedMatch = std::find_if(
+            tracked.begin(), tracked.end(),
+            [&action](const palace::PalaceLezTrackedTransaction& value) {
+                return value.transactionHash == action.transactionHash;
+            });
+        if (trackedMatch == tracked.end())
+            continue;
+
+        const palace::PalaceLezCoordinatorUpdate observed =
+            m_lezCoordinator.observeCommittedHistory(
+                action.transactionHash,
+                action.orderedActionId,
+                expected.dataSha256Hex,
+                rebuilt.latestLocalCommittedBlockId);
+        if (!observed.accepted) {
+            reason = "local-history-reconciliation-coordinator-"
+                + observed.reason;
+            return false;
+        }
+        coordinatorChanged = coordinatorChanged || observed.changed;
+
+        const std::string actionId =
+            std::to_string(action.orderedActionId);
+        const palace::ActionStatus status =
+            candidateJournal.status(actionId);
+        if (status.durableStage
+                == palace::DurableActionStage::SubmittedToLez
+            && status.transactionHash == action.transactionHash) {
+            if (!candidateJournal.markObserved(actionId)) {
+                reason = "local-history-reconciliation-journal-stage";
+                return false;
+            }
+            journalChanged = true;
+        }
+    }
+
+    if (coordinatorChanged) {
+        if (!m_lezCoordinatorStore
+            || m_lezCoordinatorStore->save(m_lezCoordinator)
+                != palace::PalaceLezCoordinatorStoreStatus::Saved) {
+            m_lezCoordinatorStoreHealthy = false;
+            reason = "local-history-reconciliation-coordinator-save";
+            return false;
+        }
+        m_lezCoordinatorStoreHealthy = true;
+    }
+    if (journalChanged) {
+        if (!m_actionJournalStore
+            || !m_actionJournalStore->save(candidateJournal)) {
+            reason = "local-history-reconciliation-journal-save";
+            return false;
+        }
+        m_actionJournal = std::move(candidateJournal);
+    }
+    reason = "local-history-reconciliation-complete";
+    return true;
 }
 
 std::string PalaceCoreImpl::lezStatus() const
@@ -6277,13 +6404,35 @@ std::string PalaceCoreImpl::fetchMvpStorageBundle(
         || !m_storageCatalog.hasConfiguration()) {
         return "rejected=storage-not-running";
     }
-    if (m_storageMvpMode != "idle")
-        return "rejected=storage-bundle-mode-" + m_storageMvpMode;
     const auto catalog = decodeBase64Url(
         catalogBase64, 16U * 1024U);
-    if (!catalog.has_value()
-        || !m_storageMvpBundle.restoreCanonicalCatalog(
-            *catalog)) {
+    if (!catalog.has_value()) {
+        return "rejected=storage-catalog-invalid";
+    }
+
+    // Reconnect can restore a sealed catalog and start its fetch pipeline as
+    // soon as Storage is attached. A user may still submit the same catalog
+    // from the join form after that automatic recovery begins. Treat that
+    // exact replay as idempotent; never tear down an in-flight verified
+    // bundle, and continue rejecting a different catalog in a non-idle mode.
+    if (m_storageMvpMode != "idle") {
+        const std::string currentCatalog =
+            m_storageMvpBundle.canonicalCatalog();
+        const bool sameCatalog = !currentCatalog.empty()
+            && currentCatalog == *catalog;
+        const bool resumable = m_storageMvpMode == "catalog-restored"
+            || m_storageMvpMode == "fetching"
+            || m_storageMvpMode == "verified"
+            || m_storageMvpMode == "retained";
+        if (sameCatalog && resumable) {
+            if (m_storageMvpMode == "catalog-restored")
+                startRestoredStorageMvpFetchIfReady();
+            return "ok;" + mvpStorageBundleStatus();
+        }
+        return "rejected=storage-bundle-mode-" + m_storageMvpMode;
+    }
+
+    if (!m_storageMvpBundle.restoreCanonicalCatalog(*catalog)) {
         return "rejected=storage-catalog-invalid";
     }
     clearStorageMvpRuntimeState();
@@ -8890,6 +9039,8 @@ bool PalaceCoreImpl::completePalaceHistoryRebuild(
             reason = "local-committed-palace-uri-mismatch";
             return false;
         }
+        if (!reconcileLocalCommittedHistory(*rebuilt, reason))
+            return false;
         std::vector<std::string> accountResponses;
         std::string readReason;
         if (!readLocalCommittedLezAccountIds(
@@ -8935,6 +9086,12 @@ bool PalaceCoreImpl::completePalaceHistoryRebuild(
         m_deliveryAuthority = std::move(candidateAuthority);
         m_lezAuthorityMaterialization = std::move(candidateMaterialization);
         m_lezAuthorityReady = true;
+        if (m_deliverySession
+            && m_deliverySession->hasConfiguration()
+            && !m_deliverySession->configurationMatchesAuthority()) {
+            reason = "local-committed-delivery-session-authority-mismatch";
+            return false;
+        }
 
         if (liveStorageGraph) {
             const ActiveGate3Content linked =
@@ -9098,6 +9255,12 @@ bool PalaceCoreImpl::completePalaceHistoryRebuild(
     m_lezAuthorityBundle = std::move(candidateBundle);
     m_lezAuthorityMaterialization = std::move(candidateMaterialization);
     m_lezAuthorityReady = true;
+    if (m_deliverySession
+        && m_deliverySession->hasConfiguration()
+        && !m_deliverySession->configurationMatchesAuthority()) {
+        reason = "finalized-delivery-session-authority-mismatch";
+        return false;
+    }
     persistStorageMvpCatalogIfFinalized();
     refreshDeliveryAllowedProps();
     m_lezAuthorityState = "rebuilt-"
@@ -9229,6 +9392,12 @@ bool PalaceCoreImpl::persistFinalizedAuthorityState(
     m_lezAuthorityBundle = std::move(candidateBundle);
     m_lezAuthorityMaterialization = std::move(candidateMaterialization);
     m_lezAuthorityReady = true;
+    if (m_deliverySession
+        && m_deliverySession->hasConfiguration()
+        && !m_deliverySession->configurationMatchesAuthority()) {
+        reason = "finalized-delivery-session-authority-mismatch";
+        return false;
+    }
     persistStorageMvpCatalogIfFinalized();
     refreshDeliveryAllowedProps();
     m_lezAuthorityState =
