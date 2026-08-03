@@ -37,6 +37,9 @@ Item {
     readonly property string moderationCapabilityState: backend
         ? backend.moderationCapabilityState
         : "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason=core-unavailable;checkpoint="
+    readonly property string roomLockState: backend
+        ? backend.roomLockState
+        : "room=;title=;locked=0;can_set_room_lock=0"
     readonly property string spotState: backend
         ? backend.spotState
         : "vm=idle;action=;navigation=0;reason=not-started"
@@ -215,6 +218,22 @@ Item {
                 === "local-committed")
         && encodedStatusValue(moderationCapabilityState, "can_ban_prop")
             === "1"
+    readonly property bool canSetRoomLock: ready
+        && (encodedStatusValue(moderationCapabilityState, "authority")
+                === "finalized"
+            || encodedStatusValue(moderationCapabilityState, "authority")
+                === "local-committed")
+        && encodedStatusValue(moderationCapabilityState, "can_set_room_lock")
+            === "1"
+    readonly property bool canDelegateModerator: ready
+        && (encodedStatusValue(moderationCapabilityState, "authority")
+                === "finalized"
+            || encodedStatusValue(moderationCapabilityState, "authority")
+                === "local-committed")
+        && encodedStatusValue(moderationCapabilityState,
+                              "can_delegate_moderator") === "1"
+    readonly property bool roomLocked:
+        encodedStatusValue(roomLockState, "locked") === "1"
     readonly property int connectedPeerCount:
         parseConnectedPeerCount(deliveryNodeEvidence)
     property bool ready: false
@@ -592,6 +611,12 @@ Item {
             backend.registerPalaceUser(),
             updateExistingPalaceRegistration,
             function (receipt) {
+                if (retryableCreatorActionRejection(receipt)) {
+                    onboardingPhase = "confirming-palace-identity"
+                    onboardingError = ""
+                    onboardingJoinRegistrationPolling = true
+                    return
+                }
                 onboardingFail("palace-identity", receipt)
             })
     }
@@ -895,6 +920,8 @@ Item {
         var status = String(receipt)
         return /^rejected=lez-stable-account-read;reason=(sync-[^;]+|height-before|height-after|wallet-height-raced|account-[0-9]+)$/.test(status)
             || /^rejected=lez-observation;reason=(transaction-not-materialized|invalid-account-response|invalid-account-field|invalid-account-data|invalid-record|unexpected-observation-record|observation-mismatch|unstable-height)$/.test(status)
+            || status === "rejected=lez-root-transaction-pending"
+            || status === "rejected=lez-authority-history-rebuild-required"
     }
 
     function retryableCreatedPalaceOpenState(receipt) {
@@ -2368,6 +2395,20 @@ Item {
         return watchAction(backend.banProp(String(propId)), null)
     }
 
+    function delegateModerator(subjectUserIdHex) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.delegateModerator(String(subjectUserIdHex)), null)
+    }
+
+    function setRoomLocked(roomId, locked) {
+        if (!ready || !backend)
+            return rejectedNotReady()
+        return watchAction(
+            backend.setRoomLocked(String(roomId), Boolean(locked)), null)
+    }
+
     function gate4RefreshModeration() {
         if (!ready || !backend)
             return rejectedNotReady()
@@ -3571,7 +3612,7 @@ Item {
             anchors.topMargin: 42
             width: 176
             height: Math.min(
-                272, 154
+                380, 300
                 + (root.availablePropId.length > 0 ? 28 : 0)
                 + Math.min(root.participants.length, 32) * 2)
             radius: 2
@@ -3705,6 +3746,24 @@ Item {
                             ToolTip.text: "Ban selected user"
                             onClicked: root.gate4BanUser(subjectUserId)
                         }
+
+                        Button {
+                            objectName: "palaceDelegateModeratorButton"
+                            property string subjectUserId:
+                                root.selectedModerationUserId
+                            width: parent.width
+                            height: 22
+                            text: "Make moderator"
+                            font.pixelSize: 9
+                            visible: root.canDelegateModerator
+                            enabled: root.canDelegateModerator
+                                && subjectUserId.length === 64
+                                && root.selectedModerationUser() !== null
+                            Accessible.name: text
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Grant moderation and room-lock capability"
+                            onClicked: root.delegateModerator(subjectUserId)
+                        }
                     }
                 }
 
@@ -3719,6 +3778,19 @@ Item {
                     enabled: root.canBanProp
                     onClicked: root.gate4BanProp(
                         root.availablePropId)
+                }
+
+                Button {
+                    objectName: "palaceRoomLockButton"
+                    width: 148
+                    height: 24
+                    text: root.roomLocked ? "Unlock " + root.roomTitle
+                                           : "Lock " + root.roomTitle
+                    font.pixelSize: 9
+                    visible: root.canSetRoomLock
+                    enabled: root.canSetRoomLock
+                    onClicked: root.setRoomLocked(
+                        root.roomTitle, !root.roomLocked)
                 }
 
                 Text {

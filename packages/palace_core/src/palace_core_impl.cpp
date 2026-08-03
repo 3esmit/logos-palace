@@ -41,6 +41,10 @@ namespace {
 
 constexpr std::uint32_t kModerateUserCapability = 1U << 0U;
 constexpr std::uint32_t kModerateAssetCapability = 1U << 1U;
+constexpr std::uint32_t kSetRoomLockCapability = 1U << 2U;
+constexpr std::uint32_t kModeratorCapabilities =
+    kModerateUserCapability | kModerateAssetCapability
+    | kSetRoomLockCapability;
 constexpr std::uint8_t kLocalCommittedHistoryRetryLimit = 8U;
 
 std::string result(bool changed, const palace::ActionStatus& status)
@@ -4014,8 +4018,95 @@ std::string PalaceCoreImpl::registerPalaceUser()
         return "rejected=palace-identity-key-invalid";
     }
 
+    std::string registrationSyncReason;
+    if (!syncLezWalletToCurrent(registrationSyncReason)
+        || m_lezSyncedHeight < 0) {
+        return "rejected=palace-identity-sync;reason="
+            + registrationSyncReason;
+    }
+    logos::CallError rootError;
+    const std::string rootResponse =
+        modules().lez_core.get_account_public(
+            m_lezAuthorityMaterialization.rootAccountIdHex,
+            &rootError);
+    if (!rootError.ok() || rootResponse.empty())
+        return "rejected=palace-identity-root-read";
+    const palace::PalaceLezPublicAccountV3 currentRoot =
+        palace::PalaceLezCodec::decodePublicAccount(
+            rootResponse,
+            m_lezAuthorityMaterialization.programIdHex);
+    const auto* rootRecord = currentRoot.accepted
+        ? std::get_if<palace::PalaceLezRootRecordV3>(
+              &currentRoot.record)
+        : nullptr;
+    if (rootRecord == nullptr)
+        return "rejected=palace-identity-root;reason="
+            + currentRoot.reason;
+    if (rootRecord->lastOrderedActionId
+        == std::numeric_limits<std::uint64_t>::max()) {
+        return "rejected=palace-identity-action-id-exhausted";
+    }
+    if (m_lezSubmissionIntent.has_value()
+        && m_lezSubmissionIntent->phase
+            != palace::PalaceLezSubmissionIntentPhase::Rejected) {
+        std::uint64_t pendingActionId = 0U;
+        if (palace::PalaceLezCodec::parseOrderedActionId(
+                m_lezSubmissionIntent->actionId, pendingActionId)
+            && pendingActionId == rootRecord->lastOrderedActionId
+            && currentRoot.dataSha256Hex
+                == m_lezSubmissionIntent->expectedRootDataSha256Hex) {
+            const palace::ActionStatus pendingStatus =
+                m_actionJournal.status(m_lezSubmissionIntent->actionId);
+            if (pendingStatus.durableStage
+                    == palace::DurableActionStage::SubmittedToLez
+                || pendingStatus.durableStage
+                    == palace::DurableActionStage::Observed
+                || pendingStatus.durableStage
+                    == palace::DurableActionStage::Finalized) {
+                return "ok;registration=pending;action="
+                    + m_lezSubmissionIntent->actionId + ";"
+                    + actionStatus(m_lezSubmissionIntent->actionId);
+            }
+        }
+        if (palace::PalaceLezCodec::parseOrderedActionId(
+                m_lezSubmissionIntent->actionId, pendingActionId)
+            && pendingActionId <= rootRecord->lastOrderedActionId
+            && (pendingActionId < rootRecord->lastOrderedActionId
+                || currentRoot.dataSha256Hex
+                    != m_lezSubmissionIntent->expectedRootDataSha256Hex)) {
+            palace::ActionJournal rejectedJournal = m_actionJournal;
+            const palace::ActionStatus pendingStatus =
+                m_actionJournal.status(m_lezSubmissionIntent->actionId);
+            const bool alreadyTerminal =
+                pendingStatus.durableStage
+                    == palace::DurableActionStage::Rejected
+                || pendingStatus.durableStage
+                    == palace::DurableActionStage::Expired
+                || pendingStatus.durableStage
+                    == palace::DurableActionStage::Orphaned;
+            if ((!alreadyTerminal
+                    && !rejectedJournal.markRejected(
+                        m_lezSubmissionIntent->actionId))
+                || !m_actionJournalStore
+                || (!alreadyTerminal
+                    && !m_actionJournalStore->save(rejectedJournal))) {
+                return "rejected=palace-identity-stale-action";
+            }
+            m_actionJournal = std::move(rejectedJournal);
+            palace::PalaceLezSubmissionIntentV1 rejected =
+                *m_lezSubmissionIntent;
+            rejected.phase =
+                palace::PalaceLezSubmissionIntentPhase::Rejected;
+            if (!m_lezSubmissionIntentStore
+                || m_lezSubmissionIntentStore->save(rejected)
+                    != palace::PalaceLezSubmissionIntentStoreStatus::Saved) {
+                return "rejected=palace-identity-stale-intent";
+            }
+            m_lezSubmissionIntent = std::move(rejected);
+        }
+    }
     const std::uint64_t orderedActionId =
-        m_lezAuthorityMaterialization.lastOrderedActionId + 1U;
+        rootRecord->lastOrderedActionId + 1U;
     const std::string actionId = std::to_string(orderedActionId);
     const palace::PalaceLezRegisterUserV3 registration{
         orderedActionId,
@@ -6421,6 +6512,148 @@ std::string PalaceCoreImpl::banProp(const std::string& propId)
         propId);
 }
 
+std::string PalaceCoreImpl::delegateModerator(
+    const std::string& subjectUserIdHex)
+{
+    const HumanModerationContext context =
+        currentHumanModerationContext();
+    if (!context.accepted)
+        return "rejected=moderator-" + context.reason;
+    if (!isNonzeroLowerHexAccountId(subjectUserIdHex))
+        return "rejected=moderator-user-invalid";
+
+    palace::PalaceLezRootRecordV3 root;
+    std::string rootReason;
+    if (!currentAuthorityAssetAuthoringRoot(root, rootReason))
+        return "rejected=moderator-" + rootReason;
+    const std::string ownerId =
+        palace::PalaceLezCodec::bytes32Hex(root.owner);
+    if (context.callerAccountIdHex != ownerId)
+        return "rejected=moderator-owner-required";
+    if (subjectUserIdHex == ownerId)
+        return "rejected=moderator-owner-target";
+
+    std::size_t profileMatches = 0U;
+    for (const palace::PalaceLezNamedAuthorityAccountV1& stored
+         : m_lezAuthorityMaterialization.accounts) {
+        const auto* profile =
+            std::get_if<palace::PalaceLezUserProfileRecordV3>(
+                &stored.account.record);
+        if (profile != nullptr
+            && palace::PalaceLezCodec::bytes32Hex(profile->userId)
+                == subjectUserIdHex) {
+            ++profileMatches;
+        }
+    }
+    if (profileMatches != 1U)
+        return "rejected=moderator-user-unknown";
+
+    const std::string grantIdHex = palace::crypto::sha256Hex(
+        "logos-palace-moderator-grant-v1;palace="
+        + palace::PalaceLezCodec::bytes32Hex(root.palaceId)
+        + ";subject=" + subjectUserIdHex
+        + ";action=" + context.actionId);
+    const std::string transitionJson =
+        "{\"kind\":\"grant_capability\",\"grant_id_hex\":\""
+        + grantIdHex + "\",\"subject_user_id_hex\":\""
+        + subjectUserIdHex
+        + "\",\"scope\":{\"kind\":\"palace\"},\"capabilities\":"
+        + std::to_string(kModeratorCapabilities)
+        + ",\"delegable\":false,\"valid_through_action_id\":\""
+        + std::to_string(std::numeric_limits<std::uint64_t>::max())
+        + "\"}";
+    const std::string queued = submitIntent(context.actionId);
+    if (m_actionJournal.status(context.actionId).durableStage
+        != palace::DurableActionStage::Queued) {
+        return "rejected=moderator-action-queue;" + queued
+            + ";action=" + context.actionId
+            + ";grant_id=" + grantIdHex;
+    }
+    return submitPalaceTransition(
+               context.actionId,
+               m_lezAuthorityMaterialization.rootAccountIdHex,
+               context.callerAccountIdHex,
+               m_lezAuthorityMaterialization.programIdHex,
+               transitionJson)
+        + ";operator=moderator;action=" + context.actionId
+        + ";target=" + subjectUserIdHex
+        + ";grant_id=" + grantIdHex;
+}
+
+std::string PalaceCoreImpl::setRoomLocked(
+    const std::string& roomId,
+    const bool locked)
+{
+    const HumanModerationContext context =
+        currentHumanModerationContext();
+    if (!context.accepted)
+        return "rejected=room-lock-" + context.reason;
+
+    palace::PalaceLezBytes32 rootRoomIds[2]{};
+    bool rootFound = false;
+    for (const palace::PalaceLezNamedAuthorityAccountV1& stored
+         : m_lezAuthorityMaterialization.accounts) {
+        const auto* root =
+            std::get_if<palace::PalaceLezRootRecordV3>(
+                &stored.account.record);
+        if (root != nullptr) {
+            if (rootFound)
+                return "rejected=room-lock-root-not-unique";
+            rootRoomIds[0] = root->roomIds[0];
+            rootRoomIds[1] = root->roomIds[1];
+            rootFound = true;
+        }
+    }
+    if (!rootFound)
+        return "rejected=room-lock-room-unknown";
+
+    std::string selectedRoomId;
+    if (roomId == "atrium" || roomId == "Atrium") {
+        selectedRoomId = palace::PalaceLezCodec::bytes32Hex(
+            rootRoomIds[0]);
+    } else if (roomId == "lounge" || roomId == "Lounge") {
+        selectedRoomId = palace::PalaceLezCodec::bytes32Hex(
+            rootRoomIds[1]);
+    } else {
+        palace::PalaceLezBytes32 requested{};
+        if (!palace::PalaceLezCodec::parseBytes32Hex(roomId, requested)
+            || (requested != rootRoomIds[0]
+                && requested != rootRoomIds[1])) {
+            return "rejected=room-lock-room-unknown";
+        }
+        selectedRoomId = roomId;
+    }
+
+    const HumanModerationAuthority authority =
+        humanModerationAuthority(context, kSetRoomLockCapability);
+    if (!authority.accepted)
+        return "rejected=room-lock-" + authority.reason;
+    if (authority.eligibleGrants.size() != 1U)
+        return "rejected=room-lock-grant-not-unique";
+    const std::string grantIdHex = palace::PalaceLezCodec::bytes32Hex(
+        authority.eligibleGrants.front().grantId);
+    const std::string transitionJson =
+        "{\"kind\":\"set_room_locked\",\"grant_id_hex\":\""
+        + grantIdHex + "\",\"room_id_hex\":\""
+        + selectedRoomId + "\",\"locked\":"
+        + std::string(locked ? "true" : "false") + "}";
+    const std::string queued = submitIntent(context.actionId);
+    if (m_actionJournal.status(context.actionId).durableStage
+        != palace::DurableActionStage::Queued) {
+        return "rejected=room-lock-action-queue;" + queued
+            + ";action=" + context.actionId;
+    }
+    return submitPalaceTransition(
+               context.actionId,
+               m_lezAuthorityMaterialization.rootAccountIdHex,
+               context.callerAccountIdHex,
+               m_lezAuthorityMaterialization.programIdHex,
+               transitionJson)
+        + ";operator=room-lock;action=" + context.actionId
+        + ";room=" + selectedRoomId
+        + ";locked=" + (locked ? "1" : "0");
+}
+
 std::string PalaceCoreImpl::moderationStatus() const
 {
     if (!m_lezSubmissionIntent.has_value()) {
@@ -6449,6 +6682,21 @@ std::string PalaceCoreImpl::moderationStatus() const
         target = asset->cid;
         banIdHex =
             palace::PalaceLezCodec::bytes32Hex(asset->banId);
+    } else if (const auto* grant =
+                   std::get_if<palace::PalaceLezGrantCapabilityV3>(
+                       &m_lezSubmissionIntent->plan.instruction.payload);
+               grant != nullptr) {
+        kind = "moderator";
+        target = palace::PalaceLezCodec::bytes32Hex(
+            grant->subjectUserId);
+        banIdHex = palace::PalaceLezCodec::bytes32Hex(grant->grantId);
+    } else if (const auto* lock =
+                   std::get_if<palace::PalaceLezSetRoomLockedV3>(
+                       &m_lezSubmissionIntent->plan.instruction.payload);
+               lock != nullptr) {
+        kind = "room-lock";
+        target = palace::PalaceLezCodec::bytes32Hex(lock->roomId);
+        banIdHex = lock->locked ? "1" : "0";
     } else {
         return "state=idle;kind=;action=;target=;ban_id=";
     }
@@ -6482,6 +6730,66 @@ std::string PalaceCoreImpl::moderationStatus() const
         + ";target=" + target + ";ban_id=" + banIdHex
         + ";durable="
         + palace::actionStatusName(status.durableStage);
+}
+
+std::string PalaceCoreImpl::roomLockStatus() const
+{
+    const std::string roomTitle = m_projection.currentRoomTitle();
+    std::string roomId;
+    bool locked = false;
+    for (const palace::PalaceLezNamedAuthorityAccountV1& stored
+         : m_lezAuthorityMaterialization.accounts) {
+        const auto* room =
+            std::get_if<palace::PalaceLezRoomRecordV3>(
+                &stored.account.record);
+        if (room != nullptr && room->title == roomTitle) {
+            roomId = palace::PalaceLezCodec::bytes32Hex(room->roomId);
+            locked = room->locked;
+            break;
+        }
+    }
+    if (roomId.empty()) {
+        for (const palace::PalaceLezNamedAuthorityAccountV1& stored
+             : m_lezAuthorityMaterialization.accounts) {
+            const auto* root =
+                std::get_if<palace::PalaceLezRootRecordV3>(
+                    &stored.account.record);
+            if (root == nullptr)
+                continue;
+            const palace::PalaceLezBytes32& currentRoom =
+                m_projection.currentRoomId() == "lounge"
+                ? root->roomIds[1]
+                : root->roomIds[0];
+            roomId = palace::PalaceLezCodec::bytes32Hex(currentRoom);
+            locked = m_deliveryAuthority.isRoomLocked(roomId);
+            break;
+        }
+    }
+    if (m_lezSubmissionIntent.has_value()) {
+        const palace::ActionStatus action = m_actionJournal.status(
+            m_lezSubmissionIntent->actionId);
+        const bool committed =
+            action.durableStage == palace::DurableActionStage::Observed
+            || action.durableStage == palace::DurableActionStage::Finalized;
+        if (committed) {
+            const auto* lock = std::get_if<palace::PalaceLezSetRoomLockedV3>(
+                &m_lezSubmissionIntent->plan.instruction.payload);
+            if (lock != nullptr
+                && palace::PalaceLezCodec::bytes32Hex(lock->roomId)
+                    == roomId) {
+                locked = lock->locked;
+            }
+        }
+    }
+    const HumanModerationContext context =
+        currentHumanModerationContext();
+    const bool canLock = context.accepted
+        && humanModerationAuthority(
+               context, kSetRoomLockCapability).eligibleGrants.size() == 1U;
+    return "room=" + (roomId.empty() ? roomTitle : roomId)
+        + ";title=" + roomTitle
+        + ";locked=" + (locked ? "1" : "0")
+        + ";can_set_room_lock=" + (canLock ? "1" : "0");
 }
 
 std::string PalaceCoreImpl::assetAuthoringCapabilityStatus()
@@ -6647,8 +6955,25 @@ PalaceCoreImpl::currentHumanModerationContext() const
         context.reason = "caller-invalid";
         return context;
     }
-    context.nextActionId =
-        m_lezAuthorityMaterialization.lastOrderedActionId + 1U;
+    std::uint64_t lastKnownActionId =
+        m_lezAuthorityMaterialization.lastOrderedActionId;
+    if (m_lezSubmissionIntent.has_value()
+        && m_lezSubmissionIntent->phase
+            != palace::PalaceLezSubmissionIntentPhase::Rejected) {
+        std::uint64_t submittedActionId = 0U;
+        const palace::ActionStatus submittedStatus =
+            m_actionJournal.status(m_lezSubmissionIntent->actionId);
+        if (palace::PalaceLezCodec::parseOrderedActionId(
+                m_lezSubmissionIntent->actionId, submittedActionId)
+            && submittedActionId > lastKnownActionId
+            && (submittedStatus.durableStage
+                    == palace::DurableActionStage::Observed
+                || submittedStatus.durableStage
+                    == palace::DurableActionStage::Finalized)) {
+            lastKnownActionId = submittedActionId;
+        }
+    }
+    context.nextActionId = lastKnownActionId + 1U;
     context.actionId = std::to_string(context.nextActionId);
     context.accepted = true;
     context.reason = "authorized";
@@ -6733,7 +7058,8 @@ std::string PalaceCoreImpl::moderationCapabilityStatus() const
     const HumanModerationContext context =
         currentHumanModerationContext();
     if (!context.accepted) {
-        return "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason="
+        return "authority=unavailable;can_ban_user=0;can_ban_prop=0"
+            ";can_set_room_lock=0;can_delegate_moderator=0;reason="
             + context.reason + ";checkpoint=";
     }
 
@@ -6741,11 +7067,25 @@ std::string PalaceCoreImpl::moderationCapabilityStatus() const
             context, kModerateUserCapability);
     const HumanModerationAuthority prop = humanModerationAuthority(
             context, kModerateAssetCapability);
+    const HumanModerationAuthority lock = humanModerationAuthority(
+            context, kSetRoomLockCapability);
+    const bool owner = user.root.has_value()
+        && user.root->owner == context.callerAccountId;
     if (!user.accepted || !prop.accepted) {
         const std::string reason = !user.accepted
             ? user.reason : prop.reason;
-        return "authority=unavailable;can_ban_user=0;can_ban_prop=0;reason="
+        return "authority=unavailable;can_ban_user=0;can_ban_prop=0"
+            ";can_set_room_lock=0;can_delegate_moderator="
+            + std::string(owner ? "1" : "0") + ";reason="
             + reason + ";checkpoint="
+            + std::to_string(
+                m_lezAuthorityMaterialization.lastOrderedActionId);
+    }
+    if (!lock.accepted) {
+        return "authority=unavailable;can_ban_user=0;can_ban_prop=0"
+            ";can_set_room_lock=0;can_delegate_moderator="
+            + std::string(owner ? "1" : "0") + ";reason="
+            + lock.reason + ";checkpoint="
             + std::to_string(
                 m_lezAuthorityMaterialization.lastOrderedActionId);
     }
@@ -6753,11 +7093,12 @@ std::string PalaceCoreImpl::moderationCapabilityStatus() const
         && user.eligibleGrants.size() == 1U;
     const bool canBanProp = prop.accepted
         && prop.eligibleGrants.size() == 1U;
+    const bool canSetRoomLock = lock.accepted
+        && lock.eligibleGrants.size() == 1U;
     std::string reason = "authorized";
-    if (!canBanUser && !canBanProp) {
-        reason = user.reason == prop.reason
-            ? user.reason : "capability-unavailable";
-    } else if (!canBanUser || !canBanProp) {
+    if (!canBanUser && !canBanProp && !canSetRoomLock) {
+        reason = "capability-unavailable";
+    } else if (!canBanUser || !canBanProp || !canSetRoomLock) {
         reason = "capability-partial";
     }
     return "authority="
@@ -6767,6 +7108,10 @@ std::string PalaceCoreImpl::moderationCapabilityStatus() const
         + std::string(canBanUser ? "1" : "0")
         + ";can_ban_prop="
         + std::string(canBanProp ? "1" : "0")
+        + ";can_set_room_lock="
+        + std::string(canSetRoomLock ? "1" : "0")
+        + ";can_delegate_moderator="
+        + std::string(owner ? "1" : "0")
         + ";reason=" + reason
         + ";checkpoint="
         + std::to_string(
@@ -7216,7 +7561,18 @@ std::string PalaceCoreImpl::submitPalaceInstruction(
     const bool unresolvedRootTransaction = std::any_of(
         trackedTransactions.begin(),
         trackedTransactions.end(),
-        [&plan, profile](const palace::PalaceLezTrackedTransaction& tracked) {
+        [this, &plan, profile](const palace::PalaceLezTrackedTransaction& tracked) {
+            const palace::ActionStatus trackedAction =
+                m_actionJournal.status(
+                    std::to_string(tracked.orderedActionId));
+            if (trackedAction.durableStage
+                    == palace::DurableActionStage::Rejected
+                || trackedAction.durableStage
+                    == palace::DurableActionStage::Expired
+                || trackedAction.durableStage
+                    == palace::DurableActionStage::Orphaned) {
+                return false;
+            }
             return tracked.plan.rootAccountIdHex
                     == plan.rootAccountIdHex
                 && tracked.stage
@@ -7241,13 +7597,7 @@ std::string PalaceCoreImpl::submitPalaceInstruction(
         std::uint64_t orderedActionId = 0U;
         if (!palace::PalaceLezCodec::parseOrderedActionId(
                 actionId, orderedActionId)
-            || !m_lezAuthorityReady
-            || m_lezAuthorityMaterialization.lastOrderedActionId
-                == std::numeric_limits<std::uint64_t>::max()
-            || orderedActionId
-                != m_lezAuthorityMaterialization
-                        .lastOrderedActionId
-                    + 1U) {
+            || !m_lezAuthorityReady) {
             return "rejected=lez-authority-history-rebuild-required";
         }
         std::string syncReason;
@@ -7268,6 +7618,12 @@ std::string PalaceCoreImpl::submitPalaceInstruction(
             : nullptr;
         if (root == nullptr)
             return "rejected=lez-current-root;reason=" + current.reason;
+        if (root->lastOrderedActionId
+            == std::numeric_limits<std::uint64_t>::max()
+            || orderedActionId
+                != root->lastOrderedActionId + 1U) {
+            return "rejected=lez-authority-history-rebuild-required";
+        }
         expected = palace::PalaceLezCodec::expectedAdvancedRoot(
             *root, instruction);
     }
@@ -8994,6 +9350,15 @@ std::string PalaceCoreImpl::reconcilePalaceTransition(
         if (palaceUri.empty()) {
             return "ok;completion=local-committed;"
                 + actionStatus(actionId);
+        }
+        if (m_lezOpenHistory.has_value()
+            && m_lezOpenHistory->palaceIdHex == m_deliveryAuthority.palaceId()
+            && m_lezAuthorityMaterialization.lastOrderedActionId
+                < tracked->orderedActionId) {
+            // The initial local history session may still be marked busy after
+            // its first rebuild. Reset it before reopening so the observed
+            // transition is included in the next pinned scan.
+            m_lezOpenHistory.reset();
         }
         const std::string reopened = openPalace(palaceUri);
         if (reopened.rfind("rejected=", 0U) == 0U)

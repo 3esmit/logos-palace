@@ -81,6 +81,8 @@ public:
     QString refreshIdentity() override;
     QString banUser(QString subjectUserIdHex) override;
     QString banProp(QString propId) override;
+    QString delegateModerator(QString subjectUserIdHex) override;
+    QString setRoomLocked(QString roomId, bool locked) override;
     QString refreshModeration() override;
     QString submitPalaceTransition(QString actionId,
                                    QString stateAccountIdHex,
@@ -116,6 +118,7 @@ private:
     void refreshLezState();
     void refreshPalaceState();
     void refreshModerationState();
+    void refreshRoomLockState();
     void refreshRoomProjection();
     void refreshSpotState();
     QString driveSpotAction();

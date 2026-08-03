@@ -137,6 +137,7 @@ void LogosPalaceUiBackend::onContextReady()
     refreshLezState();
     refreshPalaceState();
     refreshModerationState();
+    refreshRoomLockState();
     refreshSpotState();
 
     if (!m_deliveryPollTimer) {
@@ -149,6 +150,7 @@ void LogosPalaceUiBackend::onContextReady()
             refreshLezState();
             refreshPalaceState();
             refreshModerationState();
+            refreshRoomLockState();
             refreshSpotState();
             if (m_moderationTracking)
                 driveLocalModerationAction();
@@ -812,6 +814,48 @@ QString LogosPalaceUiBackend::banProp(QString propId)
     return receipt;
 }
 
+QString LogosPalaceUiBackend::delegateModerator(QString subjectUserIdHex)
+{
+    if (!isContextReady())
+        return rememberModerationReceipt(
+            QStringLiteral("moderator"), subjectUserIdHex,
+            unavailableReceipt());
+    if (!isLowerHex64(subjectUserIdHex))
+        return rememberModerationReceipt(
+            QStringLiteral("moderator"), subjectUserIdHex,
+            QStringLiteral("rejected=moderator-user-invalid"));
+    const QString result = modules().palace_core.delegateModerator(
+        subjectUserIdHex);
+    refreshLezState();
+    refreshModerationState();
+    const QString receipt = rememberModerationReceipt(
+        QStringLiteral("moderator"), subjectUserIdHex, result);
+    startLocalModerationTracking(receipt);
+    return receipt;
+}
+
+QString LogosPalaceUiBackend::setRoomLocked(QString roomId, bool locked)
+{
+    if (!isContextReady())
+        return rememberModerationReceipt(
+            QStringLiteral("room-lock"), roomId,
+            unavailableReceipt());
+    if (roomId.isEmpty() || roomId.size() > 128)
+        return rememberModerationReceipt(
+            QStringLiteral("room-lock"), roomId,
+            QStringLiteral("rejected=room-lock-room-invalid"));
+    const QString result = modules().palace_core.setRoomLocked(
+        roomId, locked);
+    refreshLezState();
+    refreshPalaceState();
+    refreshModerationState();
+    refreshRoomLockState();
+    const QString receipt = rememberModerationReceipt(
+        QStringLiteral("room-lock"), roomId, result);
+    startLocalModerationTracking(receipt);
+    return receipt;
+}
+
 QString LogosPalaceUiBackend::refreshModeration()
 {
     if (!isContextReady())
@@ -1050,12 +1094,48 @@ void LogosPalaceUiBackend::refreshModerationState()
     m_moderationTarget =
         statusValue(status, QStringLiteral("target"));
     const QString state = statusValue(status, QStringLiteral("state"));
+    const QString palaceStatus =
+        modules().palace_core.palaceStatus();
+    bool localAuthorityRebuildPending = false;
+    if (m_localDevelopmentProfile
+        && state == QStringLiteral("local-committed")
+        && !m_moderationActionId.isEmpty()) {
+        bool actionOk = false;
+        bool checkpointOk = false;
+        const qulonglong action =
+            m_moderationActionId.toULongLong(&actionOk);
+        const qulonglong checkpoint =
+            statusValue(palaceStatus, QStringLiteral("action"))
+                .toULongLong(&checkpointOk);
+        localAuthorityRebuildPending = actionOk && checkpointOk
+            && action > checkpoint;
+    }
     if (!m_localDevelopmentProfile || m_moderationActionId.isEmpty()
-        || isTerminalModerationState(state)) {
+        || (isTerminalModerationState(state)
+            && !localAuthorityRebuildPending)) {
         m_moderationTracking = false;
     } else if (!m_moderationDriveActive) {
         m_moderationTracking = true;
     }
+}
+
+void LogosPalaceUiBackend::refreshRoomLockState()
+{
+    if (!isContextReady())
+        return;
+    const QString status =
+        modules().palace_core.moderationCapabilityStatus();
+    const QString room = modules().palace_core.roomTitle();
+    const QString lockCapability = statusValue(
+        status, QStringLiteral("can_set_room_lock"));
+    const QString locked = statusValue(
+        modules().palace_core.roomLockStatus(),
+        QStringLiteral("locked"));
+    setRoomLockState(
+        QStringLiteral("room=") + room
+        + QStringLiteral(";locked=") + (locked.isEmpty() ? "0" : locked)
+        + QStringLiteral(";can_set_room_lock=")
+        + (lockCapability.isEmpty() ? "0" : lockCapability));
 }
 
 void LogosPalaceUiBackend::startLocalModerationTracking(
@@ -1086,7 +1166,24 @@ QString LogosPalaceUiBackend::driveLocalModerationAction()
     const QString actionId =
         statusValue(before, QStringLiteral("action"));
     const QString state = statusValue(before, QStringLiteral("state"));
-    if (actionId.isEmpty() || isTerminalModerationState(state)) {
+    const QString palaceStatus =
+        modules().palace_core.palaceStatus();
+    bool localAuthorityRebuildPending = false;
+    if (m_localDevelopmentProfile
+        && state == QStringLiteral("local-committed")
+        && !actionId.isEmpty()) {
+        bool actionOk = false;
+        bool checkpointOk = false;
+        const qulonglong action = actionId.toULongLong(&actionOk);
+        const qulonglong checkpoint =
+            statusValue(palaceStatus, QStringLiteral("action"))
+                .toULongLong(&checkpointOk);
+        localAuthorityRebuildPending = actionOk && checkpointOk
+            && action > checkpoint;
+    }
+    if (actionId.isEmpty()
+        || (isTerminalModerationState(state)
+            && !localAuthorityRebuildPending)) {
         setModerationState(before);
         m_moderationTracking = false;
         refreshPalaceState();

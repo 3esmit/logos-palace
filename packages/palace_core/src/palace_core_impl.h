@@ -509,7 +509,13 @@ public:
     // JSON inside Core. UI code supplies only the selected user or prop.
     std::string banUser(const std::string& subjectUserIdHex);
     std::string banProp(const std::string& propId);
+    // Owner-only delegation and capability-backed room lock transitions. UI
+    // supplies only a user ID, room selector, and desired lock state; Core
+    // derives the grant, authority, and schema-v3 transition.
+    std::string delegateModerator(const std::string& subjectUserIdHex);
+    std::string setRoomLocked(const std::string& roomId, bool locked);
     std::string moderationStatus() const;
+    std::string roomLockStatus() const;
     // Read-only capability state derived from the same finalized LEZ authority
     // preflight used by banUser/banProp. It never trusts QML or delivery hints.
     std::string moderationCapabilityStatus() const;
