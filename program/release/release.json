@@ -1,6 +1,7 @@
 {
   "schema": "logos.palace.release",
   "version": 2,
+  "platform": "x86_64-linux",
   "risc0BinfmtVersion": "3.0.5",
   "byteLength": 297312,
   "sha256": "69099492e8f860ab338846f33762f5fb563ffc40121779ec1e15ef0b35da7171",

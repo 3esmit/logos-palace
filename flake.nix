@@ -129,19 +129,23 @@
               output = inputs.lez_core.packages.${system}.lgx-portable;
             }
           ];
-          lgxHashChecks = pkgs.lib.concatStringsSep "\n" (map
-            (package: ''
-              expected_hash=$(jq -er --arg artifact "${package.artifact}" \
-                '.packages[] | select(.artifact == $artifact) | .sha256' \
-                "$source_manifest")
-              actual_hash=$(sha256sum "${package.output}/${package.artifact}" \
-                | cut -d' ' -f1)
-              if [ "$actual_hash" != "$expected_hash" ]; then
-                printf 'release LGX hash mismatch: %s\\n' \
-                  "${package.artifact}" >&2
-                exit 1
-              fi
-            '') lgxPackageOutputs);
+          lgxHashChecks = if system == "x86_64-linux" then
+            pkgs.lib.concatStringsSep "\n" (map
+              (package: ''
+                expected_hash=$(jq -er --arg artifact "${package.artifact}" \
+                  '.packages[] | select(.artifact == $artifact) | .sha256' \
+                  "$source_manifest")
+                actual_hash=$(sha256sum "${package.output}/${package.artifact}" \
+                  | cut -d' ' -f1)
+                if [ "$actual_hash" != "$expected_hash" ]; then
+                  printf 'release LGX hash mismatch: %s\\n' \
+                    "${package.artifact}" >&2
+                  exit 1
+                fi
+              '') lgxPackageOutputs)
+          else
+            "printf 'release LGX hashes are pinned for x86_64-linux; skipping native check on ${system}\\n'"
+          ;
           releasePreflightTests = pkgs.lib.fileset.toSource {
             root = ./tests;
             fileset = pkgs.lib.fileset.unions [
@@ -172,6 +176,7 @@
               '
                 .schema == "logos.palace.release"
                 and .version == 2
+                and .platform == "x86_64-linux"
                 and .risc0BinfmtVersion == "3.0.5"
                 and .byteLength == $size
                 and .sha256 == $sha

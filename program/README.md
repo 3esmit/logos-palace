@@ -148,7 +148,7 @@ repository.
 
 | Field | Pinned value |
 | --- | --- |
-| repository manifest | `program/release/release.json` (schema `logos.palace.release`, version 2) |
+| repository manifest | `program/release/release.json` (schema `logos.palace.release`, version 2, target `x86_64-linux`) |
 | byte length | `297312` |
 | SHA-256 | `69099492e8f860ab338846f33762f5fb563ffc40121779ec1e15ef0b35da7171` |
 | RISC Zero image / program ID | `e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61` |

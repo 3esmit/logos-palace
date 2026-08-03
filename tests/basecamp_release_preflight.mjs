@@ -246,6 +246,7 @@ export function validateReleaseManifest(
       [
         "schema",
         "version",
+        "platform",
         "risc0BinfmtVersion",
         "byteLength",
         "sha256",
@@ -259,6 +260,7 @@ export function validateReleaseManifest(
     )
     || manifest.schema !== "logos.palace.release"
     || manifest.version !== 2
+    || manifest.platform !== "x86_64-linux"
     || manifest.risc0BinfmtVersion !== "3.0.5"
     || manifest.byteLength !== release.programByteLength
     || manifest.sha256 !== release.programBytecodeSha256
