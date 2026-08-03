@@ -246,6 +246,42 @@ test("creator onboarding can resume room setup from existing LEZ identity", () =
   assert.match(mainQml, /Continue room setup/);
 });
 
+test("joining an existing Palace imports its user-shared Storage catalog before opening", () => {
+  assert.match(
+    mainQml,
+    /property string onboardingStorageCatalog:\s*""/,
+  );
+  assert.match(
+    mainQml,
+    /readonly property bool onboardingResumeReady:[\s\S]{0,420}onboardingStorageCatalog\.trim\(\)\.length > 0/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceOnboardingStorageCatalog"[\s\S]{0,520}maximumLength:\s*16384/,
+  );
+  assert.match(
+    mainQml,
+    /readonly property string sharedStorageCatalog:[\s\S]{0,160}onboardingBundleStatus/,
+  );
+  assert.match(
+    mainQml,
+    /objectName:\s*"palaceSharedStorageCatalog"[\s\S]{0,420}readOnly:\s*true/,
+  );
+  const joinStart = mainQml.indexOf("function openExistingPalace()");
+  const joinEnd = mainQml.indexOf("function enterCreatorMode()", joinStart);
+  assert.ok(joinStart >= 0 && joinEnd > joinStart);
+  const joinFlow = mainQml.slice(joinStart, joinEnd);
+  assert.match(joinFlow, /backend\.connectStorage\(\)/);
+  assert.match(joinFlow, /backend\.fetchMvpStorageBundle\(/);
+  assert.match(joinFlow, /pollRoomSetupPublication\(\)/);
+  assert.match(
+    mainQml,
+    /function updateExistingStorageCatalog\(receipt\)[\s\S]{0,700}openExistingPalaceAfterCatalog\(\)/,
+  );
+  assert.match(mainQml, /fetching-storage-catalog/);
+  assert.match(mainQml, /Shared room catalog \(required for an existing Palace\)/);
+});
+
 test("Storage attachment stays explicit and reports a stopped Control node", () => {
   assert.match(uiRep, /SLOT\(QString connectStorage\(\)\)/);
   assert.match(

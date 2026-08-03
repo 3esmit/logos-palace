@@ -240,6 +240,16 @@ compiled prop artwork.
 Verification does not mean moderation approval, permanent availability, or a
 provider-retention guarantee.
 
+### Joining an existing Palace
+
+The Palace creator can select and copy the bounded room catalog shown after
+room setup publication. A joiner enters the `palace://` address and pastes
+that catalog into the onboarding form. Palace attaches to the Storage node
+started in Logos Control, fetches and verifies every catalog object, then
+opens the LEZ history. Missing, malformed, or degraded catalog data keeps the
+room closed and reports the failure; it never substitutes compiled artwork or
+host paths.
+
 ### Full public-testnet runner
 
 `scripts/run-basecamp-mvp.sh` compiles its internal stages 0–6 into one resumable report. It

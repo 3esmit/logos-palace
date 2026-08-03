@@ -169,6 +169,8 @@ Item {
         && onboardingIdentityReady
         && (onboardingUsesExistingPalace
             || onboardingPalaceTitle.trim().length > 0)
+        && (!onboardingUsesExistingPalace
+            || onboardingStorageCatalog.trim().length > 0)
 
     readonly property var participants: parseParticipants(participantProjection)
     readonly property var authoringAssets:
@@ -184,6 +186,11 @@ Item {
             === "1"
     readonly property string roomSetupPublishReadiness:
         roomSetupPublishReadinessValue()
+    // Published creators can copy this bounded catalog into a joiner's
+    // onboarding form. It contains CIDs and metadata only; asset bytes stay in
+    // Storage and are fetched by the joining Core instance.
+    readonly property string sharedStorageCatalog:
+        encodedStatusValue(onboardingBundleStatus, "catalog")
     readonly property bool canPublishRoomSetup:
         roomSetupPublishReadiness === "ready"
     // Human moderation is an admin-only LEZ command. Never infer it from
@@ -209,6 +216,9 @@ Item {
     property string onboardingPassword: ""
     property string onboardingDisplayName: ""
     property string onboardingPalaceAddress: ""
+    // A creator shares this bounded canonical catalog with joiners. It is
+    // user-entered data, never a compiled asset manifest or path.
+    property string onboardingStorageCatalog: ""
     property string onboardingPalaceTitle: "My Palace"
     property string onboardingPhase: "details"
     property string onboardingError: ""
@@ -227,6 +237,8 @@ Item {
     readonly property bool onboardingWorking:
         onboardingPhase === "starting-lez"
         || onboardingPhase === "creating-identity"
+        || onboardingPhase === "connecting-storage"
+        || onboardingPhase === "fetching-storage-catalog"
         || onboardingPhase === "opening-palace"
         || onboardingPhase === "publishing-room-setup"
         || onboardingPhase === "checking-room-setup"
@@ -375,6 +387,8 @@ Item {
             && onboardingDisplayName.trim().length > 0
             && (onboardingUsesExistingPalace
                 || onboardingPalaceTitle.trim().length > 0)
+            && (!onboardingUsesExistingPalace
+                || onboardingStorageCatalog.trim().length > 0)
     }
 
     function clearOnboardingPassword() {
@@ -414,6 +428,18 @@ Item {
             if (result.indexOf("palace-history-busy") >= 0)
                 return "This Palace is still opening. Please wait."
             return "Could not open this Palace. Check the address and try again."
+        }
+        if (step === "storage") {
+            if (result.indexOf("storage-not-running") >= 0)
+                return "Start Storage in Logos Control, then try again."
+            return "Could not connect to Storage. Check Logos Control and try again."
+        }
+        if (step === "catalog") {
+            if (result.indexOf("storage-catalog-required") >= 0)
+                return "Paste the shared room catalog to join this Palace."
+            if (result.indexOf("storage-catalog-invalid") >= 0)
+                return "The shared room catalog is invalid or incomplete. Paste it again."
+            return "Could not fetch the room assets. Check Storage peers and try again."
         }
         if (step === "bundle") {
             if (result.indexOf("storage-not-running") >= 0)
@@ -487,12 +513,52 @@ Item {
             clearOnboardingPassword()
     }
 
-    function openExistingPalace() {
+    function openExistingPalaceAfterCatalog() {
         invokeOnboardingStep(
             "opening-palace", "palace",
             backend.openPalace(onboardingPalaceAddress.trim()),
             function (receipt) {
                 finishOnboardingOpen(receipt, "waiting-palace", "palace")
+            })
+    }
+
+    function updateExistingStorageCatalog(receipt) {
+        var status = String(receipt)
+        onboardingBundleStatus = status
+        if (status.indexOf("rejected=") === 0) {
+            onboardingFail("catalog", status)
+            return
+        }
+        var state = encodedStatusValue(status, "state")
+        if (state === "degraded") {
+            onboardingFail("catalog", status)
+            return
+        }
+        if (state === "verified" || state === "retained") {
+            onboardingBundlePolling = false
+            onboardingBundlePollPending = false
+            openExistingPalaceAfterCatalog()
+        }
+    }
+
+    function openExistingPalace() {
+        if (onboardingStorageCatalog.trim().length === 0) {
+            onboardingFail("catalog", "rejected=storage-catalog-required")
+            return
+        }
+        invokeOnboardingStep(
+            "connecting-storage", "storage",
+            backend.connectStorage(),
+            function () {
+                invokeOnboardingStep(
+                    "fetching-storage-catalog", "catalog",
+                    backend.fetchMvpStorageBundle(
+                        onboardingStorageCatalog.trim()),
+                    function (receipt) {
+                        onboardingBundleStatus = receipt
+                        onboardingBundlePolling = true
+                        pollRoomSetupPublication()
+                    })
             })
     }
 
@@ -598,10 +664,13 @@ Item {
         onboardingBundlePollPending = true
         watchAction(backend.mvpStorageBundleStatus(), function (receipt) {
             onboardingBundlePollPending = false
-            updateRoomSetupPublication(receipt)
+            if (onboardingUsesExistingPalace)
+                updateExistingStorageCatalog(receipt)
+            else
+                updateRoomSetupPublication(receipt)
         }, function (receipt) {
             onboardingBundlePollPending = false
-            onboardingFail("bundle", receipt)
+            onboardingFail(onboardingUsesExistingPalace ? "catalog" : "bundle", receipt)
         })
     }
 
@@ -830,6 +899,10 @@ Item {
             return "Starting LEZ…"
         if (onboardingPhase === "creating-identity")
             return "Creating your identity…"
+        if (onboardingPhase === "connecting-storage")
+            return "Connecting to Storage…"
+        if (onboardingPhase === "fetching-storage-catalog")
+            return "Fetching the room assets…"
         if (onboardingPhase === "opening-palace")
             return "Opening the Palace…"
         if (onboardingPhase === "authoring-rooms")
@@ -3648,6 +3721,31 @@ Item {
                 }
 
                 RowLayout {
+                    objectName: "palaceSharedStorageCatalogRow"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: root.sharedStorageCatalog.length > 0
+
+                    Text {
+                        text: "Share catalog"
+                        color: "#c9b78e"
+                        font.pixelSize: 10
+                    }
+
+                    TextField {
+                        objectName: "palaceSharedStorageCatalog"
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        maximumLength: 16384
+                        text: root.sharedStorageCatalog
+                        Accessible.name: "Shared room catalog"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Select and copy this catalog for Palace joiners."
+                    }
+                }
+
+                RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
 
@@ -4438,6 +4536,33 @@ Item {
                             root.resetOnboardingAfterEdit()
                         }
                         onAccepted: root.activateOnboarding()
+                    }
+
+                    Text {
+                        text: "Shared room catalog (required for an existing Palace)"
+                        color: "#2b2016"
+                        font.bold: true
+                        font.pixelSize: 12
+                        visible: root.onboardingUsesExistingPalace
+                    }
+
+                    TextField {
+                        id: onboardingStorageCatalogInput
+                        objectName: "palaceOnboardingStorageCatalog"
+                        Layout.fillWidth: true
+                        placeholderText: "Paste the catalog value shared by the Palace creator"
+                        maximumLength: 16384
+                        text: root.onboardingStorageCatalog
+                        visible: root.onboardingUsesExistingPalace
+                        enabled: root.ready && !root.onboardingWorking
+                            && root.onboardingPhase !== "waiting-palace"
+                            && root.onboardingPhase
+                                !== "waiting-created-palace"
+                        Accessible.name: "Shared room catalog"
+                        onTextEdited: {
+                            root.onboardingStorageCatalog = text
+                            root.resetOnboardingAfterEdit()
+                        }
                     }
 
                     Text {
