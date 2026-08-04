@@ -536,16 +536,16 @@
         "nix-bundle-lgx": "nix-bundle-lgx_32"
       },
       "locked": {
-        "lastModified": 1785317122,
-        "narHash": "sha256-Q8a5/yOByHFMoHmyU2DwIYPBpsrFhSMTtsT8LwRvDDs=",
+        "lastModified": 1785860766,
+        "narHash": "sha256-8ekls/JJO+g5qi4Tf5xwJtbctzWCA5h8Y6UT6JNRs7g=",
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
-        "rev": "10c374a7a8880e05a509db1ca18c7c525946e2fa",
+        "rev": "a23e706f7a462c0fbf9fbf853efb76296b21c0cd",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
-        "ref": "lez_core-v0.4.0-alpha.2",
+        "ref": "lez_core-v0.4.0-alpha.3",
         "repo": "logos-execution-zone-module",
         "type": "github"
       }
@@ -9017,17 +9017,17 @@
         "rust-rapidsnark": "rust-rapidsnark"
       },
       "locked": {
-        "lastModified": 1785268089,
-        "narHash": "sha256-gNTvGsRrwZ6IHOsnu4SQx/V9pe/J20CQ/FS4yGAOQ2c=",
+        "lastModified": 1785798534,
+        "narHash": "sha256-2MKCdH1xhYF5DH3d7mpBPCv6Svg6G3moHFTdFZU4Swk=",
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "e923315c020d4966807849f9db10536b628d5739",
+        "rev": "8b2a2ee80739c66368ab24ed1751b83fb532bdce",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "e923315c020d4966807849f9db10536b628d5739",
+        "rev": "8b2a2ee80739c66368ab24ed1751b83fb532bdce",
         "type": "github"
       }
     },

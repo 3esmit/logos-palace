@@ -11,7 +11,7 @@
     delivery_module.url = "github:3esmit/logos-delivery-module/delivery_module-v0.1.10";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
     storage_module.url = "github:3esmit/logos-storage-module/storage_module-v2.3.0";
-    lez_core.url = "github:3esmit/logos-execution-zone-module/lez_core-v0.4.0-alpha.2";
+    lez_core.url = "github:3esmit/logos-execution-zone-module/lez_core-v0.4.0-alpha.3";
   };
 
   outputs = inputs@{ nixpkgs, logos-module-builder, ... }:
