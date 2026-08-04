@@ -36,6 +36,8 @@ jobs:
 
       - name: Install the pinned RISC Zero toolchain
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             https://risczero.com/install | bash
