@@ -637,6 +637,11 @@ test("Gate 2 publication binds accepted traffic to persisted sequences", async (
     validator,
     /\$report\.lgxPackages[\s\S]*?\.file != "logos-palace_core-module-lib\.lgx"[\s\S]*?\$report\.productionLgxPackages[\s\S]*?\.file != "logos-palace_core-module-lib\.lgx"/,
   );
+  assert.match(
+    source,
+    /\$candidate_basecamp == \(\$reference \| basecamp\)[\s\S]*?if \$gate == "gate2" then[\s\S]*?\$candidate \| non_core_packages/,
+  );
+  assert.match(source, /def non_core_packages:/);
 });
 
 test("Gate 3 binds external admin-selected assets to Storage and pixels", async () => {

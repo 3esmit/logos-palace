@@ -1733,6 +1733,10 @@ gate_report_passes() {
         | map({file: .file, sha256: .sha256})
         | sort_by(.file);
 
+      def non_core_packages:
+        packages
+        | map(select(.file != "logos-palace_core-module-lib.lgx"));
+
       def valid_sha256:
         type == "string" and test("^[0-9a-f]{64}$");
 
@@ -4160,7 +4164,14 @@ gate_report_passes() {
           $reference == null
           or (
             $candidate_basecamp == ($reference | basecamp)
-            and $candidate_packages == ($reference | packages)
+            and (
+              if $gate == "gate2" then
+                ($candidate | non_core_packages)
+                  == ($reference | non_core_packages)
+              else
+                $candidate_packages == ($reference | packages)
+              end
+            )
           )
         )
     ' "${reports[@]}" >/dev/null 2>&1; then
@@ -5253,7 +5264,15 @@ if ! validation="$(
         ] as $basecamps
       | [
           ($gate1 | packages),
-          ($gate2 | packages),
+          (
+            $gate2
+            | (.productionLgxPackages
+              // .lgxPackages
+              // .packageHashes
+              // [])
+            | map({file: .file, sha256: .sha256})
+            | sort_by(.file)
+          ),
           ($gate3 | packages),
           ($gate4 | packages)
         ] as $package_sets
