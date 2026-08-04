@@ -1,149 +1,171 @@
 # Logos Palace
 
-Logos Palace is an experimental, room-first social space for Logos Basecamp.
-The public MVP targets one Palace with two rooms, participant-hosted assets,
-signed live room traffic, deterministic shared interactions, and finalized
-authority on Logos Execution Zone (LEZ).
+> **The Palace made cyberspace feel like a place. Logos Palace asks whether that place can finally belong to the people inside it.**
 
-This repository owns the complete Palace product. In particular,
-[`program/`](program/) contains the Palace state machine, instruction schema,
-SPEL guest, and RISC Zero image build. It is not an external repository,
-submodule, or generated input. Basecamp, Delivery, Storage, LEZ, SPEL, and the
-module builder remain pinned platform dependencies.
+Logos Palace is an experimental, room-first social space for [Logos Basecamp](https://logos.co/basecamp). It reimagines the essential experience of **The Palace** - graphical rooms, expressive avatars, props, doors, conversation, and programmable shared spaces - on the modern Logos stack.
 
-## Status
+People meet through a locally run Basecamp application. Live presence and conversation travel over Logos Delivery. Room backgrounds, props, scripts, and catalogs are published through Logos Storage. Durable identity, permissions, moderation, and shared state are handled by a Palace program on Logos Execution Zone (LEZ). Palace itself has no application-owned backend.
 
-Logos Palace is an x86_64-linux MVP pre-alpha. Current source includes:
+The current release is an **x86_64 Linux MVP pre-alpha**. It is an experiment in architecture and community software, not a production social network.
 
-- three product modules: `palace_vm`, `palace_core`, and `logos_palace_ui`;
-- deterministic VM execution with provisional and finalized receipt seams;
-- signed Delivery envelopes, replay/expiry/bounds enforcement, restart state,
-  and finalized moderation checks;
-- fail-closed room-transition recovery that durably coordinates Delivery
-  session state with the visible room projection;
-- a typed Storage catalog, verified PNG handling, publication/fetch
-  correlation, local verification, and retention evidence;
-- the repository-owned schema-v3 Palace program with 14 instruction variants
-  and a public PDA account graph;
-- a fixed LEZ testnet release fingerprint, exact-account finality
-  certificates, finalized authority projection, and secure restart stores;
-- Basecamp acceptance harnesses that run compiled packages for UI/restart,
-  three-instance Delivery, and three-instance Storage;
-- release orchestration with one immutable source snapshot, supervised
-  program/root exclusion, transient cgroup-v2 scopes, resumable active-run
-  claims, exact evidence reopening, and allowlist-only publication.
+Download [v0.1.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.1.0-pre-alpha.1/logos-palace-mvp-0.1.0-pre-alpha.1-x86_64-linux.tar.gz). The archive SHA-256 is `6b571b2b54adf21756640767a17129b21b62115758e01047753d4f41e804aebb`.
 
-The compiled local-development MVP user story now passes with three independent
-Basecamp clients: operator-selected backgrounds are published and fetched,
-ordered Delivery traffic converges, the door promotes a room transition,
-moderation rejects banned traffic, a missing Storage source fails closed with an
-explicit degraded result, and clients recover after the provider stops.
-Its report records Delivery/Storage latency, a pinned 120-frame Qt interval
-window, semantic UI↔Core payload sizes/latency, and provisional/finalized VM
-turn durations; transport wire bytes and per-turn VM peak memory remain
-explicitly unmeasured.
-The local profile deliberately makes no public-finality claim. A clean
-public-testnet release run still needs public LEZ finality, creator removal, and
-final performance/resource evidence.
+## Why this should exist
 
-### MVP pre-alpha release
+A decentralised stack is incomplete if the places where people actually meet still belong to a platform operator. Messages, files, and transactions are its bones; shared rooms, rituals, symbols, memory, and trust are the life inside them. Logos Palace exists to make the stack inhabitable - a place where a community can shape its own culture, see the rules that govern it, and be built to survive the disappearance of any company, host, or founder.
 
-Tag `v0.1.0-pre-alpha.1` is produced by
-[the release workflow](.github/workflows/release.yml). The archive is built
-from the tagged source and contains:
+**Feeds create audiences. Rooms create presence.**
 
-- all six portable LGX packages listed below;
-- the repository-built `bin/palace.bin` RISC Zero program image;
-- `bin/palace-image-id` for independently checking that image;
-- `release.json` with byte lengths, SHA-256 digests, and the RISC Zero image ID;
-- README, license, and security documentation.
+## An unfinished idea from the early internet
 
-Build the same archive locally with the pinned x86_64-linux toolchain:
+### The Palace: independent worlds ordinary people could build
 
-```sh
-PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
-  ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
+Released publicly in 1995, The Palace replaced the scrolling text channel with a visual place. People moved avatars through illustrated rooms, spoke in comic-style bubbles, created props and identities, crossed doors, and extended rooms with the IPTSCRAE scripting language.
+
+Its most important architectural choice was easy to miss: downloading The Palace gave people both a client and a server that could run on an ordinary personal computer. Independent communities could create their own worlds instead of waiting for one company to create every space for them. The result was a loose constellation of public, private, commercial, artistic, and deeply personal Palaces.
+
+The original system should not be romanticised as modern peer-to-peer software. Each Palace still depended on a conventional server, the software was proprietary, and local operators held substantial power. Its pioneering contribution was different: it distributed the ability to create and host social worlds, kept those worlds radically customisable, and treated users as world-builders rather than an audience.
+
+### Electric Communities: people first, then the network
+
+Electric Communities grew from the experience of Lucasfilm's Habitat and asked a broader question: what infrastructure would a global society in cyberspace require?
+
+Its early work anticipated ideas that remain central today:
+
+- people use networks primarily to connect with other people;
+- communities need persistent places, not only streams of messages;
+- large-scale cyberspace must be technically decentralised and open;
+- creative and entrepreneurial power must also be decentralised;
+- personal machines should be able to consume and provide services;
+- distributed cooperation needs security models suitable for strangers.
+
+Electric Communities explored these ideas through secure distributed objects, capability-based authority, optimistic computation, online economies, and peer-oriented virtual environments. Douglas Crockford later described the ambition plainly: a global social network that was both secure and decentralised.
+
+### Communities.com: the synthesis that did not arrive yet
+
+Electric Communities later acquired The Palace and OnLive Technologies and operated as **Communities.com**. The Palace's human-facing world of rooms, avatars, props, and culture then sat under the same roof as Electric Communities' work on secure distributed social infrastructure.
+
+That did **not** turn the original Palace into a peer-to-peer system, and the dot-com company did not complete the synthesis. But the combination left behind an important unfinished question:
+
+> What would happen if a social world as immediate and human as The Palace were built on infrastructure that its communities could actually own?
+
+Logos Palace is one attempt to answer it with technology that did not exist in the 1990s.
+
+## Why Palace belongs on Logos
+
+[*Farewell to Westphalia*](https://logos.co/book) argues that blockchain's deepest use is not merely finance but **decentralised-yet-cooperative human governance**. It treats communities - not only states or corporations - as meaningful political and cultural actors. Those communities may number billions, or they may be as small as a dozen friends.
+
+Palace begins with the dozen friends.
+
+A room is a small social institution. It immediately raises the questions that abstract infrastructure can hide:
+
+- Who may enter, speak, create, moderate, or remove?
+- Which events are fleeting, and which become part of shared history?
+- Who owns the place's images, scripts, and cultural artifacts?
+- What happens when a host disappears?
+- Can the community continue when its creator leaves?
+- Are its rules visible, verifiable, and open to change?
+
+That is why Logos Palace is more than a graphical chat demo. It is a concrete test of whether the Logos stack can support a living social institution.
+
+| Logos component | Human meaning inside a Palace | Technical role |
+| --- | --- | --- |
+| **Basecamp** | The participant's own front door | Runs the application and its modules locally, on hardware controlled by the user. |
+| **Delivery** | What is happening now | Carries signed, expiring presence, movement, conversation, and prop traffic. It is fast, but it is not durable authority. |
+| **Storage** | What the place is made of | Publishes and retrieves participant-authored backgrounds, props, scripts, and catalogs by content identity. |
+| **LEZ** | The Palace's durable rules and memory | Records identities, capabilities, bans, room locks, moderation, and finalised shared transitions. |
+| **Palace VM** | The room's bounded physics | Executes deterministic room behaviour without filesystem, wallet, network, or UI authority. |
+
+The [Logos manifesto](https://logos.co/manifesto) calls for a full decentralised stack spanning communication, storage, execution, and voluntary social institutions. Basecamp keeps that stack local and composable. Palace gives it a human-scale front door: not another dashboard, but somewhere people can inhabit together.
+
+## Principles
+
+- **A room is not a feed.** The product is organised around shared presence, not reach, ranking, or engagement extraction.
+- **No application-owned server.** Palace composes user-controlled Logos infrastructure rather than depending on a proprietary Palace backend.
+- **Live is not law.** Delivery makes interaction responsive; only verified LEZ evidence can change durable authority.
+- **Hosting is not ruling.** Providing Storage or network service does not itself grant a Palace capability.
+- **Culture is participant-authored.** Backgrounds and optional props are selected, verified, published, and assigned by users; they are not hidden product assets.
+- **Uncertainty must be visible.** Missing or conflicting evidence produces pending, offline, degraded, or rejected states instead of silently promoting cached data.
+- **The founder is not the community.** The design target is for finalised records and independently retained content to survive creator removal.
+- **Boundaries should not become cages.** Communities should support meaningful entry, participation, exit, and the creation of alternatives.
+
+## What using it looks like
+
+1. A creator opens Logos Control in Basecamp, starts the required Storage and LEZ nodes, then connects Palace to the running modules.
+2. The creator creates a Palace. The current MVP creates exactly two room records.
+3. An administrator chooses room backgrounds and optional props. Palace Core verifies the bytes before publication and assignment.
+4. The creator shares the `palace://` address, the canonical Storage catalog, and a peer endpoint.
+5. A participant joins. Palace verifies the catalog, retrieves the content, checks LEZ history, registers the participant, and opens Delivery.
+6. Presence, movement, speech, and props flow live through Delivery. Durable actions become authoritative only through LEZ finality for the active profile.
+7. After a restart or provider loss, Palace is designed to restore its journal and verified assets, recover authority from the exact checkpoint, and reconnect only after its evidence agrees.
+
+## Architecture at a glance
+
+```text
+                                  Palace LEZ program
+                              durable rules and history
+                                          ^
+                                          |
+Basecamp -> logos_palace_ui -> palace_core -> lez_core
+                                  |   |   |
+                                  |   |   +--> storage_module
+                                  |   +------> delivery_module
+                                  +----------> palace_vm
 ```
 
-The separate Logos Control UI remains an operator add-on and is not part of
-the six-package Palace product archive. The pre-alpha profile is local-
-development compatible and does not claim public-testnet finality.
+`palace_core` is the trust-bearing composition boundary. The UI sends semantic user intent and receives immutable projections; it does not receive wallet handles, signing keys, Storage clients, arbitrary local paths, or authority to decide finality.
 
-See [Architecture](ARCHITECTURE.md), [CHANGELOG](CHANGELOG.md),
-[Security](SECURITY.md), and [Support](SUPPORT.md).
-
-## Exact six-package Basecamp set
-
-Each MVP acceptance user directory must contain exactly these six installable
-LGX packages:
+The exact Basecamp product contains six LGX packages:
 
 | Package | Role | Source |
 | --- | --- | --- |
 | `palace_vm` | bounded deterministic room-script execution | this repository |
-| `palace_core` | authority, persistence, and protocol composition | this repository |
-| `logos_palace_ui` | Basecamp presentation and input | this repository |
-| `delivery_module` | live peer-to-peer room transport | pinned flake input |
-| `storage_module` | content-addressed object transport | pinned flake input |
-| `lez_core` | wallet and LEZ runtime bridge | pinned flake input |
+| `palace_core` | authority, persistence, orchestration, and recovery | this repository |
+| `logos_palace_ui` | Basecamp presentation and user input | this repository |
+| `delivery_module` | live peer-to-peer room transport | pinned platform dependency |
+| `storage_module` | content-addressed object transport | pinned platform dependency |
+| `lez_core` | wallet and LEZ runtime bridge | pinned platform dependency |
 
-`palace_core` has one production build path. The Storage scenario always installs that
-package and uses production identities.
+The Palace LEZ program is built separately from those packages, but its source, schema, state machine, SPEL guest, and RISC Zero image build are owned by this repository under [`program/`](program/).
 
-The local compiled MVP runner may additionally install the separately supplied
-Logos Control UI package so an operator can start and stop Storage through the
-same Basecamp session. That utility package is not part of the Palace six-
-package product set.
+For the complete trust model, transition lifecycle, verified-asset boundary, recovery rules, and release harness, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For the end-to-end product story and validation plan, read [`MVP_IMPLEMENTATION_PLAN.md`](MVP_IMPLEMENTATION_PLAN.md).
 
-## Architecture
+## Current status
 
-```text
-Basecamp
-   |
-   v
-logos_palace_ui
-   |
-   v
-palace_core ----> palace_vm
-   |  |  \
-   |  |   +----> storage_module
-   |  +--------> delivery_module
-   +-----------> lez_core ----> LEZ testnet
-   |
-   +------------> finalized explorer evidence
+**MVP pre-alpha - Linux `x86_64` - tag `v0.1.0-pre-alpha.1`**
 
-program/** --builds--> Palace RISC Zero/SPEL guest deployed on LEZ
-```
+The compiled local-development story currently passes with three independent Basecamp clients:
 
-`palace_core` owns network calls, persistence, authority projection, asset
-validation, and recovery composition. QML does not call Delivery, Storage,
-LEZ, or arbitrary filesystem paths directly. `palace_vm` has no network,
-wallet, filesystem, or UI authority.
+- administrator-selected backgrounds are published and fetched;
+- ordered Delivery traffic converges across clients;
+- a door promotes a room transition through the local sequencer cycle;
+- moderation rejects banned traffic;
+- a missing Storage source fails closed with an explicit degraded result;
+- clients recover after the original provider stops.
 
-## Prerequisites
+The project does **not** yet claim completion of the public-testnet MVP. A clean release run still needs public LEZ finality, creator removal with retained records and content, every required cold-start/rebuild path, final resource evidence, and a production security review.
 
-- Linux `x86_64`;
-- Nix with flakes enabled;
-- network access for pinned GitHub/Nix dependencies;
-- a running per-user systemd manager;
-- a unified cgroup-v2 hierarchy with writable `cgroup.kill` for the user
-  manager scopes;
-- Linux `pidfd_open` and `pidfd_send_signal` support;
-- Rust and the RISC Zero toolchain only for direct Palace program builds.
+### Privacy boundary
 
-`systemd` is used only by the official acceptance runner to create and retire
-one transient Linux process scope per end-to-end scenario. It is not linked into the Palace
-program or LGX modules, does not define any Palace protocol or schema, and is
-not required for ordinary Basecamp execution.
-
-Dependency revisions are frozen by [`flake.lock`](flake.lock). The current
-flake pins maintained forks for Basecamp, Delivery, Storage, and the LEZ
-module.
+Logos is building a private-by-default stack. **The current Logos Palace MVP is not a private-room product.** Palace authority is public LEZ state, and private rooms and private LEZ state are explicitly out of scope for this release. Do not infer confidentiality from encrypted transport or from the broader direction of the Logos stack.
 
 ## Build and test
 
-Run commands from the repository root.
+### Prerequisites
 
-Build the exact six portable LGX packages:
+- Linux `x86_64`;
+- Nix with flakes enabled;
+- network access for pinned GitHub and Nix dependencies;
+- a per-user `systemd` manager and unified cgroup v2 for the official acceptance runners;
+- Rust and the RISC Zero toolchain only when building the Palace program directly.
+
+The `systemd` and cgroup requirements apply only to the official acceptance
+runners below. Ordinary Basecamp execution and the local MVP user story do not
+require systemd-managed scopes.
+
+Dependency revisions are frozen by [`flake.lock`](flake.lock).
+
+### Build the six portable LGX packages
 
 ```sh
 nix build \
@@ -155,93 +177,33 @@ nix build \
   .#lez-core-lgx-portable
 ```
 
-Build C++ contract checks:
+### Run contract and release-seam checks
 
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
-  .#checks.x86_64-linux.palace-core-contracts
+  .#checks.x86_64-linux.palace-core-contracts \
+  .#checks.x86_64-linux.palace-acceptance-seams
 ```
 
-Run the non-live release-lock, process-scope, claim, process-ownership,
-screenshot, and public-evidence seam suite:
-
-```sh
-nix build .#checks.x86_64-linux.palace-acceptance-seams
-```
-
-Process-control changes also require the live host tests. They use the running
-per-user systemd manager and therefore do not run inside the Nix build sandbox:
-
-```sh
-palace_acceptance_tools="$(
-  nix build --no-link --print-out-paths .#acceptance-tools
-)"
-PALACE_SCOPE_LIVE_TEST=1 \
-PALACE_SYSTEMD_RUN="$palace_acceptance_tools/bin/systemd-run" \
-PALACE_SYSTEMCTL="$palace_acceptance_tools/bin/systemctl" \
-PALACE_SETSID="$palace_acceptance_tools/bin/setsid" \
-PALACE_BASH="$palace_acceptance_tools/bin/bash" \
-PALACE_NODE="$palace_acceptance_tools/bin/node" \
-PALACE_PIDFD_SIGNAL="$palace_acceptance_tools/bin/palace-pidfd-signal" \
-"$palace_acceptance_tools/bin/node" --test \
-  tests/basecamp_direct_child.test.mjs \
-  tests/basecamp_scope.integration.test.mjs
-
-palace_product_snapshot="$(
-  nix flake archive --json . |
-    "$palace_acceptance_tools/bin/jq" -r '.path'
-)"
-PALACE_STANDALONE_LIVE_TEST=1 \
-PALACE_PRODUCT_SNAPSHOT="$palace_product_snapshot" \
-PALACE_ACCEPTANCE_TOOLS="$palace_acceptance_tools" \
-"$palace_acceptance_tools/bin/node" --test \
-  tests/basecamp_standalone_scope.integration.test.mjs
-```
-
-Build and test the repository-owned Palace program:
+### Build and test the Palace program
 
 ```sh
 cargo test --manifest-path program/Cargo.toml --workspace
 cargo clippy --manifest-path program/Cargo.toml --workspace --all-targets -- -D warnings
 cargo test --manifest-path program/palace_program/methods/guest/Cargo.toml
-cargo clippy --manifest-path program/palace_program/methods/guest/Cargo.toml --all-targets -- -D warnings
 cargo build --manifest-path program/palace_program/methods/Cargo.toml --release
 ```
 
-The final command requires the RISC Zero guest toolchain. Program architecture,
-bounds, and migration notes live in [`program/README.md`](program/README.md).
+The final command requires the RISC Zero guest toolchain. Program schemas, bounds, capabilities, PDA seeds, and migration notes are documented in [`program/README.md`](program/README.md).
 
-## Compiled Basecamp acceptance
+### Run the local MVP user story
 
-The acceptance scripts build the locked source snapshot, install the exact
-package set into temporary Basecamp user directories, and write ignored
-per-run evidence under `.artifacts/`.
-
-```sh
-./scripts/run-basecamp-gate1.sh
-./scripts/run-basecamp-gate2.sh
-```
-
-| Harness | Scope |
-| --- | --- |
-| Scenario 1 | exact-six install, module loading, verified room images, local room transition, and projection restart |
-| Scenario 2 | three Palace instances, signed Delivery traffic, adversarial input, ordering/replay behavior, and restart |
-| Scenario 3 | typed Storage publication, peer fetch, local verification, creator shutdown, retained fetch, and cold-peer recovery |
-| Scenario 4 | public LEZ finality, restart/cold rebuild, moderation, creator removal, and exact screenshot/resource evidence |
-
-The first two scenarios have standalone scoped launchers. Production scenarios
-three and four are claim-bound and run only through the full runner. Read each
-generated JSON report before citing a result, and state the source snapshot
-and remaining unverified behavior.
-
-### Local compiled MVP user story
-
-Use the local runner for the stack-complete MVP loop without replaying public
-testnet history. It starts a real local sequencer, deploys the supplied Palace
-program, launches three compiled Basecamp clients, and writes a path-free
-`local-mvp-report.json` plus screenshots under the chosen artifacts directory.
-Every runtime dependency and the asset manifest are explicit inputs:
+This is the stack-complete local loop described above. It starts a real local
+sequencer, deploys the supplied Palace program, launches three compiled
+Basecamp clients, and writes a path-free report plus screenshots. Every runtime
+dependency and the user-story asset manifest are explicit inputs; no asset
+filename is compiled into the product.
 
 ```sh
 PALACE_LEZ_PROFILE=local-development \
@@ -264,132 +226,62 @@ PALACE_E2E_ASSET_MANIFEST=/path/to/asset-inputs/manifest-v1.json \
 ./scripts/run-basecamp-local-mvp.sh .artifacts/local-mvp
 ```
 
-The asset manifest selects backgrounds and optional props; no product asset
-filename is compiled into the runner.
+Keep the asset inputs outside Git. The manifest selects the backgrounds and
+optional props used by this user story.
 
-Before creating a scope, each standalone launcher attests its exact lock
-chain. It reopens the supervisor and runner parent relationship, start times,
-executables, complete argument vectors, lock-file identity, descriptor
-ownership, contention, and the matching kernel `FLOCK` row in `/proc/locks`.
-The supervisor must own the sole lock descriptor; the runner and attestor must
-own none. A second read must prove that the chain did not change during
-attestation.
-
-### Verified assets
-
-“Verified” means a PNG crossed both trust boundaries with its byte identity
-and technical constraints:
-
-1. Palace Core either binds Storage-fetched bytes to typed catalog metadata or
-   derives metadata from an administrator-selected room or prop image streamed
-   through its bounded authoring protocol. Basecamp returns an opaque per-view
-   selection request ID, then delivers a selection capability only through the
-   matching asynchronous completion; neither exposes a host path. Core checks
-   media type,
-   encoded size,
-   dimensions, SHA-256 digest, the 10 MiB encoded limit, 4096-pixel dimension
-   limits, 16 MiPixels (16,777,216 pixels), PNG structure, and a full bounded
-   decode before atomically staging the bytes inside that Core instance.
-2. Basecamp accepted only
-   `image://basecamp-verified/<lowercase-sha256>` from a declared direct Core
-   dependency, proved canonical selected-profile producer-root containment,
-   and rechecked the digest, PNG format, bounded decode, dimensions, and pixel
-   budget.
-
-Image loading receives only the opaque digest handle. The authoring surface
-also receives bounded display, review, publication, and draft-assignment
-metadata, but no host path, Storage client, or decoder authority.
-When a graph contains an administrator-authored prop, the avatar renderer
-consumes only its graph-derived metadata and verified handle; it contains no
-compiled prop artwork.
-Verification does not mean moderation approval, permanent availability, or a
-provider-retention guarantee.
-
-### Joining an existing Palace
-
-The Palace creator can select and copy the bounded room catalog shown after
-room setup publication, along with the running Storage peer endpoint. A
-joiner enters the `palace://` address and pastes both values into the
-onboarding form. Palace attaches to the Storage node started in Logos Control,
-dials the shared peer, fetches and verifies every catalog object, then opens
-the LEZ history. Missing, malformed, or degraded peer/catalog data keeps the
-room closed and reports the failure; it never substitutes compiled artwork or
-host paths.
-
-### Full public-testnet runner
-
-`scripts/run-basecamp-mvp.sh` compiles its internal stages 0–6 into one resumable report. It
-creates and registers three public testnet identities, initializes the fixed
-Palace root, and submits the documented LEZ actions. Those public testnet
-effects cannot be undone by deleting local artifacts.
-
-Run it only when the fixed Palace root is still uninitialized and no other run
-owns that program/root pair. The runner:
-
-- stores the canonical `0600` program/root lock inside the fixed,
-  owner-only `/var/tmp/logos-palace-<uid>` claim directory;
-- keeps that lock in an exact external `flock --close` supervisor so no scenario
-  or application process inherits the descriptor;
-- kills the immutable runner and release mutators if the supervisor dies;
-- after lock attestation and before release mutation, validates the prior
-  active claim and retires its exact v2 scope; a legacy claim passes only when
-  it has no bound process;
-- archives one immutable Nix source snapshot and executes every scenario from it;
-- launches every runtime scenario behind a stop-before-exec barrier in a unique
-  transient scope, releases only the exact sole stopped unit leader, and keeps
-  a parent-death guardian holding open descriptors for that scope's
-  `cgroup.kill` and `cgroup.procs`; after the scenario child exits, the guardian
-  reads membership twice and kills the complete scope if daemonized residue
-  remains before it can disarm; PASS requires the exact unit and run slice to
-  be empty and unloaded;
-- identifies each harness-owned direct child by PID plus `/proc` start time;
-  the repository-built helper opens a pidfd, rechecks that start time, and
-  uses `pidfd_send_signal` for required `SIGTERM` or `SIGKILL` delivery;
-  cleanup never sends a destructive signal to a stored numeric PID or process
-  group, and any remaining residue belongs to exact outer-scope cleanup;
-- archives interrupted scope attempts before a retry and rejects any pending
-  launch marker or nonzero/unknown command outcome during PASS reopening;
-- publishes sanitized evidence only after the compiled report and durable run
-  completion are reopened and verified;
-- stores persistent user state and reports in one owner-only run directory;
-- refuses a new production run after Storage-scenario evidence exists, except for
-  allowlisted audited pre-public-write failures with exact source and report
-  digests;
-- resumes only when given that exact run directory and source snapshot.
-
-An interruption first requests exact unit/slice cleanup. If that cleanup
-cannot be proven, the handler exits immediately with failure: it does not wait
-on a stored background PID, continue report processing, or enter an unbounded
-child wait.
+### Run compiled Basecamp end-to-end checks
 
 ```sh
-./scripts/run-basecamp-mvp.sh
+./scripts/run-basecamp-gate1.sh
+./scripts/run-basecamp-gate2.sh
 ```
 
-If interrupted, use the exact resume command printed by the runner. Do not
-copy state into a new run or rerun the Storage scenario separately. Review and sanitize the
-generated JSON, logs, account IDs, peer IDs, timing data, ten exact stage 4–6
-screenshots, and the separate Storage moderation screenshot. All eleven are
-fully decoded 1600×900 PNG files. Until the compiled report says
-`fullMvp: "passed"` with no pending stages, this command has not established
-MVP completion.
+The local and public full-stack runners require explicit runtime paths and produce persistent evidence. Read [`MVP_IMPLEMENTATION_PLAN.md`](MVP_IMPLEMENTATION_PLAN.md) and the script usage before running them. The public runner creates testnet effects that cannot be undone by deleting local artifacts.
+
+### Build the pre-alpha archive
+
+```sh
+PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
+  ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
+```
+
+The archive contains the six LGX packages, the repository-built `palace.bin`, its RISC Zero image ID, a `release.json` with byte lengths and SHA-256 digests, and copies of `README.md`, `LICENSE`, and `SECURITY.md`. Logos Control UI is an optional operator add-on and is not part of the six-package Palace archive.
 
 ## Security and limitations
 
-This is public testnet software. Palace authority is public LEZ state; current
-rooms do not provide confidentiality. Key custody, dependency forks, network
-availability, participant retention, Basecamp isolation, and the deployed
-program have not received a production security review. Cached or delivered
-data never becomes canonical authority merely because a network is
-unavailable.
+This is experimental public-testnet software.
 
-Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Current rooms do not provide confidentiality.
+- Testnet keys, dependency forks, network availability, participant retention, Basecamp isolation, and the deployed program have not received a production security audit.
+- Storage CIDs identify immutable manifests, but future availability still depends on independent retention and successful retrieval.
+- Delivered or cached data does not become canonical merely because authoritative data is temporarily unavailable.
+- Missing or conflicting evidence fails closed.
+- Public-testnet effects created by the release runner cannot be undone by deleting local artifacts.
+
+Report vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Contributions are welcome, particularly those that strengthen the room-first experience without weakening the trust boundaries: expressive identity, social presence, authoring tools, accessibility, moderation, recovery, portability, and evidence-backed integration across the Logos stack.
+
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) before submitting changes.
+
+## Historical and conceptual reading
+
+- ["Metaworlds" - Wired, June 1996](https://www.wired.com/1996/06/avatar-2/): contemporary reporting on The Palace's user-created avatars, ordinary-PC servers, scripting, and independently operated sites.
+- [*From Habitat to Global Cyberspace* - Farmer, Morningstar, and Crockford](https://web.stanford.edu/class/history34q/readings/Virtual_Worlds/FromHabitatToCyberspace.html): persistent places, many-to-many communication, openness, decentralisation, commerce, and community.
+- [Electric Communities archive - Douglas Crockford](https://www.crockford.com/ec.html): original papers and technical documents on distributed virtual communities and the E language.
+- [Communities.com intellectual-property archive](https://www.crockford.com/ec/ccip.html): the documented transition from Electric Communities to Communities.com and its acquisition of The Palace and OnLive.
+- ["It Was Twenty Years Ago Today" - Douglas Crockford](https://www.crockford.com/20js.html): a retrospective on the attempt to build a secure, decentralised global social network.
+- [*Farewell to Westphalia* - Jarrad Hope and Peter Ludlow](https://logos.co/book): decentralised-yet-cooperative governance, sovereign blockchain communities, exit, records, communication, and human values in the technology stack.
+- [Logos: A Declaration of Independence in Cyberspace](https://logos.co/manifesto): the case for a full privacy-preserving, decentralised stack supporting voluntary social institutions.
+- [Basecamp in Testnet v0.2](https://blog.logos.co/article/basecamp-v02): why the Logos stack runs locally and composes user-installed modules without a centralised application store.
+- ["Community is Infra"](https://blog.logos.co/article/radical-humility): why social trust, repair, culture, and human relationships are infrastructure rather than decoration around the code.
+
+## Independence and attribution
+
+Logos Palace is an independent experimental project inspired by The Palace and by the published work of Electric Communities. It is not affiliated with or endorsed by the former Palace, Electric Communities, Communities.com, or any current holder of related names or intellectual property. All trademarks belong to their respective owners.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
