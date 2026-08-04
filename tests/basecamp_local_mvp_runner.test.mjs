@@ -40,5 +40,5 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /PALACE_E2E_ASSET_MANIFEST/);
   assert.match(flow, /selectionPathFor/);
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR/);
-  assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|/home\//);
+  assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|\/home\//);
 });
