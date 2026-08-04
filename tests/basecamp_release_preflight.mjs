@@ -80,7 +80,7 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-lez_core-module-lib.lgx",
     type: "core",
     version: "0.4.0-alpha.2",
-    sha256: "6ac67c2864bb2cb7d2993a0498d1b45bb8de234b55f3c00c8cff6522999c9833",
+    sha256: "fd3184a5163604c0f902de6c2cd5b9fda9c3eea89ef1a16bd995bb1d0748ac0f",
     source: "3esmit/logos-execution-zone-module@a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
     dependencies: Object.freeze([]),
   }),
