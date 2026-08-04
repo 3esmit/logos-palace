@@ -48,25 +48,16 @@ build_nix_output() {
 vm_output="$(build_nix_output palace-vm-lgx-portable)"
 core_output="$(build_nix_output palace-core-lgx-portable)"
 ui_output="$(build_nix_output logos-palace-ui-lgx-portable)"
-delivery_output="$(build_nix_output delivery-module-lgx-portable)"
-storage_output="$(build_nix_output storage-module-lgx-portable)"
-lez_output="$(build_nix_output lez-core-lgx-portable)"
 
 package_names=(
   palace_vm
   palace_core
   logos_palace_ui
-  delivery_module
-  storage_module
-  lez_core
 )
 package_files=(
   "${vm_output}/logos-palace_vm-module-lib.lgx"
   "${core_output}/logos-palace_core-module-lib.lgx"
   "${ui_output}/logos-logos_palace_ui-module.lgx"
-  "${delivery_output}/logos-delivery_module-module-lib.lgx"
-  "${storage_output}/logos-storage_module-module-lib.lgx"
-  "${lez_output}/logos-lez_core-module-lib.lgx"
 )
 
 for index in "${!package_names[@]}"; do
@@ -150,7 +141,9 @@ jq -n \
         sha256: $verifierSha256
       }
     ],
-    operatorAddOn: "Logos Control UI is distributed separately and is not part of the six-package Palace product set."
+    releaseIndex: "https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json",
+    externalDependencies: ["delivery_module", "storage_module", "lez_core"],
+    operatorAddOn: "Logos Control UI is installed from the 3esmit release index and is not bundled in the Palace archive."
   }' >"${package_root}/release.json"
 
 install -m 0444 "${repo_root}/README.md" "${package_root}/README.md"

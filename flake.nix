@@ -8,10 +8,10 @@
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
     basecamp.url = "github:3esmit/logos-basecamp/98888ed952dd3c147c66aab48aeec6fe41329af3";
     basecamp.flake = false;
-    delivery_module.url = "github:3esmit/logos-delivery-module/891c43bd6176e17b0aa536ef1aa369bb47e918f4";
+    delivery_module.url = "github:3esmit/logos-delivery-module/delivery_module-v0.1.10";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
-    storage_module.url = "github:3esmit/logos-storage-module/1c75ad9d1f02f562e845a2c445421bee6ea425ad";
-    lez_core.url = "github:3esmit/logos-execution-zone-module/a302960d92468dec8ad7d65e2a9ee81ab7abf3d0";
+    storage_module.url = "github:3esmit/logos-storage-module/storage_module-v2.3.0";
+    lez_core.url = "github:3esmit/logos-execution-zone-module/lez_core-v0.4.0-alpha.2";
   };
 
   outputs = inputs@{ nixpkgs, logos-module-builder, ... }:

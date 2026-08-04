@@ -10,6 +10,8 @@ The current release is an **x86_64 Linux MVP pre-alpha**. It is an experiment in
 
 Download [v0.1.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.1.0-pre-alpha.1/logos-palace-mvp-0.1.0-pre-alpha.1-x86_64-linux.tar.gz). The archive SHA-256 is `6b571b2b54adf21756640767a17129b21b62115758e01047753d4f41e804aebb`.
 
+Before installing Palace, add the [3esmit release catalog](https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json) to the Basecamp package manager. The catalog supplies the forked Delivery, Storage, LEZ Core, and Logos Control packages required by the Palace modules.
+
 ## Why this should exist
 
 A decentralised stack is incomplete if the places where people actually meet still belong to a platform operator. Messages, files, and transactions are its bones; shared rooms, rituals, symbols, memory, and trust are the life inside them. Logos Palace exists to make the stack inhabitable - a place where a community can shape its own culture, see the rules that govern it, and be built to survive the disappearance of any company, host, or founder.
@@ -91,7 +93,7 @@ The [Logos manifesto](https://logos.co/manifesto) calls for a full decentralised
 
 ## What using it looks like
 
-1. A creator opens Logos Control in Basecamp, starts the required Storage and LEZ nodes, then connects Palace to the running modules.
+1. Install Palace and its release-index dependencies, then open Logos Control in Basecamp, start the required Storage and LEZ nodes, and connect Palace to the running modules.
 2. The creator creates a Palace. The current MVP creates exactly two room records.
 3. An administrator chooses room backgrounds and optional props. Palace Core verifies the bytes before publication and assignment.
 4. The creator shares the `palace://` address, the canonical Storage catalog, and a peer endpoint.
@@ -115,16 +117,17 @@ Basecamp -> logos_palace_ui -> palace_core -> lez_core
 
 `palace_core` is the trust-bearing composition boundary. The UI sends semantic user intent and receives immutable projections; it does not receive wallet handles, signing keys, Storage clients, arbitrary local paths, or authority to decide finality.
 
-The exact Basecamp product contains six LGX packages:
+The Palace-owned Basecamp product contains three LGX packages. Its platform
+dependencies are installed from the 3esmit release catalog:
 
 | Package | Role | Source |
 | --- | --- | --- |
 | `palace_vm` | bounded deterministic room-script execution | this repository |
 | `palace_core` | authority, persistence, orchestration, and recovery | this repository |
 | `logos_palace_ui` | Basecamp presentation and user input | this repository |
-| `delivery_module` | live peer-to-peer room transport | pinned platform dependency |
-| `storage_module` | content-addressed object transport | pinned platform dependency |
-| `lez_core` | wallet and LEZ runtime bridge | pinned platform dependency |
+| `delivery_module` | live peer-to-peer room transport | 3esmit release catalog |
+| `storage_module` | content-addressed object transport | 3esmit release catalog |
+| `lez_core` | wallet and LEZ runtime bridge | 3esmit release catalog |
 
 The Palace LEZ program is built separately from those packages, but its source, schema, state machine, SPEL guest, and RISC Zero image build are owned by this repository under [`program/`](program/).
 
@@ -165,7 +168,7 @@ require systemd-managed scopes.
 
 Dependency revisions are frozen by [`flake.lock`](flake.lock).
 
-### Build the six portable LGX packages
+### Build Palace and pinned release-index LGX packages
 
 ```sh
 nix build \
@@ -245,7 +248,7 @@ PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
   ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 ```
 
-The archive contains the six LGX packages, the repository-built `palace.bin`, its RISC Zero image ID, a `release.json` with byte lengths and SHA-256 digests, and copies of `README.md`, `LICENSE`, and `SECURITY.md`. Logos Control UI is an optional operator add-on and is not part of the six-package Palace archive.
+The archive contains the three Palace-owned LGX packages, the repository-built `palace.bin`, its RISC Zero image ID, a `release.json` with byte lengths and SHA-256 digests, and copies of `README.md`, `LICENSE`, and `SECURITY.md`. Delivery, Storage, LEZ Core, and Logos Control are installed from the 3esmit release catalog rather than bundled copies.
 
 ## Security and limitations
 

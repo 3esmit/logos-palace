@@ -515,17 +515,17 @@
         "nix-bundle-lgx": "nix-bundle-lgx"
       },
       "locked": {
-        "lastModified": 1785277227,
-        "narHash": "sha256-+SrWfAkE9WSxZXqpOXvM0BMtfuUW6a1SxcwqQZ1AQf0=",
+        "lastModified": 1785380083,
+        "narHash": "sha256-am4VgV7cA3hXOOypJscaLGiKOexkbu3jgEummZ0P1fY=",
         "owner": "3esmit",
         "repo": "logos-delivery-module",
-        "rev": "891c43bd6176e17b0aa536ef1aa369bb47e918f4",
+        "rev": "a5639b10c7e5cdfe61f0b32a120f7e0956ef3c5b",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
+        "ref": "delivery_module-v0.1.10",
         "repo": "logos-delivery-module",
-        "rev": "891c43bd6176e17b0aa536ef1aa369bb47e918f4",
         "type": "github"
       }
     },
@@ -536,17 +536,17 @@
         "nix-bundle-lgx": "nix-bundle-lgx_32"
       },
       "locked": {
-        "lastModified": 1785805428,
-        "narHash": "sha256-ptwM4S0lnAAXh681pNFP/4wa6U8TTytHveIUVeBh85E=",
+        "lastModified": 1785317122,
+        "narHash": "sha256-Q8a5/yOByHFMoHmyU2DwIYPBpsrFhSMTtsT8LwRvDDs=",
         "owner": "3esmit",
         "repo": "logos-execution-zone-module",
-        "rev": "a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
+        "rev": "10c374a7a8880e05a509db1ca18c7c525946e2fa",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
+        "ref": "lez_core-v0.4.0-alpha.2",
         "repo": "logos-execution-zone-module",
-        "rev": "a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
         "type": "github"
       }
     },
@@ -7958,17 +7958,17 @@
         "zerokit": "zerokit"
       },
       "locked": {
-        "lastModified": 1785260807,
-        "narHash": "sha256-2qEYVucb44/awjzD6lh0/VT1XJt+lOgHNDmF+m24lw0=",
+        "lastModified": 1785376694,
+        "narHash": "sha256-Gd/Cai3oa8a36sGRdnF/f2sPsIAUhzEaTjh4FDtdnWU=",
         "ref": "refs/heads/master",
-        "rev": "659aea9f1c87d32b6825fe267a3e96cb0341573a",
-        "revCount": 2426,
+        "rev": "86a682f8eaa0179f80788119aa50e916e62c2534",
+        "revCount": 2431,
         "submodules": true,
         "type": "git",
         "url": "https://github.com/3esmit/logos-delivery"
       },
       "original": {
-        "rev": "659aea9f1c87d32b6825fe267a3e96cb0341573a",
+        "rev": "86a682f8eaa0179f80788119aa50e916e62c2534",
         "submodules": true,
         "type": "git",
         "url": "https://github.com/3esmit/logos-delivery"
@@ -9017,17 +9017,17 @@
         "rust-rapidsnark": "rust-rapidsnark"
       },
       "locked": {
-        "lastModified": 1785798534,
-        "narHash": "sha256-2MKCdH1xhYF5DH3d7mpBPCv6Svg6G3moHFTdFZU4Swk=",
+        "lastModified": 1785268089,
+        "narHash": "sha256-gNTvGsRrwZ6IHOsnu4SQx/V9pe/J20CQ/FS4yGAOQ2c=",
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "8b2a2ee80739c66368ab24ed1751b83fb532bdce",
+        "rev": "e923315c020d4966807849f9db10536b628d5739",
         "type": "github"
       },
       "original": {
         "owner": "3esmit",
         "repo": "logos-execution-zone",
-        "rev": "8b2a2ee80739c66368ab24ed1751b83fb532bdce",
+        "rev": "e923315c020d4966807849f9db10536b628d5739",
         "type": "github"
       }
     },
@@ -100683,8 +100683,8 @@
       },
       "original": {
         "owner": "3esmit",
+        "ref": "storage_module-v2.3.0",
         "repo": "logos-storage-module",
-        "rev": "1c75ad9d1f02f562e845a2c445421bee6ea425ad",
         "type": "github"
       }
     },
