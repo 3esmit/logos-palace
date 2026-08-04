@@ -53,8 +53,8 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-logos_palace_ui-module.lgx",
     type: "ui_qml",
     version: "0.1.0",
-    sha256: "9aab9b7b99913aca9ab4ed297e508c8aec3f7dfff13dfdb0f0e8e7dae88e774e",
-    source: "3esmit/logos-palace@21ae9d08f4fb76e7eb011c4062e3ea143cbb28f9",
+    sha256: "ff6d65c1085a9808bbe026fcba8b2e2d9411583298f73a155a7cbb7e3ee111b8",
+    source: "3esmit/logos-palace@c4e78f7",
     dependencies: Object.freeze(["palace_core"]),
   }),
   Object.freeze({
