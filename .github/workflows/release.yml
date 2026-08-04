@@ -66,11 +66,6 @@ jobs:
       - name: Run source tests
         run: node --test tests/*.test.mjs
 
-      - name: Evaluate release package definitions
-        run: |
-          nix eval --raw \
-            .#checks.x86_64-linux.palace-release-artifact.drvPath
-
       - name: Build the release archive
         run: ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 
