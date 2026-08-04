@@ -35,8 +35,6 @@ publish_module() {
   local source_artifact="$2"
   local source_file="${package_root}/lgx/${source_artifact}"
   local manifest_file="${work_root}/${module_name}.manifest.json"
-  local asset_file="${work_root}/${module_name}.lgx"
-  local sidecar_file="${work_root}/${module_name}.sidecar.json"
 
   if [[ ! -f "${source_file}" || -L "${source_file}" ]]; then
     printf 'Palace package is not a regular file: %s\n' "${source_file}" >&2
@@ -54,6 +52,8 @@ publish_module() {
   version="$(jq -r '.version' "${manifest_file}")"
   local tag="${module_name}-v${version}"
   local asset_name="${module_name}-${version}.lgx"
+  local asset_file="${work_root}/${asset_name}"
+  local sidecar_file="${work_root}/sidecar.json"
   local released_at
   released_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -81,13 +81,13 @@ publish_module() {
     }' >"${sidecar_file}"
 
   if gh release view "${tag}" --repo "${release_repository}" >/dev/null 2>&1; then
-    gh release upload "${tag}" "${asset_file}#${asset_name}" \
-      "${sidecar_file}#sidecar.json" \
+    gh release upload "${tag}" "${asset_file}" \
+      "${sidecar_file}" \
       --repo "${release_repository}" --clobber
   else
     gh release create "${tag}" \
-      "${asset_file}#${asset_name}" \
-      "${sidecar_file}#sidecar.json" \
+      "${asset_file}" \
+      "${sidecar_file}" \
       --repo "${release_repository}" \
       --target "${release_target}" \
       --title "${module_name} v${version}" \
@@ -99,4 +99,3 @@ publish_module() {
 publish_module palace_vm logos-palace_vm-module-lib.lgx
 publish_module palace_core logos-palace_core-module-lib.lgx
 publish_module logos_palace_ui logos-logos_palace_ui-module.lgx
-
