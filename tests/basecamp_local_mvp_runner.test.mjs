@@ -30,6 +30,8 @@ test("local MVP runner requires explicit runtime and asset inputs", async () => 
   assert.match(runner, /PALACE_LEZ_PROFILE.*local-development/);
   assert.match(runner, /basecamp_local_mvp_user_flow\.mjs/);
   assert.match(runner, /timings: result\.timings/);
+  assert.match(runner, /propAssigned: Boolean\(result\.creator\?\.palace\?\.propId\)/);
+  assert.match(runner, /propBanned: Number\(result\.moderation\?\.banPropAction \?\? 0\) > 0/);
   assert.doesNotMatch(runner, /\/home\//);
   assert.doesNotMatch(runner, /PALACE_E2E_ASSET_DIR|PALACE_E2E_ASSET_INPUT_ROOT=.*default/);
 });

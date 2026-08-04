@@ -250,10 +250,12 @@ const report = {
   palaceId: result.creator?.palace?.palaceId ?? result.recovery?.palaceId ?? null,
   assetCount: (result.creator?.palace?.imported?.length ?? 0)
     + (result.creator?.palace?.propId ? 1 : 0),
+  propAssigned: Boolean(result.creator?.palace?.propId),
   orderedMessages: result.orderedMessaging?.total ?? 0,
   participants: Object.keys(result.identities ?? {}).length,
   doorFinalized: Boolean(result.door?.finalizedState),
   moderation: Boolean(result.moderation?.rawDeliveryRejected),
+  propBanned: Number(result.moderation?.banPropAction ?? 0) > 0,
   providerRestarted: result.recovery?.providerAOffline === true,
   timings: result.timings ?? null,
 };
