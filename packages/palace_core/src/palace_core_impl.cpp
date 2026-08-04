@@ -6481,17 +6481,19 @@ std::string PalaceCoreImpl::verifyMvpStorageRetention()
 
     const std::vector<palace::PalaceStorageMvpArtifactV1> artifacts =
         m_storageMvpBundle.artifacts();
-    for (const palace::PalaceStorageMvpArtifactV1& artifact
-         : artifacts) {
-        const StdLogosResult exists =
-            modules().storage_module.exists(artifact.cid);
-        if (!exists.success
-            || !exists.value.is_boolean()
-            || !exists.value.get<bool>()) {
-            m_storageMvpFailures[artifact.objectId] =
-                "local-exists-failed";
-            m_storageMvpMode = "degraded";
-            return "rejected=storage-retention-exists";
+    if (!m_storageMvpColocatedMaterialized) {
+        for (const palace::PalaceStorageMvpArtifactV1& artifact
+             : artifacts) {
+            const StdLogosResult exists =
+                modules().storage_module.exists(artifact.cid);
+            if (!exists.success
+                || !exists.value.is_boolean()
+                || !exists.value.get<bool>()) {
+                m_storageMvpFailures[artifact.objectId] =
+                    "local-exists-failed";
+                m_storageMvpMode = "degraded";
+                return "rejected=storage-retention-exists";
+            }
         }
     }
 
@@ -10247,6 +10249,21 @@ bool PalaceCoreImpl::writeStorageMvpArtifact(
     return true;
 }
 
+bool PalaceCoreImpl::writeStorageMvpRetainedObject(
+    const palace::PalaceStorageMvpArtifactV1& artifact,
+    const std::string& bytes) const
+{
+    if (bytes.size() != artifact.specification.byteLength
+        || palace::crypto::sha256Hex(bytes)
+            != artifact.specification.contentSha256) {
+        return false;
+    }
+    palace::PalaceStorageMvpArtifactV1 retained = artifact;
+    retained.bytes = bytes;
+    std::string path;
+    return writeStorageMvpArtifact(retained, path);
+}
+
 std::string PalaceCoreImpl::storageDownloadPath(
     const std::string& operationId) const
 {
@@ -10946,6 +10963,15 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
     succeeded = succeeded
         && m_storageMvpBundle.acceptFetchedBytes(
             transfer.objectId, bytes);
+    if (succeeded
+        && transfer.purpose
+            == StorageMvpTransferPurpose::NetworkFetch
+        && !writeStorageMvpRetainedObject(*artifact, bytes)) {
+        m_storageMvpFailures[transfer.objectId] =
+            "retained-object-persist";
+        m_storageMvpMode = "degraded";
+        return;
+    }
     const bool pngAsset =
         artifact->type
             == palace::PalaceStorageMvpArtifactType::
@@ -11083,6 +11109,13 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
                 "verified-background-resolution";
             m_storageMvpMode = "degraded";
             return;
+        }
+        if (transfer.purpose
+            == StorageMvpTransferPurpose::NetworkFetch) {
+            // Every network-fetched artifact now has a profile-scoped,
+            // digest-checked copy. Future retention and cold restart paths
+            // must use those local bytes rather than a blocking provider call.
+            m_storageMvpColocatedMaterialized = true;
         }
         m_storageMvpMode = "verified";
         persistStorageMvpCatalogIfFinalized();

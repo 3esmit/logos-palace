@@ -880,6 +880,9 @@ private:
     bool writeStorageMvpArtifact(
         const palace::PalaceStorageMvpArtifactV1& artifact,
         std::string& path) const;
+    bool writeStorageMvpRetainedObject(
+        const palace::PalaceStorageMvpArtifactV1& artifact,
+        const std::string& bytes) const;
     bool readStorageDownload(
         const std::string& path,
         std::uint64_t maximumBytes,
