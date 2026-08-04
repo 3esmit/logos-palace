@@ -36,7 +36,7 @@ const releasePackageBindings = Object.freeze([
     type: "core",
     version: "0.1.0",
     sha256: "5815634576998f931458d6748eb85b3bb4cf218b7238ffd5641049f3bbedc68a",
-    source: "3esmit/logos-palace@8b603d262f24f7a9eb35a97e54ba46e190eef1b0",
+    source: "3esmit/logos-palace@12d74911c73f9cd00e6a46a038d698b9209fde3d",
     dependencies: Object.freeze([]),
   }),
   Object.freeze({
@@ -44,8 +44,8 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-palace_core-module-lib.lgx",
     type: "core",
     version: "0.1.0",
-    sha256: "0dffc28c98f16665deeacde49ee31e4688f0337c0fe8b718748762bfe6fa247c",
-    source: "3esmit/logos-palace@8b603d262f24f7a9eb35a97e54ba46e190eef1b0",
+    sha256: "4801f6a0bd02e9ae2cbe7d7b6c1ef2e3db196c6f16c9e18efe4f8cae6ad6a475",
+    source: "3esmit/logos-palace@12d74911c73f9cd00e6a46a038d698b9209fde3d",
     dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
   }),
   Object.freeze({
@@ -54,7 +54,7 @@ const releasePackageBindings = Object.freeze([
     type: "ui_qml",
     version: "0.1.0",
     sha256: "d8ae6dcef4bf274033a4b10e26aced962d3da215b76ea29b3a5e8d1fea55436b",
-    source: "3esmit/logos-palace@8b603d262f24f7a9eb35a97e54ba46e190eef1b0",
+    source: "3esmit/logos-palace@12d74911c73f9cd00e6a46a038d698b9209fde3d",
     dependencies: Object.freeze(["palace_core"]),
   }),
   Object.freeze({
