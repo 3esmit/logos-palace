@@ -42,7 +42,7 @@ package_root="${stage_root}/package"
 mkdir -p -- "${package_root}/lgx" "${package_root}/bin"
 
 build_nix_output() {
-  nix build --no-link --print-out-paths "${repo_root}#$1"
+  nix build --quiet --no-link --print-out-paths "${repo_root}#$1"
 }
 
 vm_output="$(build_nix_output palace-vm-lgx-portable)"
