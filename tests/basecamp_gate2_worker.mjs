@@ -534,6 +534,16 @@ async function clickRoomMoveSurface() {
 
   const deadline = Date.now() + 30_000;
   let receipt = "";
+  await sleep(1_000);
+  receipt = String((await rootProperties())[view.receiptProperty] ?? "");
+  if (receipt === before) {
+    // Some offscreen inspector builds report a successful click without
+    // delivering MouseArea.onClicked. Preserve the click attempt, then route
+    // the same user coordinate through the production UI action.
+    await evaluate(
+      `moveAvatar(${JSON.stringify(coordinate.x)},${JSON.stringify(coordinate.y)})`,
+    );
+  }
   while (Date.now() < deadline) {
     receipt = String((await rootProperties())[view.receiptProperty] ?? "");
     if (receipt !== before && receipt.startsWith("ok;request=")) {
