@@ -212,7 +212,13 @@ class BasecampSession {
     this.inspector = null;
     this.app = null;
     if (this.child && this.child.exitCode === null) {
-      process.kill(-this.child.pid, "SIGTERM");
+      try {
+        process.kill(-this.child.pid, "SIGTERM");
+      } catch (error) {
+        // Detached Basecamp may finish during the final assertion. Treat an
+        // already-reaped process as an idempotent cleanup result.
+        if (error?.code !== "ESRCH") throw error;
+      }
       await Promise.race([
         new Promise((done) => this.child.once("exit", done)),
         sleep(20_000),

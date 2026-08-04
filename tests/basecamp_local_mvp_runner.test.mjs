@@ -48,3 +48,9 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /every 30th ordered message is awaited/);
   assert.match(flow, /measurementPolicy/);
 });
+
+test("local MVP user-flow cleanup tolerates an already-reaped Basecamp", async () => {
+  const flow = await readFile(flowPath, "utf8");
+  assert.match(flow, /process\.kill\(-this\.child\.pid, "SIGTERM"\)/);
+  assert.match(flow, /error\?\.code !== "ESRCH"/);
+});
