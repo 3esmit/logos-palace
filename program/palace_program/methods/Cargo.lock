@@ -861,9 +861,9 @@ dependencies = [
 
 [[package]]
 name = "enum-ordinalize-derive"
-version = "4.4.1"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42e528e2d34ba8a67a1a650b86beae8ef69fc5fdb638016f386b973226590432"
+checksum = "319dca4addb5733c41b75b8a522a7f8e54f178db62498b6aac99281c9c2b2cd8"
 dependencies = [
  "proc-macro2",
  "quote",
