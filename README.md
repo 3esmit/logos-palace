@@ -12,6 +12,10 @@ Download [v0.1.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/ta
 
 Before installing Palace, add the [3esmit release catalog](https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json) to the Basecamp package manager. The catalog supplies the forked Delivery, Storage, LEZ Core, and Logos Control packages required by the Palace modules.
 
+For a package-manager install, select `logos_palace_ui`; its catalog entry pulls
+`palace_core`, `palace_vm`, and the platform dependencies. The downloadable
+archive remains available for the Linux x86_64 pre-alpha flow below.
+
 ## Why this should exist
 
 A decentralised stack is incomplete if the places where people actually meet still belong to a platform operator. Messages, files, and transactions are its bones; shared rooms, rituals, symbols, memory, and trust are the life inside them. Logos Palace exists to make the stack inhabitable - a place where a community can shape its own culture, see the rules that govern it, and be built to survive the disappearance of any company, host, or founder.
