@@ -45,7 +45,7 @@ const releasePackageBindings = Object.freeze([
     type: "core",
     version: "0.1.0",
     sha256: "d7934743e29c40f4fefbeee4ccbc20cf13c5003a4cd915be3426980ab109812f",
-    source: "3esmit/logos-palace@21ae9d08f4fb76e7eb011c4062e3ea143cbb28f9",
+    source: "3esmit/logos-palace@a106f3edcf5ffc3b5e191a6570534211d5061e46",
     dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
   }),
   Object.freeze({
