@@ -33,20 +33,23 @@ const creatorDir = resolve(creatorDirArgument);
 const bobDir = resolve(bobDirArgument);
 const carolDir = resolve(carolDirArgument);
 const evidenceDir = resolve(evidenceDirArgument);
-const roomBackgrounds = ["atrium", "lounge"].map((roomId) => {
-  const fixture = assetInputs.fixtures.find(
-    (candidate) => candidate.role === "room-background"
-      && candidate.assignment?.roomId === roomId,
-  );
-  if (!fixture) throw new Error(`asset manifest lacks ${roomId} background`);
-  return {
-    roomId,
-    label: fixture.title,
-    file: assetInputs.selectionPathFor(fixture.assetId),
-    assetId: fixture.assetId,
-    assignment: `palaceBackgroundAssign${roomId[0].toUpperCase()}${roomId.slice(1)}-`,
-  };
-});
+const roomBackgrounds = assetInputs.fixtures
+  .filter((fixture) => fixture.role === "room-background")
+  .map((fixture) => {
+    const roomId = fixture.assignment?.roomId;
+    if (!roomId) throw new Error(`asset manifest background lacks room assignment: ${fixture.assetId}`);
+    return {
+      roomId,
+      label: fixture.title,
+      file: assetInputs.selectionPathFor(fixture.assetId),
+      assetId: fixture.assetId,
+      assignment: `palaceBackgroundAssign${roomId[0].toUpperCase()}${roomId.slice(1)}-`,
+    };
+  });
+if (!roomBackgrounds.some((asset) => asset.roomId === "atrium")
+  || !roomBackgrounds.some((asset) => asset.roomId === "lounge")) {
+  throw new Error("asset manifest lacks an Atrium or Lounge background");
+}
 const propFixture = assetInputs.fixtures.find(
   (candidate) => candidate.role === "prop-image" && candidate.assignment?.kind === "prop-image",
 );
@@ -667,6 +670,8 @@ async function createCreatorPalace(session) {
     await approveAndAssign(session, root, asset, background.assignment);
     imported.push({ ...background, label: background.label, handle: asset.handle });
   }
+  const activeBackgrounds = ["atrium", "lounge"].map((roomId) =>
+    [...imported].reverse().find((asset) => asset.roomId === roomId));
   let propId = null;
   let propAsset = null;
   if (propInput) {
@@ -704,7 +709,7 @@ async function createCreatorPalace(session) {
   }
   const background = await session.findOne("objectName", "palaceRoomBackground", "creator background");
   await session.waitForProperty(background, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
-    && String(value.source).includes(imported[0].handle), "creator Atrium background", 120_000);
+    && String(value.source).includes(activeBackgrounds.find((asset) => asset.roomId === "atrium").handle), "creator Atrium background", 120_000);
   const room = await session.screenshot("creator-palace-open.png");
   await session.clickNamed("palaceUserListToggle", "creator user list");
   await session.waitForProperty(root, (value) => value.userListOpen === true,
@@ -729,7 +734,7 @@ async function createCreatorPalace(session) {
     ? await session.waitForProperty(root, (value) =>
       String(value.availablePropId) === propId, "creator prop materialization", 180_000)
     : null;
-  return { root, onboarding, authoring, room, lockedRoom, unlockedRoom, imported, palaceId, palaceUri, catalog, peerEndpoint,
+  return { root, onboarding, authoring, room, lockedRoom, unlockedRoom, imported, activeBackgrounds, palaceId, palaceUri, catalog, peerEndpoint,
     propId, palaceState: opened.palaceState, lezState: opened.lezState,
     propState: prop?.activePropAssetState ?? null };
 }
@@ -759,7 +764,7 @@ async function joinAsIndependentUser(session, creator, displayName, password, ex
   if (String(opened.roomTitle) !== "Atrium") throw new Error(`joiner entered ${opened.roomTitle}, expected Atrium`);
   const background = await session.findOne("objectName", "palaceRoomBackground", "joiner Atrium background");
   await session.waitForProperty(background, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
-    && String(value.source).includes(creator.imported[0].handle), "joiner Atrium background", 180_000);
+    && String(value.source).includes(creator.activeBackgrounds.find((asset) => asset.roomId === "atrium").handle), "joiner Atrium background", 180_000);
   const catalogStatus = String(opened.onboardingBundleStatus || "");
   if (!/(state=verified|state=retained)/.test(catalogStatus)) {
     throw new Error(`joiner catalog was not verified/retained: ${catalogStatus}`);
@@ -777,7 +782,7 @@ async function joinAsIndependentUser(session, creator, displayName, password, ex
     }, "joiner Lounge door", 300_000);
     const loungeBackground = await session.findOne("objectName", "palaceRoomBackground", "joiner Lounge background");
     await session.waitForProperty(loungeBackground, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
-      && String(value.source).includes(creator.imported.find((asset) => asset.roomId === "lounge").handle), "joiner Lounge background", 180_000);
+      && String(value.source).includes(creator.activeBackgrounds.find((asset) => asset.roomId === "lounge").handle), "joiner Lounge background", 180_000);
     lounge = await session.screenshot("joiner-lounge-open.png");
     await session.callRoot(root, "gate1EnterRoom", ["atrium"]);
     await session.waitForProperty(root, (value) => String(value.roomTitle) === "Atrium",
