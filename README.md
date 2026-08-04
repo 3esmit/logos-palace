@@ -8,7 +8,7 @@ People meet through a locally run Basecamp application. Live presence and conver
 
 The current release is an **x86_64 Linux MVP pre-alpha**. It is an experiment in architecture and community software, not a production social network.
 
-Download [v0.1.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.1.0-pre-alpha.1/logos-palace-mvp-0.1.0-pre-alpha.1-x86_64-linux.tar.gz). The archive SHA-256 is `6b571b2b54adf21756640767a17129b21b62115758e01047753d4f41e804aebb`.
+Download [v0.1.0-pre-alpha.7](https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.7) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.1.0-pre-alpha.7/logos-palace-mvp-0.1.0-pre-alpha.7-x86_64-linux.tar.gz). The archive SHA-256 is `a9266fdfe2399bf820816800084ebc3ee153a0757bff24b2fa7f509955ec4c08`.
 
 Before installing Palace, add the [3esmit release catalog](https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json) to the Basecamp package manager. The catalog supplies the forked Delivery, Storage, LEZ Core, and Logos Control packages required by the Palace modules.
 
@@ -248,7 +248,7 @@ The local and public full-stack runners require explicit runtime paths and produ
 ### Build the pre-alpha archive
 
 ```sh
-PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
+PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.7 \
   ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 ```
 
