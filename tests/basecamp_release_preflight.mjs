@@ -44,7 +44,7 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-palace_core-module-lib.lgx",
     type: "core",
     version: "0.1.0",
-    sha256: "2f67f30a5dd31b12f98234e558deb55e9c352dda9b087dd89315e66ea576ffcb",
+    sha256: "d7934743e29c40f4fefbeee4ccbc20cf13c5003a4cd915be3426980ab109812f",
     source: "3esmit/logos-palace@21ae9d08f4fb76e7eb011c4062e3ea143cbb28f9",
     dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
   }),
@@ -81,7 +81,7 @@ const releasePackageBindings = Object.freeze([
     type: "core",
     version: "0.4.0-alpha.2",
     sha256: "6ac67c2864bb2cb7d2993a0498d1b45bb8de234b55f3c00c8cff6522999c9833",
-    source: "3esmit/logos-execution-zone-module@10c6c1dd76107cb96e99f651fec3f61c35e09901",
+    source: "3esmit/logos-execution-zone-module@a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
     dependencies: Object.freeze([]),
   }),
 ]);

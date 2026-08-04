@@ -1049,7 +1049,7 @@ test("Gate 4 approves and binds the exact LEZ dependency before work", async () 
   assert.ok(approval < priorReportRead);
   assert.match(
     gate4,
-    /const approvedLezModuleRevision =\s*"10c6c1dd76107cb96e99f651fec3f61c35e09901";/,
+    /const approvedLezModuleRevision =\s*"a302960d92468dec8ad7d65e2a9ee81ab7abf3d0";/,
   );
   assert.match(
     gate4,
@@ -1065,7 +1065,7 @@ test("Gate 4 approves and binds the exact LEZ dependency before work", async () 
   );
   assert.match(
     runner,
-    /lezModuleRevision:\s*"10c6c1dd76107cb96e99f651fec3f61c35e09901"/,
+    /lezModuleRevision:\s*"a302960d92468dec8ad7d65e2a9ee81ab7abf3d0"/,
   );
 });
 

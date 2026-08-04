@@ -288,7 +288,7 @@ const dependencyRevisions = {
     narHash: "sha256-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD=",
   },
   lez_core: {
-    revision: "10c6c1dd76107cb96e99f651fec3f61c35e09901",
+    revision: "a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
     narHash: "sha256-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=",
   },
 };
@@ -349,8 +349,8 @@ const networkContract = {
   storageTopology: "private-loopback-bootstrap-mesh",
   lezNetworkId: "logos-lez-testnet-v0.2.0",
   lezModuleApiVersion: "0.4.0-alpha.2",
-  lezModuleRevision: "10c6c1dd76107cb96e99f651fec3f61c35e09901",
-  lezRuntimeRevision: "3a96a23f7feecfc32b3f31beafd4f1768c691e42",
+  lezModuleRevision: "a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
+  lezRuntimeRevision: "8b2a2ee80739c66368ab24ed1751b83fb532bdce",
   lezSchemaId: "palace-schema-v3",
   lezPublicContractRevision:
     "2b67563baf590c32dd82e50e3252815ec56bdaec",

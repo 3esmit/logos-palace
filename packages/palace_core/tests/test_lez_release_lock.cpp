@@ -14,10 +14,10 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
     LOGOS_ASSERT_EQ(network.programBytecodeSha256Hex.size(), 64U);
     LOGOS_ASSERT_EQ(
         network.moduleRevision,
-        std::string("10c6c1dd76107cb96e99f651fec3f61c35e09901"));
+        std::string("a302960d92468dec8ad7d65e2a9ee81ab7abf3d0"));
     LOGOS_ASSERT_EQ(
         network.runtimeRevision,
-        std::string("3a96a23f7feecfc32b3f31beafd4f1768c691e42"));
+        std::string("8b2a2ee80739c66368ab24ed1751b83fb532bdce"));
     LOGOS_ASSERT_EQ(network.publicContractRevision.size(), 40U);
 
     const auto& explorer = palace::PalaceLezReleaseLock::explorer();
