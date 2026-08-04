@@ -53,6 +53,9 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /proveMissingStorageObject/);
   assert.match(flow, /states: \["missing", "fetching", "degraded"\]/);
   assert.match(flow, /derivedMissingCid/);
+  assert.match(flow, /capturePalaceFrameTiming/);
+  assert.match(flow, /gate5VmTurnMetrics/);
+  assert.match(flow, /peakMemory: \{ status: "not-measured"/);
   assert.match(flow, /measurementPolicy/);
 });
 

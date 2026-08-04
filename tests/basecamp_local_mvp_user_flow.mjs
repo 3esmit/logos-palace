@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadGate3AssetInputs } from "./basecamp_gate3_asset_inputs.mjs";
+import { capturePalaceFrameTiming } from "./basecamp_frame_timing.mjs";
 
 const [basecampArgument, creatorDirArgument, bobDirArgument, carolDirArgument, evidenceDirArgument] =
   process.argv.slice(2);
@@ -79,6 +80,8 @@ const timingSamples = {
   storageRetention: [],
   restart: [],
   uiScreenshot: [],
+  frameTiming: null,
+  vmTurn: [],
 };
 
 function summarizeTimings(samples) {
@@ -130,7 +133,12 @@ function storyTimings(orderedMessaging) {
     },
     ui: {
       screenshotMs: summarizeTimings(timingSamples.uiScreenshot),
+      frameTiming: timingSamples.frameTiming,
       ipcPayload: { status: "not-measured", reason: "Basecamp inspector does not expose UI-backend payload counters" },
+    },
+    vm: {
+      turnMetrics: timingSamples.vmTurn,
+      peakMemory: { status: "not-measured", reason: "VM module exposes turn duration but not per-turn peak memory" },
     },
     measurementPolicy: "wall-clock samples from the compiled user story; no inferred thresholds",
   };
@@ -330,6 +338,14 @@ class BasecampSession {
     });
     if (result.error) throw new Error(`${this.label} evaluate: ${result.error}`);
     return result;
+  }
+
+  async frameTiming(root) {
+    return capturePalaceFrameTiming({
+      evaluate: (expression) => this.evaluate(root, expression),
+      rootProperties: () => this.properties(root),
+      sleep,
+    });
   }
 
   async waitForProperty(objectId, predicate, description, timeout = 120_000) {
@@ -579,6 +595,25 @@ async function invokeWatchedExpression(session, root, expression, description) {
   const receipt = String(state.watchedActionReceipt || state.lastActionReceipt);
   timingSamples.actionReceipt.push({ operation: expression.split("(", 1)[0], elapsedMs: Date.now() - startedAt });
   return receipt;
+}
+
+async function measureVmTurn(session, root, actionId, phase) {
+  const receipt = await invokeWatchedReceipt(
+    session,
+    root,
+    "gate5VmTurnMetrics",
+    [actionId, phase],
+    `${session.label} VM ${phase} metrics`,
+  );
+  const duration = Number(statusValue(receipt, "duration_ns"));
+  if (statusValue(receipt, "status") !== "available"
+    || statusValue(receipt, "clock") !== "steady_clock"
+    || !Number.isSafeInteger(duration) || duration <= 0) {
+    throw new Error(`${session.label} VM ${phase} metrics unavailable: ${receipt}`);
+  }
+  const sample = { actionId, phase, durationNs: duration, receipt };
+  timingSamples.vmTurn.push(sample);
+  return sample;
 }
 
 async function verifyStorageRetention(session, root, description) {
@@ -1130,6 +1165,7 @@ try {
   }
   const liveCreator = await creator.screenshot("creator-three-user-live.png");
   const liveBob = await bob.screenshot("bob-three-user-live.png");
+  timingSamples.frameTiming = await creator.frameTiming(creatorPalace.root);
 
   const orderedMessaging = await sendOrderedSpeech(
     sessions,
@@ -1163,6 +1199,12 @@ try {
       && statusValue(value.spotState, "navigation") === "1";
   }, "Bob finalized Lounge door", 300_000);
   const bobLounge = await bob.screenshot("bob-lounge-door-finalized.png");
+  const doorActionId = statusValue(bobLoungeState.spotState, "action");
+  if (!/^[1-9][0-9]*$/.test(doorActionId)) {
+    throw new Error(`Bob finalized door action is invalid: ${bobLoungeState.spotState}`);
+  }
+  await measureVmTurn(bob, bobPalace.root, doorActionId, "provisional");
+  await measureVmTurn(bob, bobPalace.root, doorActionId, "finalized");
   await bob.callRoot(bobPalace.root, "gate1EnterRoom", ["atrium"]);
   await bob.waitForProperty(bobPalace.root, (value) => String(value.roomTitle) === "Atrium",
     "Bob returns to Atrium", 120_000);
