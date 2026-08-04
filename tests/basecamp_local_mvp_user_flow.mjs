@@ -195,7 +195,13 @@ class BasecampSession {
   }
 
   async clickNamed(name, description) {
-    await this.clickObject(await this.findOne("objectName", name, description), description);
+    const objectId = await this.findOne("objectName", name, description);
+    if (name.startsWith("palaceAsset")) {
+      const root = await this.findOne("objectName", "palaceRoot", `${this.label} Palace root`);
+      const scrolled = await this.callRoot(root, "ensureModerationControlVisible", [name]);
+      if (isRejected(scrolled)) throw new Error(`${this.label} ${description}: asset control scroll rejected: ${scrolled}`);
+    }
+    await this.clickObject(objectId, description);
   }
 
   async callRoot(root, method, args = []) {

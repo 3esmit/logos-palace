@@ -248,7 +248,8 @@ const report = {
   profile: "local-development",
   publicFinalityAvailable: false,
   palaceId: result.creator?.palace?.palaceId ?? result.recovery?.palaceId ?? null,
-  assetCount: result.creator?.palace?.imported?.length ?? 0,
+  assetCount: (result.creator?.palace?.imported?.length ?? 0)
+    + (result.creator?.palace?.propId ? 1 : 0),
   orderedMessages: result.orderedMessaging?.total ?? 0,
   participants: Object.keys(result.identities ?? {}).length,
   doorFinalized: Boolean(result.door?.finalizedState),
