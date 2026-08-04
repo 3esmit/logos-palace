@@ -1475,6 +1475,50 @@ async function writeExclusiveDurable(path, bytes, uid) {
   }
 }
 
+async function recoverMissingPreGate3Report(predecessor, uid) {
+  const reportPath = join(predecessor.runDirectory, "compiled-mvp-report.json");
+  let reportExists = true;
+  try {
+    await lstat(reportPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    reportExists = false;
+  }
+  if (reportExists) return;
+
+  const report = {
+    schema: reportSchema,
+    version: 1,
+    status: "failed",
+    fullMvp: "not-evaluated",
+    productSnapshot: predecessor.productSnapshot,
+    scope: {
+      implementedGates,
+      pendingGates: [],
+    },
+    failure: {
+      phase: "active-run-claim",
+      message:
+        "previous run stopped before writing its compiled report; "
+        + "recovered on the next run",
+    },
+    gates: {
+      gate0: { status: "unknown", report: null },
+      gate1: { status: "unknown", report: "gate1/gate1-report.json" },
+      gate2: { status: "unknown", report: "gate2/gate2-report.json" },
+      gate3: { status: "unknown", report: "gate3/gate3-report.json" },
+      gate4: { status: "unknown", report: "gate4/gate4-report.json" },
+      gate5: { status: "unknown", report: "gate4/gate4-report.json" },
+      gate6: { status: "unknown", report: "gate4/gate4-report.json" },
+    },
+  };
+  await writeExclusiveDurable(
+    reportPath,
+    Buffer.from(`${JSON.stringify(report, null, 2)}\n`, "utf8"),
+    uid,
+  );
+}
+
 async function writeNewClaim(claimDirectory, claimPath, value) {
   const temporary = join(
     claimDirectory,
@@ -5356,6 +5400,9 @@ export function createClaimLifecycle({
       uid,
       validateImmutableSnapshot,
     });
+    if (predecessor.status === "active-pre-gate3") {
+      await recoverMissingPreGate3Report(predecessor, uid);
+    }
     const proof = auditedRecoveryKind === "pre-root-write-gate4"
       ? await validateAuditedPreRootWriteGate4Artifacts({
           predecessor,

@@ -1355,6 +1355,34 @@ test("atomically archives and rolls active v2 pre-Gate 3 claim", async () => {
   });
 });
 
+test("recovers an interrupted pre-Gate 3 claim without a compiled report", async () => {
+  await withFixture({}, async ({
+    predecessorClaim,
+    predecessorRun,
+    successorRun,
+    lifecycle,
+  }) => {
+    await rm(join(predecessorRun, "compiled-mvp-report.json"));
+
+    const acquired = await lifecycle.execute("acquire-or-roll-forward");
+    assert.equal(acquired.claim.status, "active-pre-gate3");
+    const evidence = JSON.parse(
+      await readFile(join(successorRun, "claim-roll-forward.json"), "utf8"),
+    );
+    assert.equal(evidence.predecessor.claimVersion, predecessorClaim.version);
+    assert.equal(evidence.predecessor.failurePhase, "active-run-claim");
+    assert.equal(
+      evidence.predecessor.compiledReportSha256,
+      sha256(await readFile(join(predecessorRun, "compiled-mvp-report.json"))),
+    );
+    const recovered = JSON.parse(
+      await readFile(join(predecessorRun, "compiled-mvp-report.json"), "utf8"),
+    );
+    assert.equal(recovered.failure.phase, "active-run-claim");
+    assert.equal(recovered.productSnapshot, predecessorClaim.productSnapshot);
+  });
+});
+
 test("rolls only proven-safe non-gate failure phases forward", async () => {
   for (const phase of [
     "signal",
