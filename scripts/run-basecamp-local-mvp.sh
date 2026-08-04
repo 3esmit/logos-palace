@@ -244,7 +244,7 @@ const [input, output] = process.argv.slice(2);
 const result = JSON.parse(await readFile(input, "utf8"));
 const report = {
   schema: "logos-palace.local-mvp-report",
-  version: 1,
+  version: 2,
   profile: "local-development",
   publicFinalityAvailable: false,
   palaceId: result.creator?.palace?.palaceId ?? result.recovery?.palaceId ?? null,
@@ -255,6 +255,7 @@ const report = {
   doorFinalized: Boolean(result.door?.finalizedState),
   moderation: Boolean(result.moderation?.rawDeliveryRejected),
   providerRestarted: result.recovery?.providerAOffline === true,
+  timings: result.timings ?? null,
 };
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 process.stdout.write(`${output}\n`);

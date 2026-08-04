@@ -29,6 +29,7 @@ test("local MVP runner requires explicit runtime and asset inputs", async () => 
   }
   assert.match(runner, /PALACE_LEZ_PROFILE.*local-development/);
   assert.match(runner, /basecamp_local_mvp_user_flow\.mjs/);
+  assert.match(runner, /timings: result\.timings/);
   assert.doesNotMatch(runner, /\/home\//);
   assert.doesNotMatch(runner, /PALACE_E2E_ASSET_DIR|PALACE_E2E_ASSET_INPUT_ROOT=.*default/);
 });
@@ -43,4 +44,6 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /name\.startsWith\("palaceAsset"\)/);
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR/);
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|\/home\//);
+  assert.match(flow, /sendToReceive: \{[\s\S]*not-measured/);
+  assert.match(flow, /measurementPolicy/);
 });

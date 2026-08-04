@@ -157,6 +157,15 @@ test("local development keeps its unavailable public finality visible", () => {
   assert.match(mainQml, /Local development · public finality unavailable/);
 });
 
+test("room chrome exposes synchronization and Storage degradation", () => {
+  assert.match(mainQml, /readonly property string syncDisplayState/);
+  assert.match(mainQml, /syncHealth === "fully_synchronized" \? "ok" : syncHealth/);
+  assert.match(mainQml, /readonly property string storageDisplayState/);
+  assert.match(mainQml, /encodedStatusValue\(storageStatus, "catalog"\)/);
+  assert.match(mainQml, /" · sync " \+ root\.syncDisplayState/);
+  assert.match(mainQml, /" · Storage " \+ root\.storageDisplayState/);
+});
+
 test("creator onboarding retries only sequencer visibility races", () => {
   assert.match(
     mainQml,

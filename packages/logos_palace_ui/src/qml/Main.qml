@@ -16,6 +16,14 @@ Item {
         ? backend.deliverySessionStatus : "state=unavailable"
     readonly property string storageStatus: backend
         ? backend.storageStatus : "storage=unavailable"
+    // Keep degraded and offline states visible in the room chrome. Core owns
+    // these values; QML only maps them to compact display labels.
+    readonly property string syncDisplayState:
+        syncHealth === "fully_synchronized" ? "ok" : syncHealth
+    readonly property string storageDisplayState:
+        encodedStatusValue(storageStatus, "catalog")
+        || encodedStatusValue(storageStatus, "storage")
+        || "offline"
     readonly property string assetAuthoringState: backend
         ? backend.assetAuthoringState
         : "{\"version\":1,\"count\":0,\"sessionCount\":0,\"bundleLocked\":false,\"roomAssignments\":{\"atrium\":\"\",\"lounge\":\"\"},\"propAssignment\":null,\"assets\":[]}"
@@ -4677,6 +4685,8 @@ Item {
                        ? "Delivery " + (root.statusValue("state") || "offline")
                        : "Connecting")
                     + " · peers " + root.connectedPeerCount
+                    + " · sync " + root.syncDisplayState
+                    + " · Storage " + root.storageDisplayState
                     + " · LEZ "
                     + (root.encodedStatusValue(root.lezState, "ready") === "1"
                        ? "ok" : "off")

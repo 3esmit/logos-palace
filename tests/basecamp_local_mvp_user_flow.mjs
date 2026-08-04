@@ -71,6 +71,67 @@ const frameworkUrl = pathToFileURL(
   resolve(qtMcpRoot, "test-framework/framework.mjs"),
 ).href;
 const sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
+const storyStartedAt = Date.now();
+const timingSamples = {
+  actionReceipt: [],
+  deliveryStartup: [],
+  storageRetention: [],
+  restart: [],
+  uiScreenshot: [],
+};
+
+function summarizeTimings(samples) {
+  const values = samples
+    .map((sample) => typeof sample === "number" ? sample : sample.elapsedMs)
+    .filter((value) => Number.isSafeInteger(value) && value >= 0)
+    .sort((left, right) => left - right);
+  if (values.length === 0) {
+    return { sampleCount: 0, p50Ms: null, p95Ms: null, maxMs: null };
+  }
+  const nearestRank = (fraction) => values[Math.max(
+    0,
+    Math.ceil(values.length * fraction) - 1,
+  )];
+  return {
+    sampleCount: values.length,
+    p50Ms: nearestRank(0.50),
+    p95Ms: nearestRank(0.95),
+    maxMs: values.at(-1),
+  };
+}
+
+function storyTimings(orderedMessaging) {
+  return {
+    wallClockMs: Date.now() - storyStartedAt,
+    delivery: {
+      orderedProjectionConvergenceMs: orderedMessaging.elapsedMs,
+      startupMs: summarizeTimings(timingSamples.deliveryStartup),
+      actionReceiptMs: summarizeTimings(
+        timingSamples.actionReceipt.filter((sample) => sample.operation === "sendSpeech"),
+      ),
+      sendToReceive: {
+        status: "not-measured",
+        reason: "projection only retains the latest speech per sender; no per-event receive timestamp is exposed",
+      },
+    },
+    storage: {
+      retentionMs: summarizeTimings(timingSamples.storageRetention),
+    },
+    lezAndApplication: {
+      actionReceiptMs: summarizeTimings(
+        timingSamples.actionReceipt.filter((sample) => sample.operation !== "sendSpeech"),
+      ),
+    },
+    recovery: {
+      restartMs: summarizeTimings(timingSamples.restart),
+    },
+    ui: {
+      screenshotMs: summarizeTimings(timingSamples.uiScreenshot),
+      ipcPayload: { status: "not-measured", reason: "Basecamp inspector does not expose UI-backend payload counters" },
+    },
+    measurementPolicy: "wall-clock samples from the compiled user story; no inferred thresholds",
+  };
+}
 
 function statusValue(status, name) {
   const prefix = `${name}=`;
@@ -229,6 +290,7 @@ class BasecampSession {
   }
 
   async screenshot(name) {
+    const startedAt = Date.now();
     const response = await this.app.screenshot();
     if (response.error || typeof response.image !== "string") {
       throw new Error(`${this.label} screenshot ${name}: ${response.error ?? "invalid image"}`);
@@ -239,8 +301,10 @@ class BasecampSession {
     }
     const path = resolve(evidenceDir, name);
     await writeFile(path, bytes, { mode: 0o600 });
+    const elapsedMs = Date.now() - startedAt;
+    timingSamples.uiScreenshot.push(elapsedMs);
     return { file: basename(path), width: response.width, height: response.height,
-      sha256: createHash("sha256").update(bytes).digest("hex") };
+      sha256: createHash("sha256").update(bytes).digest("hex"), elapsedMs };
   }
 }
 
@@ -301,6 +365,7 @@ function parseParticipants(value, label) {
 }
 
 async function startDelivery(session, root, label, port, entryNodes, waitOnline = true) {
+  const startedAt = Date.now();
   await session.callRoot(root, "startDelivery", [deliveryConfig(label, port, entryNodes)]);
   const state = await session.waitForProperty(root, (value) =>
     statusValue(value.deliveryStatus, "callbacks") === "1"
@@ -316,6 +381,7 @@ async function startDelivery(session, root, label, port, entryNodes, waitOnline 
     throw new Error(`${label} Delivery evidence is not JSON: ${error.message}`);
   }
   if (evidence.success !== true) throw new Error(`${label} Delivery evidence: ${JSON.stringify(evidence)}`);
+  timingSamples.deliveryStartup.push(Date.now() - startedAt);
   return { config: deliveryConfig(label, port, entryNodes), evidence };
 }
 
@@ -414,6 +480,7 @@ async function sendOrderedSpeech(sessions, roots, identities) {
 }
 
 async function invokeWatchedReceipt(session, root, method, args, description) {
+  const startedAt = Date.now();
   const before = await session.properties(root);
   const sequence = Number(before.invocationSequence ?? 0);
   const immediate = await session.callRoot(root, method, args);
@@ -423,10 +490,13 @@ async function invokeWatchedReceipt(session, root, method, args, description) {
       && !isRejected(value.invocationError)
       && String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0,
   `${description} receipt`, 180_000);
-  return String(state.watchedActionReceipt || state.lastActionReceipt);
+  const receipt = String(state.watchedActionReceipt || state.lastActionReceipt);
+  timingSamples.actionReceipt.push({ operation: method, elapsedMs: Date.now() - startedAt });
+  return receipt;
 }
 
 async function verifyStorageRetention(session, root, description) {
+  const startedAt = Date.now();
   const receipt = await invokeWatchedReceipt(
     session,
     root,
@@ -444,6 +514,7 @@ async function verifyStorageRetention(session, root, description) {
       && catalogVerified > 0
       && retained === catalogVerified;
   }, `${description} retained catalog`, 300_000);
+  timingSamples.storageRetention.push(Date.now() - startedAt);
   return { receipt, status: state.storageStatus };
 }
 
@@ -517,6 +588,7 @@ async function restartExistingClient(
   entryNodes,
   waitForDeliveryOnline = true,
 ) {
+  const startedAt = Date.now();
   await session.stop();
   await session.start();
   const root = await openView(session, "Logos Palace", "palaceRoot");
@@ -562,7 +634,9 @@ async function restartExistingClient(
   }
   // Storage control is a separate launcher view. Re-activate Palace so
   // recovery screenshots show the user-facing room, not node controls.
-  return openView(session, "Logos Palace", "palaceRoot");
+  const restartedRoot = await openView(session, "Logos Palace", "palaceRoot");
+  timingSamples.restart.push({ session: session.label, elapsedMs: Date.now() - startedAt });
+  return restartedRoot;
 }
 
 function collectPickerControlIds(node, matches, predicate) {
@@ -1132,6 +1206,7 @@ try {
     delivery: { creator: creatorDelivery, bob: bobDelivery, carol: carolDelivery, entryNode },
     live: { move, speech, wear, remove, creator: liveCreator, bob: liveBob, projection: liveProjection },
     orderedMessaging,
+    timings: storyTimings(orderedMessaging),
     door,
     moderation: { ...moderation, screenshot: moderationScreenshot },
     recovery,
