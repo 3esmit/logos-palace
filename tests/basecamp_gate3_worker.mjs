@@ -102,6 +102,7 @@ let rootObjectId;
 let shuttingDown = false;
 
 function launchBasecamp() {
+  console.error(`[gate3-worker:${label}] launch Basecamp`);
   const child = spawn(
     basecamp,
     ["--user-dir", userDir, "-platform", "offscreen"],
@@ -136,6 +137,7 @@ function launchBasecamp() {
       basecampPid: child.pid,
     })}\n`,
   );
+  console.error(`[gate3-worker:${label}] Basecamp started pid=${child.pid}`);
 }
 
 async function saveLogs(state) {
@@ -175,6 +177,7 @@ async function stopBasecamp() {
 }
 
 async function connectInspector() {
+  console.error(`[gate3-worker:${label}] connect Inspector`);
   let lastError = new Error("inspector did not start");
   for (let attempt = 0; attempt < 240; attempt += 1) {
     if (!processState || processState.child.exitCode !== null) {
@@ -187,6 +190,7 @@ async function connectInspector() {
       await candidate.connect();
       inspector = candidate;
       app = new App(candidate);
+      console.error(`[gate3-worker:${label}] Inspector connected`);
       return;
     } catch (error) {
       lastError = error;
@@ -198,6 +202,7 @@ async function connectInspector() {
 }
 
 async function waitForView() {
+  console.error(`[gate3-worker:${label}] wait for Palace root`);
   await app.waitFor(
     async () => {
       const root = await app.findByProperty(
@@ -216,6 +221,8 @@ async function waitForView() {
       description: `Logos Palace launcher ${label}`,
     },
   );
+  console.error(`[gate3-worker:${label}] Palace root ready`);
+  console.error(`[gate3-worker:${label}] wait for room controls`);
   await app.waitFor(
     async () => {
       const root = await app.findByProperty(
@@ -254,6 +261,7 @@ async function waitForView() {
       description: `current Palace room controls ${label}`,
     },
   );
+  console.error(`[gate3-worker:${label}] room controls ready`);
 }
 
 async function startBasecamp() {
@@ -261,6 +269,7 @@ async function startBasecamp() {
   launchBasecamp();
   await connectInspector();
   await waitForView();
+  console.error(`[gate3-worker:${label}] init complete`);
   return {
     basecampPid: processState.child.pid,
     startupMs: Math.round(performance.now() - startedAt),
