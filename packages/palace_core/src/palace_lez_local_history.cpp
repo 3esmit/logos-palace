@@ -1,5 +1,7 @@
 #include "palace_lez_local_history.h"
 
+#include "palace_sha256.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
@@ -460,6 +462,7 @@ bool isNonzeroLowerHex(const std::string &value, const std::size_t exactSize) {
 
 struct LocalHeaderV1 {
   std::uint64_t blockId = 0U;
+  std::optional<std::uint64_t> timestamp;
   std::string blockHashHex;
   std::string previousBlockHashHex;
 };
@@ -483,7 +486,11 @@ struct LocalPageV1 {
 };
 
 bool parseHeader(const JsonValue &value, LocalHeaderV1 &output) {
-  if (!exactKeys(value, {"block_id", "block_hash", "previous_block_hash"})) {
+  const bool hasLegacyKeys =
+      exactKeys(value, {"block_id", "block_hash", "previous_block_hash"});
+  const bool hasCurrentKeys = exactKeys(
+      value, {"block_id", "block_hash", "previous_block_hash", "timestamp"});
+  if (!hasLegacyKeys && !hasCurrentKeys) {
     return false;
   }
   const JsonValue *blockId = member(value, "block_id");
@@ -495,6 +502,15 @@ bool parseHeader(const JsonValue &value, LocalHeaderV1 &output) {
       previousBlockHash->type != JsonType::String ||
       !isLowerHex(previousBlockHash->text, 64U)) {
     return false;
+  }
+  if (hasCurrentKeys) {
+    std::uint64_t timestamp = 0U;
+    const JsonValue *timestampValue = member(value, "timestamp");
+    if (!jsonUnsigned64(*timestampValue, timestamp))
+      return false;
+    output.timestamp = timestamp;
+  } else {
+    output.timestamp.reset();
   }
   output.blockHashHex = blockHash->text;
   output.previousBlockHashHex = previousBlockHash->text;
@@ -524,7 +540,7 @@ bool programIdWordsToHex(const JsonValue &value, std::string &output) {
   return true;
 }
 
-bool parseTransaction(const JsonValue &value, LocalTransactionV1 &output) {
+bool parseLegacyTransaction(const JsonValue &value, LocalTransactionV1 &output) {
   if (!exactKeys(value, {"transaction_hash", "program_id", "account_ids",
                          "instruction_data"})) {
     return false;
@@ -572,6 +588,181 @@ bool parseTransaction(const JsonValue &value, LocalTransactionV1 &output) {
   }
   output.transactionHashHex = transactionHash->text;
   return true;
+}
+
+int base64Digit(const char character) {
+  if (character >= 'A' && character <= 'Z')
+    return character - 'A';
+  if (character >= 'a' && character <= 'z')
+    return character - 'a' + 26;
+  if (character >= '0' && character <= '9')
+    return character - '0' + 52;
+  if (character == '+')
+    return 62;
+  if (character == '/')
+    return 63;
+  return -1;
+}
+
+bool decodeBase64(const std::string &value, std::vector<std::uint8_t> &output) {
+  if (value.empty() || value.size() % 4U != 0U)
+    return false;
+  std::size_t padding = 0U;
+  if (!value.empty() && value.back() == '=')
+    padding = 1U;
+  if (value.size() > 1U && value[value.size() - 2U] == '=')
+    ++padding;
+  if (padding > 2U)
+    return false;
+  const std::size_t payloadSize = value.size() - padding;
+  for (std::size_t index = 0U; index < payloadSize; ++index) {
+    if (base64Digit(value[index]) < 0)
+      return false;
+  }
+  for (std::size_t index = payloadSize; index < value.size(); ++index) {
+    if (value[index] != '=')
+      return false;
+  }
+  if (padding == 1U && (base64Digit(value[value.size() - 2U]) & 0x03) != 0)
+    return false;
+  if (padding == 2U && (base64Digit(value[value.size() - 3U]) & 0x0f) != 0)
+    return false;
+
+  output.clear();
+  output.reserve(value.size() / 4U * 3U - padding);
+  for (std::size_t index = 0U; index < value.size(); index += 4U) {
+    const int a = base64Digit(value[index]);
+    const int b = base64Digit(value[index + 1U]);
+    const int c = value[index + 2U] == '=' ? 0 : base64Digit(value[index + 2U]);
+    const int d = value[index + 3U] == '=' ? 0 : base64Digit(value[index + 3U]);
+    if (a < 0 || b < 0 || c < 0 || d < 0)
+      return false;
+    output.push_back(static_cast<std::uint8_t>((a << 2) | (b >> 4)));
+    if (value[index + 2U] != '=')
+      output.push_back(static_cast<std::uint8_t>((b << 4) | (c >> 2)));
+    if (value[index + 3U] != '=')
+      output.push_back(static_cast<std::uint8_t>((c << 6) | d));
+  }
+  return true;
+}
+
+bool readU32(const std::vector<std::uint8_t> &bytes, std::size_t &cursor,
+             std::uint32_t &output) {
+  if (cursor > bytes.size() || bytes.size() - cursor < sizeof(output))
+    return false;
+  output = static_cast<std::uint32_t>(bytes[cursor]) |
+           (static_cast<std::uint32_t>(bytes[cursor + 1U]) << 8U) |
+           (static_cast<std::uint32_t>(bytes[cursor + 2U]) << 16U) |
+           (static_cast<std::uint32_t>(bytes[cursor + 3U]) << 24U);
+  cursor += sizeof(output);
+  return true;
+}
+
+bool readBytes(const std::vector<std::uint8_t> &bytes, std::size_t &cursor,
+               std::uint8_t *output, const std::size_t count) {
+  if (cursor > bytes.size() || count > bytes.size() - cursor)
+    return false;
+  std::copy(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor + count), output);
+  cursor += count;
+  return true;
+}
+
+bool parseCurrentTransaction(const JsonValue &value, LocalTransactionV1 &output) {
+  if (!exactKeys(value, {"transaction_hash", "transaction"}))
+    return false;
+  const JsonValue *transactionHash = member(value, "transaction_hash");
+  const JsonValue *transaction = member(value, "transaction");
+  if (transactionHash->type != JsonType::String ||
+      !isNonzeroLowerHex(transactionHash->text, 64U) ||
+      transaction->type != JsonType::String)
+    return false;
+
+  std::vector<std::uint8_t> bytes;
+  if (!decodeBase64(transaction->text, bytes) || bytes.empty() ||
+      bytes.size() > kMaximumPageBytes ||
+      bytes.front() != 0U ||
+      crypto::sha256Hex(std::string(bytes.begin() + 1, bytes.end())) !=
+          transactionHash->text)
+    return false;
+  std::size_t cursor = 0U;
+  if (cursor >= bytes.size() || bytes[cursor++] != 0U)
+    return false; // LeeTransaction::Public
+
+  output.programIdHex.clear();
+  output.programIdHex.reserve(64U);
+  constexpr char kHex[] = "0123456789abcdef";
+  for (std::size_t word = 0U; word < 8U; ++word) {
+    std::uint32_t value32 = 0U;
+    if (!readU32(bytes, cursor, value32))
+      return false;
+    for (std::size_t byte = 0U; byte < sizeof(value32); ++byte) {
+      const std::uint8_t octet =
+          static_cast<std::uint8_t>((value32 >> (byte * 8U)) & 0xffU);
+      output.programIdHex.push_back(kHex[octet >> 4U]);
+      output.programIdHex.push_back(kHex[octet & 0x0fU]);
+    }
+  }
+
+  std::uint32_t accountCount = 0U;
+  if (!readU32(bytes, cursor, accountCount) || accountCount == 0U ||
+      accountCount > kMaximumAccountsPerPage)
+    return false;
+  output.accountIdsHex.clear();
+  output.accountIdsHex.reserve(accountCount);
+  std::set<std::string> distinctAccounts;
+  for (std::uint32_t index = 0U; index < accountCount; ++index) {
+    PalaceLezBytes32 accountId{};
+    if (!readBytes(bytes, cursor, accountId.data(), accountId.size()))
+      return false;
+    const std::string accountIdHex = PalaceLezCodec::bytes32Hex(accountId);
+    if (!distinctAccounts.insert(accountIdHex).second)
+      return false;
+    output.accountIdsHex.push_back(accountIdHex);
+  }
+
+  std::uint32_t nonceCount = 0U;
+  if (!readU32(bytes, cursor, nonceCount) ||
+      nonceCount > kMaximumAccountsPerPage ||
+      cursor > bytes.size() ||
+      static_cast<std::size_t>(nonceCount) >
+          (bytes.size() - cursor) / 16U)
+    return false;
+  cursor += static_cast<std::size_t>(nonceCount) * 16U;
+
+  std::uint32_t instructionCount = 0U;
+  if (!readU32(bytes, cursor, instructionCount) || instructionCount == 0U ||
+      instructionCount > kMaximumInstructionWordsPerPage ||
+      cursor > bytes.size() ||
+      static_cast<std::size_t>(instructionCount) >
+          (bytes.size() - cursor) / 4U)
+    return false;
+  output.instructionWords.clear();
+  output.instructionWords.reserve(instructionCount);
+  for (std::uint32_t index = 0U; index < instructionCount; ++index) {
+    std::uint32_t word = 0U;
+    if (!readU32(bytes, cursor, word))
+      return false;
+    output.instructionWords.push_back(word);
+  }
+
+  std::uint32_t witnessCount = 0U;
+  if (!readU32(bytes, cursor, witnessCount) ||
+      witnessCount > kMaximumAccountsPerPage ||
+      cursor > bytes.size() ||
+      static_cast<std::size_t>(witnessCount) >
+          (bytes.size() - cursor) / 96U)
+    return false;
+  cursor += static_cast<std::size_t>(witnessCount) * 96U;
+  if (cursor != bytes.size())
+    return false;
+  output.transactionHashHex = transactionHash->text;
+  return true;
+}
+
+bool parseTransaction(const JsonValue &value, LocalTransactionV1 &output) {
+  return parseLegacyTransaction(value, output) ||
+         parseCurrentTransaction(value, output);
 }
 
 bool parseBlock(const JsonValue &value, LocalBlockV1 &output) {
@@ -649,9 +840,13 @@ bool parsePage(const std::string &body, LocalPageV1 &output) {
 }
 
 std::string encodeTipJson(const LocalHeaderV1 &tip) {
-  return "{\"block_id\":" + std::to_string(tip.blockId) + ",\"block_hash\":\"" +
+  std::string output = "{\"block_id\":" + std::to_string(tip.blockId) +
+         ",\"block_hash\":\"" +
          tip.blockHashHex + "\",\"previous_block_hash\":\"" +
-         tip.previousBlockHashHex + "\"}";
+         tip.previousBlockHashHex + "\"";
+  if (tip.timestamp.has_value())
+    output += ",\"timestamp\":" + std::to_string(*tip.timestamp);
+  return output + "}";
 }
 
 std::uint64_t actionId(const PalaceLezInstructionV3 &instruction) {
@@ -733,6 +928,7 @@ PalaceLezLocalCommittedHistorySession::start(
   collectingTargetStream_ = false;
   snapshotTipJson_.clear();
   snapshotTipBlockId_ = 0U;
+  snapshotTipTimestamp_.reset();
   snapshotTipBlockHashHex_.clear();
   snapshotTipPreviousBlockHashHex_.clear();
   result_.reset();
@@ -786,10 +982,12 @@ PalaceLezLocalCommittedHistorySession::acceptPage(const std::string &pageJson) {
   }
   if (snapshotTipJson_.empty()) {
     snapshotTipBlockId_ = page.snapshotTip.blockId;
+    snapshotTipTimestamp_ = page.snapshotTip.timestamp;
     snapshotTipBlockHashHex_ = page.snapshotTip.blockHashHex;
     snapshotTipPreviousBlockHashHex_ = page.snapshotTip.previousBlockHashHex;
     snapshotTipJson_ = encodeTipJson(page.snapshotTip);
   } else if (page.snapshotTip.blockId != snapshotTipBlockId_ ||
+             page.snapshotTip.timestamp != snapshotTipTimestamp_ ||
              page.snapshotTip.blockHashHex != snapshotTipBlockHashHex_ ||
              page.snapshotTip.previousBlockHashHex !=
                  snapshotTipPreviousBlockHashHex_ ||

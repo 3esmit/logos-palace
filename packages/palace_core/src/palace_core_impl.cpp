@@ -3880,6 +3880,31 @@ std::string PalaceCoreImpl::createPalace(const std::string& title)
         || !m_deliveryIdentityRegistration->ready()) {
         return "rejected=palace-identity-not-ready";
     }
+    // Identity registration is acknowledged before its LEZ block is applied.
+    // Wait for the signer nonce to advance so Palace creation cannot race the
+    // registration transaction in the same mempool snapshot.
+    std::string identitySyncReason;
+    if (!syncLezWalletToCurrent(identitySyncReason)
+        || m_lezSyncedHeight < 0) {
+        return "rejected=palace-identity-registration-pending";
+    }
+    logos::CallError identityAccountError;
+    const std::string identityAccountResponse =
+        modules().lez_core.get_account_public(
+            m_deliveryIdentity.accountId(), &identityAccountError);
+    const palace::PalaceLezRawAccountV1 identityAccount =
+        palace::PalaceLezCodec::parsePublicAccountSnapshot(
+            identityAccountResponse);
+    if (!identityAccountError.ok() || !identityAccount.accepted) {
+        return "rejected=palace-identity-registration-pending";
+    }
+    const bool identityNonceAdvanced = std::any_of(
+        identityAccount.nonceLeHex.begin(),
+        identityAccount.nonceLeHex.end(),
+        [](const char character) { return character != '0'; });
+    if (!identityNonceAdvanced) {
+        return "rejected=palace-identity-registration-pending";
+    }
     const AssetAuthoringAuthorityStatus authoringAuthority =
         currentAssetAuthoringAuthorityStatus(false);
     const palace::AssetAuthoringStateV1& authoringState =
@@ -4240,6 +4265,27 @@ std::string PalaceCoreImpl::registerPalaceUser()
         || m_lezSyncedHeight < 0) {
         return "rejected=palace-identity-sync;reason="
             + registrationSyncReason;
+    }
+    // Identity registration is durable before the LEZ block applies it. Do
+    // not build a second transaction until the signer account reflects the
+    // first nonce increment; otherwise both transactions can enter one
+    // mempool snapshot with nonce zero and the Palace action is dropped.
+    logos::CallError identityAccountError;
+    const std::string identityAccountResponse =
+        modules().lez_core.get_account_public(
+            accountId, &identityAccountError);
+    const palace::PalaceLezRawAccountV1 identityAccount =
+        palace::PalaceLezCodec::parsePublicAccountSnapshot(
+            identityAccountResponse);
+    if (!identityAccountError.ok() || !identityAccount.accepted) {
+        return "rejected=palace-identity-registration-pending";
+    }
+    const bool identityNonceAdvanced = std::any_of(
+        identityAccount.nonceLeHex.begin(),
+        identityAccount.nonceLeHex.end(),
+        [](const char character) { return character != '0'; });
+    if (!identityNonceAdvanced) {
+        return "rejected=palace-identity-registration-pending";
     }
     logos::CallError rootError;
     const std::string rootResponse =
@@ -8189,9 +8235,21 @@ std::string PalaceCoreImpl::observePalaceTransition(
     if (profile == nullptr)
         return "rejected=lez-profile";
     const palace::ActionStatus status = m_actionJournal.status(actionId);
-    if (status.durableStage != palace::DurableActionStage::SubmittedToLez
+    if ((status.durableStage != palace::DurableActionStage::SubmittedToLez
+         && status.durableStage != palace::DurableActionStage::Observed
+         && status.durableStage != palace::DurableActionStage::Finalized)
         || status.transactionHash.empty()) {
         return "rejected=action-not-submitted";
+    }
+    // A local sequencer can advance the durable journal between the submit
+    // response and the first UI poll. The action is already usable in that
+    // state; do not turn the successful observation into a false rejection.
+    if (!profile->publicFinalityAvailable
+        && (status.durableStage == palace::DurableActionStage::Observed
+            || status.durableStage == palace::DurableActionStage::Finalized)) {
+        return "ok;completion=local-committed;"
+            "finality=unavailable-local-development;"
+            + actionStatus(actionId);
     }
     if (m_lezSubmissionIntent.has_value()
         && m_lezSubmissionIntent->actionId == actionId
@@ -8927,8 +8985,6 @@ bool PalaceCoreImpl::materializeAuthority(
     static constexpr std::size_t kMaximumAuthorityAccounts = 512U;
     static constexpr std::size_t kMaximumAccountResponseBytes =
         256U * 1024U;
-    static const std::string kSystemProgramOwnerHex(64U, '0');
-
     materialization = {};
     reason.clear();
     if ((source != palace::AuthoritySnapshotSource::Finalized
@@ -8976,9 +9032,10 @@ bool PalaceCoreImpl::materializeAuthority(
         if (raw.programOwnerHex != programIdHex) {
             // Verified transaction plans include their caller account. It is
             // not Palace-owned state, so retain neither it nor arbitrary
-            // external account data in the authority projection.
+            // external account data in the authority projection. LEZ may
+            // assign a non-zero system-program owner to a caller account;
+            // empty external data is the bounded, non-Palace account shape.
             if (accountIdsHex[index] == rootAccountIdHex
-                || raw.programOwnerHex != kSystemProgramOwnerHex
                 || !raw.data.empty()) {
                 reason = "authority-account-owner-mismatch-"
                     + std::to_string(index);

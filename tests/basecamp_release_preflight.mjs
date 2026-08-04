@@ -44,7 +44,7 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-palace_core-module-lib.lgx",
     type: "core",
     version: "0.1.0",
-    sha256: "d7934743e29c40f4fefbeee4ccbc20cf13c5003a4cd915be3426980ab109812f",
+    sha256: "410ea2fdc6953322de73f6cb49ec5f4ff829edc666b58872c52e9e07ba25a0e3",
     source: "3esmit/logos-palace@a106f3edcf5ffc3b5e191a6570534211d5061e46",
     dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
   }),
@@ -53,7 +53,7 @@ const releasePackageBindings = Object.freeze([
     artifact: "logos-logos_palace_ui-module.lgx",
     type: "ui_qml",
     version: "0.1.0",
-    sha256: "d8ae6dcef4bf274033a4b10e26aced962d3da215b76ea29b3a5e8d1fea55436b",
+    sha256: "9aab9b7b99913aca9ab4ed297e508c8aec3f7dfff13dfdb0f0e8e7dae88e774e",
     source: "3esmit/logos-palace@21ae9d08f4fb76e7eb011c4062e3ea143cbb28f9",
     dependencies: Object.freeze(["palace_core"]),
   }),
@@ -107,7 +107,7 @@ const releaseNetworkBindings = Object.freeze({
 
 const releaseDependencyBindings = Object.freeze({
   basecamp: "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
-  logosModuleBuilder: "logos-co/logos-module-builder@fd07679ecfa1b2d8cfdd06799f3e03ed385b57f6",
+  logosModuleBuilder: "logos-co/logos-module-builder@8e4ea1c1d0e523cea46850f8fd9466dd35af7cc1",
   nixpkgs: "NixOS/nixpkgs@535f3e6942cb1cead3929c604320d3db54b542b9",
 });
 

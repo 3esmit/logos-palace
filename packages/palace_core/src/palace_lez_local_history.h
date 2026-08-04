@@ -107,6 +107,7 @@ private:
   bool collectingTargetStream_ = false;
   std::string snapshotTipJson_;
   std::uint64_t snapshotTipBlockId_ = 0U;
+  std::optional<std::uint64_t> snapshotTipTimestamp_;
   std::string snapshotTipBlockHashHex_;
   std::string snapshotTipPreviousBlockHashHex_;
   std::optional<PalaceLezLocalCommittedHistoryResultV1> result_;

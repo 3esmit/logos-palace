@@ -2,7 +2,7 @@
   description = "Logos Palace public two-room Basecamp MVP";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.5";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/8e4ea1c1d0e523cea46850f8fd9466dd35af7cc1";
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.

@@ -659,6 +659,13 @@ Item {
             },
             function (receipt) {
                 onboardingJoinRegistrationPollPending = false
+                if (retryableCreatorActionRejection(receipt)) {
+                    onboardingPhase = "confirming-palace-identity"
+                    onboardingError = ""
+                    onboardingReceipt = String(receipt)
+                    onboardingJoinRegistrationPolling = true
+                    return
+                }
                 onboardingFail("palace-identity", receipt)
             })
     }
@@ -878,6 +885,14 @@ Item {
             onboardingFinalityPolling = true
             pollCreatorAction()
         }, function (receipt) {
+            if (retryableCreatorActionRejection(receipt)) {
+                onboardingPhase = "creating-palace"
+                onboardingError = ""
+                onboardingReceipt = String(receipt)
+                if (!onboardingCreatedPalaceRetryTimer.running)
+                    onboardingCreatedPalaceRetryTimer.start()
+                return
+            }
             onboardingFail("create", receipt)
         })
     }
@@ -918,6 +933,8 @@ Item {
     // authority data remains a terminal user-visible failure.
     function retryableCreatorActionRejection(receipt) {
         var status = String(receipt)
+        if (status === "rejected=palace-identity-registration-pending")
+            return true
         return /^rejected=lez-stable-account-read;reason=(sync-[^;]+|height-before|height-after|wallet-height-raced|account-[0-9]+)$/.test(status)
             || /^rejected=lez-observation;reason=(transaction-not-materialized|invalid-account-response|invalid-account-field|invalid-account-data|invalid-record|unexpected-observation-record|observation-mismatch|unstable-height)$/.test(status)
             || status === "rejected=lez-root-transaction-pending"
@@ -2617,7 +2634,10 @@ Item {
         interval: 500
         repeat: false
         onTriggered: {
-            if (root.onboardingPhase === "waiting-created-palace"
+            if (root.onboardingPhase === "creating-palace"
+                    && root.ready && root.backend !== null) {
+                root.createOnboardingPalace()
+            } else if (root.onboardingPhase === "waiting-created-palace"
                     && root.ready && root.backend !== null
                     && !root.palaceOpen) {
                 root.openCreatedPalace()
