@@ -210,36 +210,40 @@ async function waitForView() {
   );
   await app.waitFor(
     async () => {
-      try {
-        await app.expectTexts(["Atrium", "Door to Lounge"]);
-      } catch (error) {
-        await app.click("Logos Palace");
-        throw error;
-      }
-    },
-    {
-      timeout: 60_000,
-      interval: 500,
-      description: `Logos Palace content ${label}`,
-    },
-  );
-  await app.waitFor(
-    async () => {
-      const result = await app.findByProperty(
+      const root = await app.findByProperty(
         "objectName",
         "palaceRoot",
       );
-      if (result.error || !result.matches || result.matches.length !== 1) {
-        throw new Error(
-          `expected one Palace root, got ${result.matches?.length ?? 0}`,
-        );
+      const atrium = await app.findByProperty(
+        "objectName",
+        "palaceRoomListAtrium",
+      );
+      const lounge = await app.findByProperty(
+        "objectName",
+        "palaceRoomListLounge",
+      );
+      const door = await app.findByProperty(
+        "objectName",
+        "palaceRoomDoor",
+      );
+      if (
+        root.error
+        || root.matches?.length !== 1
+        || atrium.error
+        || atrium.matches?.length !== 1
+        || lounge.error
+        || lounge.matches?.length !== 1
+        || door.error
+        || door.matches?.length !== 1
+      ) {
+        throw new Error("current Palace room controls are not ready");
       }
-      rootObjectId = result.matches[0].id;
+      rootObjectId = root.matches[0].id;
     },
     {
       timeout: 60_000,
       interval: 500,
-      description: `Palace root ${label}`,
+      description: `current Palace room controls ${label}`,
     },
   );
 }
