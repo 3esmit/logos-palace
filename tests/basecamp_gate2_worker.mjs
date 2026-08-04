@@ -66,8 +66,8 @@ const views = {
   palace: {
     launcher: "Logos Palace",
     expectedTexts: ["Atrium", "Door to Lounge"],
-    receiptProperty: "gate2Receipt",
-    rootObjectName: "palaceGate2Root",
+    receiptProperty: "deliveryReceipt",
+    rootObjectName: "palaceRoot",
   },
   acceptance: {
     launcher: "Palace Delivery Acceptance",
@@ -329,7 +329,14 @@ async function startBasecamp() {
 
 async function rootProperties() {
   if (!app || !rootObjectId) throw new Error("worker is not initialized");
-  return propertyMap(await app.getProperties(rootObjectId));
+  const properties = propertyMap(await app.getProperties(rootObjectId));
+  if (viewArgument === "palace") {
+    properties.gate2Status = properties.deliveryStatus;
+    properties.gate2Projection = properties.participantProjection;
+    properties.gate2NodeEvidence = properties.deliveryNodeEvidence;
+    properties.gate2Receipt = properties.deliveryReceipt;
+  }
+  return properties;
 }
 
 async function evaluate(expression) {
@@ -349,6 +356,15 @@ async function evaluate(expression) {
     undefined: response.undefined,
   };
 }
+
+const functionAliases = new Map([
+  ["gate2Start", "startDelivery"],
+  ["gate2Say", "sendSpeech"],
+  ["gate2Move", "moveAvatar"],
+  ["gate2Wear", "wearProp"],
+  ["gate2Remove", "removeProp"],
+  ["gate2RefreshPresence", "refreshPresence"],
+]);
 
 const allowedFunctions = viewArgument === "acceptance"
   ? new Set([
@@ -388,10 +404,11 @@ function receiptMatches(receipt, expected) {
 }
 
 async function invoke(params) {
-  const name = params?.name;
+  const requestedName = params?.name;
+  const name = functionAliases.get(requestedName) ?? requestedName;
   const args = params?.args ?? [];
-  if (!allowedFunctions.has(name) || !Array.isArray(args)) {
-    throw new Error(`unsupported Gate 2 invocation: ${name}`);
+  if (!allowedFunctions.has(requestedName) || !Array.isArray(args)) {
+    throw new Error(`unsupported Gate 2 invocation: ${requestedName}`);
   }
   const before = String(
     (await rootProperties())[view.receiptProperty] ?? "",
