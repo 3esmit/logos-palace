@@ -75,6 +75,7 @@ const storyStartedAt = Date.now();
 const timingSamples = {
   actionReceipt: [],
   deliveryStartup: [],
+  deliveryReceive: [],
   storageRetention: [],
   restart: [],
   uiScreenshot: [],
@@ -110,8 +111,10 @@ function storyTimings(orderedMessaging) {
         timingSamples.actionReceipt.filter((sample) => sample.operation === "sendSpeech"),
       ),
       sendToReceive: {
-        status: "not-measured",
-        reason: "projection only retains the latest speech per sender; no per-event receive timestamp is exposed",
+        status: timingSamples.deliveryReceive.length > 0 ? "measured" : "not-measured",
+        samples: summarizeTimings(timingSamples.deliveryReceive),
+        sampling: "remote receivers only; every 30th ordered message is awaited before the next send",
+        reason: "projection only retains the latest speech per sender; each sampled message is awaited immediately so it cannot be overwritten before measurement",
       },
     },
     storage: {
@@ -426,6 +429,7 @@ async function sendOrderedSpeech(sessions, roots, identities) {
   for (let ordinal = 1; ordinal <= 300; ordinal += 1) {
     const label = labels[(ordinal - 1) % labels.length];
     const message = `ordered-${String(ordinal).padStart(3, "0")}-${label}-${identities[label]}`;
+    const sendStartedAt = Date.now();
     const receipt = await invokeWatchedReceipt(
       sessions[label],
       roots[label],
@@ -440,6 +444,21 @@ async function sendOrderedSpeech(sessions, roots, identities) {
     lastRequest[label] = requestCounter;
     perSender[label] += 1;
     receipts.push({ ordinal, sender: label, message, receipt, requestCounter });
+    if (ordinal % 30 === 0) {
+      for (const receiver of labels) {
+        if (receiver === label) continue;
+        await sessions[receiver].waitForProperty(roots[receiver], (value) => {
+          const participant = participantById(value.participantProjection, identities[label], receiver);
+          return participant?.speech === message;
+        }, `${receiver} receives ordered speech ${ordinal} from ${label}`, 180_000);
+        timingSamples.deliveryReceive.push({
+          ordinal,
+          sender: label,
+          receiver,
+          elapsedMs: Date.now() - sendStartedAt,
+        });
+      }
+    }
   }
   const finalSpeech = Object.fromEntries(
     labels.map((label) => [

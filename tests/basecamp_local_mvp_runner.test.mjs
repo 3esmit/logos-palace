@@ -44,6 +44,7 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /name\.startsWith\("palaceAsset"\)/);
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR/);
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|\/home\//);
-  assert.match(flow, /sendToReceive: \{[\s\S]*not-measured/);
+  assert.match(flow, /sendToReceive: \{[\s\S]*status: timingSamples\.deliveryReceive\.length > 0 \? "measured" : "not-measured"/);
+  assert.match(flow, /every 30th ordered message is awaited/);
   assert.match(flow, /measurementPolicy/);
 });
