@@ -48,9 +48,8 @@ jobs:
           rzup install rust 1.88.0
           rzup install cargo-risczero 3.0.5
           rzup install r0vm 3.0.5
-          rzup use rust 1.88.0
-          rzup use cargo-risczero 3.0.5
-          rzup use r0vm 3.0.5
+          rzup show
+          cargo --version
           cargo risczero --version
 
       - name: Run source tests
