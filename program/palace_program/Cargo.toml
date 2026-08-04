@@ -1,0 +1,12 @@
+[package]
+name = "palace_program"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+borsh.workspace = true
+palace_program_core = { path = "../palace_core" }
+serde.workspace = true

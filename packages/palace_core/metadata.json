@@ -1,0 +1,26 @@
+{
+  "name": "palace_core",
+  "display_name": "Palace Core",
+  "author": "Ricardo Guilherme Schmidt",
+  "version": "0.1.0",
+  "type": "core",
+  "interface": "universal",
+  "category": "palace",
+  "description": "Palace projection, action journal, and protocol boundary",
+  "main": "palace_core_plugin",
+  "codegen": {
+    "impl_header": "src/palace_core_impl.h",
+    "impl_class": "PalaceCoreImpl"
+  },
+  "dependencies": ["palace_vm", "lez_core", "delivery_module", "storage_module"],
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

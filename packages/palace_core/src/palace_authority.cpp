@@ -1,0 +1,281 @@
+#include "palace_authority.h"
+
+#include <algorithm>
+#include <set>
+
+namespace palace {
+namespace {
+
+bool hasRoom(const AuthoritySnapshotV1& snapshot, const std::string& roomId)
+{
+    return std::any_of(snapshot.rooms.begin(), snapshot.rooms.end(), [&](const RoomV1& room) {
+        return room.roomId == roomId;
+    });
+}
+
+bool scopeMatches(const std::string& scopeRoomId, const std::string& roomId)
+{
+    return scopeRoomId.empty() || scopeRoomId == roomId;
+}
+
+bool grantActive(const CapabilityGrantV1& grant, std::int64_t now)
+{
+    return !grant.revoked && (grant.expiresAt == 0 || grant.expiresAt > now);
+}
+
+bool hasCapability(const AuthoritySnapshotV1& snapshot,
+                   const std::string& subjectUserId,
+                   CapabilityKind capability,
+                   const std::string& roomId,
+                   std::int64_t now)
+{
+    if (subjectUserId == snapshot.ownerUserId)
+        return true;
+    return std::any_of(snapshot.grants.begin(), snapshot.grants.end(), [&](const CapabilityGrantV1& grant) {
+        return grant.subjectUserId == subjectUserId
+            && grant.capability == capability
+            && scopeMatches(grant.roomId, roomId)
+            && grantActive(grant, now);
+    });
+}
+
+bool banWasAuthorizedAtIssuance(const AuthoritySnapshotV1& snapshot,
+                                const BanV1& ban,
+                                CapabilityKind capability,
+                                const std::int64_t committedAt)
+{
+    if (ban.issuedBy == snapshot.ownerUserId)
+        return ban.authorizationGrantId.empty();
+    if (ban.authorizationGrantId.empty())
+        return hasCapability(
+            snapshot, ban.issuedBy, capability, ban.roomId, committedAt);
+    const auto grant = std::find_if(
+        snapshot.grants.begin(),
+        snapshot.grants.end(),
+        [&](const CapabilityGrantV1& value) {
+            return value.grantId == ban.authorizationGrantId
+                && value.subjectUserId == ban.issuedBy
+                && value.capability == capability
+                && scopeMatches(value.roomId, ban.roomId);
+        });
+    return grant != snapshot.grants.end();
+}
+
+bool uniqueAndNonEmpty(const std::vector<std::string>& values)
+{
+    std::set<std::string> seen;
+    for (const std::string& value : values) {
+        if (value.empty() || !seen.insert(value).second)
+            return false;
+    }
+    return true;
+}
+
+bool isLowerHex64(const std::string& value)
+{
+    return value.size() == 64U
+        && std::all_of(
+            value.begin(),
+            value.end(),
+            [](const unsigned char character) {
+                return (character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f');
+            });
+}
+
+bool validateSnapshot(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt)
+{
+    if (snapshot.palaceId.empty() || snapshot.ownerUserId.empty() || committedAt <= 0)
+        return false;
+
+    std::vector<std::string> roomIds;
+    for (const RoomV1& room : snapshot.rooms) {
+        if (room.roomId.empty() || room.roomEpoch < 0
+            || (!room.sharedStateRoot.empty()
+                && !isLowerHex64(room.sharedStateRoot))) {
+            return false;
+        }
+        roomIds.push_back(room.roomId);
+    }
+    if (!uniqueAndNonEmpty(roomIds) || !hasRoom(snapshot, snapshot.entryRoomId))
+        return false;
+
+    std::vector<std::string> userIds;
+    for (const UserProfileV1& user : snapshot.users) {
+        if (user.userId.empty() || user.deliverySigningPublicKey.empty() || user.keyEpoch < 0)
+            return false;
+        userIds.push_back(user.userId);
+    }
+    if (!uniqueAndNonEmpty(userIds)
+        || std::find(userIds.begin(), userIds.end(), snapshot.ownerUserId) == userIds.end()) {
+        return false;
+    }
+
+    std::vector<std::string> grantIds;
+    for (const CapabilityGrantV1& grant : snapshot.grants) {
+        if (grant.grantId.empty() || grant.palaceId != snapshot.palaceId
+            || grant.subjectUserId.empty() || grant.capability == CapabilityKind::PalaceOwner
+            || (!grant.roomId.empty() && !hasRoom(snapshot, grant.roomId))) {
+            return false;
+        }
+        grantIds.push_back(grant.grantId);
+    }
+    if (!uniqueAndNonEmpty(grantIds))
+        return false;
+
+    std::vector<std::string> banIds;
+    for (const BanV1& ban : snapshot.bans) {
+        const bool namesUser = !ban.subjectUserId.empty();
+        const bool namesAsset = !ban.assetCid.empty();
+        if (ban.banId.empty() || ban.palaceId != snapshot.palaceId || ban.issuedBy.empty()
+            || namesUser == namesAsset || (!ban.roomId.empty() && !hasRoom(snapshot, ban.roomId))) {
+            return false;
+        }
+        if (namesUser && !banWasAuthorizedAtIssuance(
+                snapshot, ban, CapabilityKind::ModerateUser, committedAt)) {
+            return false;
+        }
+        if (namesAsset && !banWasAuthorizedAtIssuance(
+                snapshot, ban, CapabilityKind::ModerateAsset, committedAt)) {
+            return false;
+        }
+        banIds.push_back(ban.banId);
+    }
+    return uniqueAndNonEmpty(banIds);
+}
+
+} // namespace
+
+bool AuthorityProjection::replaceFinalized(const AuthoritySnapshotV1& snapshot,
+                                           const std::int64_t finalizedAt)
+{
+    return replace(snapshot, finalizedAt, AuthoritySnapshotSource::Finalized);
+}
+
+bool AuthorityProjection::replaceLocalCommitted(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt)
+{
+    return replace(
+        snapshot,
+        committedAt,
+        AuthoritySnapshotSource::LocalCommitted);
+}
+
+bool AuthorityProjection::replace(
+    const AuthoritySnapshotV1& snapshot,
+    const std::int64_t committedAt,
+    const AuthoritySnapshotSource source)
+{
+    if (source == AuthoritySnapshotSource::None
+        || !validateSnapshot(snapshot, committedAt)) {
+        return false;
+    }
+    m_snapshot = snapshot;
+    m_committedAt = committedAt;
+    m_source = source;
+    m_hasSnapshot = true;
+    return true;
+}
+
+bool AuthorityProjection::can(const std::string& subjectUserId,
+                              CapabilityKind capability,
+                              const std::string& roomId,
+                              std::int64_t now) const
+{
+    return m_hasSnapshot && hasCapability(m_snapshot, subjectUserId, capability, roomId, now);
+}
+
+bool AuthorityProjection::isUserBanned(const std::string& subjectUserId,
+                                        const std::string& roomId) const
+{
+    return m_hasSnapshot && std::any_of(m_snapshot.bans.begin(), m_snapshot.bans.end(),
+        [&](const BanV1& ban) {
+            return ban.active && ban.subjectUserId == subjectUserId && scopeMatches(ban.roomId, roomId);
+        });
+}
+
+bool AuthorityProjection::isAssetBanned(const std::string& assetCid,
+                                         const std::string& roomId) const
+{
+    return m_hasSnapshot && std::any_of(m_snapshot.bans.begin(), m_snapshot.bans.end(),
+        [&](const BanV1& ban) {
+            return ban.active && ban.assetCid == assetCid && scopeMatches(ban.roomId, roomId);
+        });
+}
+
+bool AuthorityProjection::isRoomLocked(const std::string& roomId) const
+{
+    if (!m_hasSnapshot)
+        return true;
+    const auto found = std::find_if(m_snapshot.rooms.begin(), m_snapshot.rooms.end(),
+        [&](const RoomV1& room) { return room.roomId == roomId; });
+    return found == m_snapshot.rooms.end() || found->locked;
+}
+
+std::string AuthorityProjection::deliveryKeyFor(const std::string& userId,
+                                                 std::int64_t keyEpoch) const
+{
+    if (!m_hasSnapshot)
+        return {};
+    const auto found = std::find_if(m_snapshot.users.begin(), m_snapshot.users.end(),
+        [&](const UserProfileV1& user) { return user.userId == userId && user.keyEpoch == keyEpoch; });
+    return found == m_snapshot.users.end() ? std::string{} : found->deliverySigningPublicKey;
+}
+
+const std::string& AuthorityProjection::palaceId() const
+{
+    static const std::string kEmpty;
+    return m_hasSnapshot ? m_snapshot.palaceId : kEmpty;
+}
+
+const std::string& AuthorityProjection::entryRoomId() const
+{
+    static const std::string kEmpty;
+    return m_hasSnapshot ? m_snapshot.entryRoomId : kEmpty;
+}
+
+std::int64_t AuthorityProjection::roomEpoch(
+    const std::string& roomId) const
+{
+    if (!m_hasSnapshot)
+        return -1;
+    const auto found = std::find_if(
+        m_snapshot.rooms.begin(),
+        m_snapshot.rooms.end(),
+        [&](const RoomV1& room) { return room.roomId == roomId; });
+    return found == m_snapshot.rooms.end() ? -1 : found->roomEpoch;
+}
+
+std::int64_t AuthorityProjection::finalizedAt() const
+{
+    return m_source == AuthoritySnapshotSource::Finalized
+        ? m_committedAt : 0;
+}
+
+std::int64_t AuthorityProjection::committedAt() const
+{
+    return m_committedAt;
+}
+
+AuthoritySnapshotSource AuthorityProjection::source() const
+{
+    return m_source;
+}
+
+const char* authoritySnapshotSourceName(const AuthoritySnapshotSource source)
+{
+    switch (source) {
+    case AuthoritySnapshotSource::None:
+        return "none";
+    case AuthoritySnapshotSource::Finalized:
+        return "finalized";
+    case AuthoritySnapshotSource::LocalCommitted:
+        return "local-committed";
+    }
+    return "none";
+}
+
+} // namespace palace

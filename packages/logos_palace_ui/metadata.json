@@ -1,0 +1,31 @@
+{
+  "name": "logos_palace_ui",
+  "display_name": "Logos Palace",
+  "author": "Ricardo Guilherme Schmidt",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "palace",
+  "description": "Room-first Logos Palace UI",
+  "main": "logos_palace_ui_plugin",
+  "view": "qml/Main.qml",
+  "dependencies": ["palace_core"],
+  "verified_asset_producers": ["palace_core"],
+  "verified_asset_profile": {
+    "directory": "palace-profiles",
+    "environment": "PALACE_LEZ_PROFILE",
+    "default": "release",
+    "allowed_profiles": ["release", "local-development"]
+  },
+  "codegen": { "rep": "src/logos_palace_ui.rep" },
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

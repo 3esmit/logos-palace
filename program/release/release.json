@@ -1,0 +1,97 @@
+{
+  "schema": "logos.palace.release",
+  "version": 2,
+  "platform": "x86_64-linux",
+  "risc0BinfmtVersion": "3.0.5",
+  "byteLength": 297312,
+  "sha256": "69099492e8f860ab338846f33762f5fb563ffc40121779ec1e15ef0b35da7171",
+  "imageIdHex": "e8ceab64ab3204d2309cc58c627478c98d39cda353fb3efa0d188ec5a4b25c61",
+  "deployment": {
+    "networkId": "logos-lez-testnet-v0.2.0",
+    "explorerOrigin": "https://explorer.testnet.lez.logos.co",
+    "transactionHash": "98711414b02a12a9abfdd17780337f7f32c962df1dea2f50e3deeecba3c7a0b5",
+    "blockId": 41029,
+    "blockHash": "0ea1852f8c91d9ba8003844d1c98c68ba1b6ddc08a7c9dbf23dec95eb0460b92",
+    "rootAccountIdHex": "12ff117a38d756f132cf616cea36fa007653c3c99727c1b475503caa345cbf2a",
+    "rootAccountIdBase58": "2H9vVPVToHwyHer6e7dAUGA7ToQmi4HSRscjounkkig9",
+    "systemProgramBase58": "11111111111111111111111111111111"
+  },
+  "packages": [
+    {
+      "name": "palace_vm",
+      "artifact": "logos-palace_vm-module-lib.lgx",
+      "type": "core",
+      "version": "0.1.0",
+      "sha256": "5815634576998f931458d6748eb85b3bb4cf218b7238ffd5641049f3bbedc68a",
+      "source": "3esmit/logos-palace@12d74911c73f9cd00e6a46a038d698b9209fde3d",
+      "dependencies": []
+    },
+    {
+      "name": "palace_core",
+      "artifact": "logos-palace_core-module-lib.lgx",
+      "type": "core",
+      "version": "0.1.0",
+      "sha256": "410ea2fdc6953322de73f6cb49ec5f4ff829edc666b58872c52e9e07ba25a0e3",
+      "source": "3esmit/logos-palace@a106f3edcf5ffc3b5e191a6570534211d5061e46",
+      "dependencies": ["palace_vm", "lez_core", "delivery_module", "storage_module"]
+    },
+    {
+      "name": "logos_palace_ui",
+      "artifact": "logos-logos_palace_ui-module.lgx",
+      "type": "ui_qml",
+      "version": "0.1.0",
+      "sha256": "ff6d65c1085a9808bbe026fcba8b2e2d9411583298f73a155a7cbb7e3ee111b8",
+      "source": "3esmit/logos-palace@c4e78f72accd0e1f43a28288b26245eb6971246e",
+      "dependencies": ["palace_core"]
+    },
+    {
+      "name": "delivery_module",
+      "artifact": "logos-delivery_module-module-lib.lgx",
+      "type": "core",
+      "version": "0.1.8",
+      "sha256": "986a6a81ad65d42c9b174c1e3c6530a9b2b3174efff57e8dc6de078e37101da2",
+      "source": "3esmit/logos-delivery-module@891c43bd6176e17b0aa536ef1aa369bb47e918f4",
+      "dependencies": []
+    },
+    {
+      "name": "storage_module",
+      "artifact": "logos-storage_module-module-lib.lgx",
+      "type": "core",
+      "version": "2.3.0",
+      "sha256": "97077662328ee9df6fc3188e8d1444e2cdf011e6a9ee6ca50e8a2848b5cc178f",
+      "source": "3esmit/logos-storage-module@1c75ad9d1f02f562e845a2c445421bee6ea425ad",
+      "dependencies": []
+    },
+    {
+      "name": "lez_core",
+      "artifact": "logos-lez_core-module-lib.lgx",
+      "type": "core",
+      "version": "0.4.0-alpha.2",
+      "sha256": "fd3184a5163604c0f902de6c2cd5b9fda9c3eea89ef1a16bd995bb1d0748ac0f",
+      "source": "3esmit/logos-execution-zone-module@a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
+      "dependencies": []
+    }
+  ],
+  "schemas": {
+    "palaceProgram": "palace-schema-v3",
+    "catalogManifest": "logos-palace-catalog-manifest-v1",
+    "roomManifest": "logos-palace-room-v1",
+    "propManifest": "logos-palace-prop-v1",
+    "deliveryEnvelope": "logos-palace-room-v1",
+    "vmProfile": "classic-mvp-v1",
+    "lezVmProfile": "iptscrae_mvp_v1"
+  },
+  "network": {
+    "lezNetworkId": "logos-lez-testnet-v0.2.0",
+    "deliveryNetworkId": "logos-lez-testnet-v0.2.0",
+    "sequencerOrigin": "https://testnet.lez.logos.co",
+    "explorerOrigin": "https://explorer.testnet.lez.logos.co",
+    "deliveryTopology": "participant-hosted",
+    "storageTopology": "participant-hosted"
+  },
+  "dependencies": {
+    "basecamp": "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
+    "logosModuleBuilder": "logos-co/logos-module-builder@8e4ea1c1d0e523cea46850f8fd9466dd35af7cc1",
+    "nixpkgs": "NixOS/nixpkgs@535f3e6942cb1cead3929c604320d3db54b542b9"
+  }
+}

@@ -1,0 +1,8 @@
+class PalaceDeliveryAcceptance
+{
+    SLOT(QString start(QString entryNode, qint64 tcpPort))
+    SLOT(QString inject(QString scenario))
+    PROP(QString status="state=initializing;callbacks=0" READONLY)
+    PROP(QString receipt="" READONLY)
+    PROP(QString nodeEvidence="{\"success\":false,\"reason\":\"node-not-created\"}" READONLY)
+}
