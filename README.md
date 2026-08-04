@@ -62,6 +62,11 @@ LGX packages:
 `palace_core` has one production build path. The Storage scenario always installs that
 package and uses production identities.
 
+The local compiled MVP runner may additionally install the separately supplied
+Logos Control UI package so an operator can start and stop Storage through the
+same Basecamp session. That utility package is not part of the Palace six-
+package product set.
+
 ## Architecture
 
 ```text
