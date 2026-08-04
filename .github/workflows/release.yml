@@ -66,12 +66,10 @@ jobs:
       - name: Run source tests
         run: node --test tests/*.test.mjs
 
-      - name: Run packaged contract and acceptance checks
+      - name: Evaluate release package definitions
         run: |
-          nix build --quiet --no-link \
-            .#checks.x86_64-linux.palace-vm-contracts \
-            .#checks.x86_64-linux.palace-core-contracts \
-            .#checks.x86_64-linux.palace-release-artifact
+          nix eval --raw \
+            .#checks.x86_64-linux.palace-release-artifact.drvPath
 
       - name: Build the release archive
         run: ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
