@@ -13,8 +13,7 @@ module builder remain pinned platform dependencies.
 
 ## Status
 
-Logos Palace is an unreleased testnet MVP under active development. Current
-source includes:
+Logos Palace is an x86_64-linux MVP pre-alpha. Current source includes:
 
 - three product modules: `palace_vm`, `palace_core`, and `logos_palace_ui`;
 - deterministic VM execution with provisional and finalized receipt seams;
@@ -46,6 +45,29 @@ explicitly unmeasured.
 The local profile deliberately makes no public-finality claim. A clean
 public-testnet release run still needs public LEZ finality, creator removal, and
 final performance/resource evidence.
+
+### MVP pre-alpha release
+
+Tag `v0.1.0-pre-alpha.1` is produced by
+[the release workflow](.github/workflows/release.yml). The archive is built
+from the tagged source and contains:
+
+- all six portable LGX packages listed below;
+- the repository-built `bin/palace.bin` RISC Zero program image;
+- `bin/palace-image-id` for independently checking that image;
+- `release.json` with byte lengths, SHA-256 digests, and the RISC Zero image ID;
+- README, license, and security documentation.
+
+Build the same archive locally with the pinned x86_64-linux toolchain:
+
+```sh
+PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
+  ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
+```
+
+The separate Logos Control UI remains an operator add-on and is not part of
+the six-package Palace product archive. The pre-alpha profile is local-
+development compatible and does not claim public-testnet finality.
 
 See [Architecture](ARCHITECTURE.md), [CHANGELOG](CHANGELOG.md),
 [Security](SECURITY.md), and [Support](SUPPORT.md).

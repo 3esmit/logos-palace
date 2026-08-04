@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project will use [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 after its first published release.
 
+## [0.1.0-pre-alpha.1] - 2026-08-04
+
+This pre-alpha release packages the stack-complete local MVP for x86_64-linux.
+The generated archive contains the six portable LGX packages, the
+repository-built Palace RISC Zero program image, the image-ID verifier, and a
+checksum manifest. It is produced by the tagged GitHub Actions workflow and
+does not claim public-testnet finality.
+
 ## [Unreleased]
 
 ### Added
@@ -113,4 +121,5 @@ after its first published release.
   security audit.
 - Private rooms and private LEZ state are not implemented.
 
+[0.1.0-pre-alpha.1]: https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.1
 [Unreleased]: https://github.com/3esmit/logos-palace/commits

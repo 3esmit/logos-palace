@@ -84,6 +84,18 @@ Build the RISC Zero guest when the toolchain is installed:
 cargo build --manifest-path program/palace_program/methods/Cargo.toml --release
 ```
 
+Build the complete MVP pre-alpha archive locally:
+
+```sh
+rzup install cargo-risczero 3.0.5
+rzup install r0vm 3.0.5
+PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
+  ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
+```
+
+The archive includes six LGX packages, `palace.bin`, `palace-image-id`, and a
+checksum manifest. Logos Control UI remains a separate operator add-on.
+
 ## Compiled acceptance
 
 Run the narrowest relevant Basecamp harness:

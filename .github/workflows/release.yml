@@ -1,0 +1,110 @@
+name: MVP pre-alpha release
+
+on:
+  push:
+    tags:
+      - "v*-pre-alpha.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to package (for example, v0.1.0-pre-alpha.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prealpha-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package x86_64-linux MVP binaries
+    runs-on: ubuntu-24.04
+    env:
+      PALACE_RELEASE_VERSION: ${{ inputs.tag || github.ref_name }}
+      PALACE_RELEASE_PLATFORM: x86_64-linux
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v20
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Install the pinned RISC Zero toolchain
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://risczero.com/install | bash
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.risc0/bin:$HOME/.cargo/bin:$PATH"
+          rzup install rust 1.88.0
+          rzup install cargo-risczero 3.0.5
+          rzup install r0vm 3.0.5
+          rzup use rust 1.88.0
+          rzup use cargo-risczero 3.0.5
+          rzup use r0vm 3.0.5
+          cargo risczero --version
+
+      - name: Run source tests
+        run: node --test tests/*.test.mjs
+
+      - name: Run packaged contract and acceptance checks
+        run: |
+          nix build --no-link \
+            .#checks.x86_64-linux.palace-vm-contracts \
+            .#checks.x86_64-linux.palace-core-contracts \
+            .#checks.x86_64-linux.palace-acceptance-seams \
+            .#checks.x86_64-linux.palace-release-artifact
+
+      - name: Build the release archive
+        run: ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
+
+      - name: Verify archive contents
+        shell: bash
+        run: |
+          archive="$(find .artifacts/prealpha-release -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "$archive"
+          entries="$(tar -tzf "$archive" | sed 's#^\./##')"
+          grep -Fx 'release.json' <<<"$entries"
+          grep -Fx 'bin/palace.bin' <<<"$entries"
+          grep -Fx 'bin/palace-image-id' <<<"$entries"
+          test "$(grep -c '^lgx/.*\.lgx$' <<<"$entries")" -eq 6
+          jq -e '
+            .schema == "logos.palace.prealpha-release"
+            and (.packages | length == 6)
+            and ([.binaries[].artifact] | sort == ["bin/palace-image-id", "bin/palace.bin"])
+          ' .artifacts/prealpha-release/package/release.json >/dev/null
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logos-palace-mvp-${{ env.PALACE_RELEASE_VERSION }}-x86_64-linux
+          path: .artifacts/prealpha-release/*.tar.gz
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          archive="$(find .artifacts/prealpha-release -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          notes="Logos Palace MVP pre-alpha.\n\nThe archive contains the six portable LGX packages, the repository-built Palace RISC Zero program binary, and the image-ID verifier. This release targets x86_64-linux and uses the local-development MVP profile; it does not claim public-testnet finality."
+          if gh release view "$PALACE_RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$PALACE_RELEASE_VERSION" "$archive" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$PALACE_RELEASE_VERSION" "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Logos Palace MVP $PALACE_RELEASE_VERSION" \
+              --notes "$notes" \
+              --verify-tag
+          fi
