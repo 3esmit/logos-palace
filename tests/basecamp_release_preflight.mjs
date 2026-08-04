@@ -54,7 +54,7 @@ const releasePackageBindings = Object.freeze([
     type: "ui_qml",
     version: "0.1.0",
     sha256: "ff6d65c1085a9808bbe026fcba8b2e2d9411583298f73a155a7cbb7e3ee111b8",
-    source: "3esmit/logos-palace@c4e78f7",
+    source: "3esmit/logos-palace@c4e78f72accd0e1f43a28288b26245eb6971246e",
     dependencies: Object.freeze(["palace_core"]),
   }),
   Object.freeze({
