@@ -54,7 +54,7 @@ jobs:
 
       - name: Run packaged contract and acceptance checks
         run: |
-          nix build --no-link \
+          nix build --quiet --no-link \
             .#checks.x86_64-linux.palace-vm-contracts \
             .#checks.x86_64-linux.palace-core-contracts \
             .#checks.x86_64-linux.palace-release-artifact
