@@ -55,6 +55,10 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.match(flow, /derivedMissingCid/);
   assert.match(flow, /capturePalaceFrameTiming/);
   assert.match(flow, /gate5VmTurnMetrics/);
+  assert.match(flow, /acceptanceApplicationRoundTrip/);
+  assert.match(flow, /receiptProperty = method === "acceptanceApplicationRoundTrip"/);
+  assert.match(flow, /acceptanceRoundTripResponse/);
+  assert.match(flow, /payloadSemantics: "application UTF-8 bytes; not transport wire bytes"/);
   assert.match(flow, /peakMemory: \{ status: "not-measured"/);
   assert.match(flow, /measurementPolicy/);
 });

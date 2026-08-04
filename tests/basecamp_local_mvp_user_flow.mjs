@@ -81,12 +81,15 @@ const timingSamples = {
   restart: [],
   uiScreenshot: [],
   frameTiming: null,
+  applicationRoundTrip: null,
   vmTurn: [],
 };
 
 function summarizeTimings(samples) {
   const values = samples
-    .map((sample) => typeof sample === "number" ? sample : sample.elapsedMs)
+    .map((sample) => typeof sample === "number"
+      ? sample
+      : (sample.elapsedMs ?? sample.roundTripMs))
     .filter((value) => Number.isSafeInteger(value) && value >= 0)
     .sort((left, right) => left - right);
   if (values.length === 0) {
@@ -134,7 +137,7 @@ function storyTimings(orderedMessaging) {
     ui: {
       screenshotMs: summarizeTimings(timingSamples.uiScreenshot),
       frameTiming: timingSamples.frameTiming,
-      ipcPayload: { status: "not-measured", reason: "Basecamp inspector does not expose UI-backend payload counters" },
+      ipcPayload: timingSamples.applicationRoundTrip,
     },
     vm: {
       turnMetrics: timingSamples.vmTurn,
@@ -571,12 +574,18 @@ async function invokeWatchedReceipt(session, root, method, args, description) {
   const sequence = Number(before.invocationSequence ?? 0);
   const immediate = await session.callRoot(root, method, args);
   if (isRejected(immediate)) throw new Error(`${description}: ${immediate}`);
+  const receiptProperty = method === "acceptanceApplicationRoundTrip"
+    ? "acceptanceRoundTripResponse"
+    : "watchedActionReceipt";
   const state = await session.waitForProperty(root, (value) =>
     Number(value.invocationSequence ?? 0) > sequence
       && !isRejected(value.invocationError)
-      && String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0,
+      && (receiptProperty === "acceptanceRoundTripResponse"
+        || String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0),
   `${description} receipt`, 180_000);
-  const receipt = String(state.watchedActionReceipt || state.lastActionReceipt);
+  const receipt = receiptProperty === "acceptanceRoundTripResponse"
+    ? String(state.acceptanceRoundTripResponse ?? "")
+    : String(state.watchedActionReceipt || state.lastActionReceipt);
   timingSamples.actionReceipt.push({ operation: method, elapsedMs: Date.now() - startedAt });
   return receipt;
 }
@@ -614,6 +623,51 @@ async function measureVmTurn(session, root, actionId, phase) {
   const sample = { actionId, phase, durationNs: duration, receipt };
   timingSamples.vmTurn.push(sample);
   return sample;
+}
+
+async function measureApplicationRoundTrip(session, root) {
+  const payloads = [
+    { bytes: 0, value: "" },
+    { bytes: 256, value: "é".repeat(128) },
+    { bytes: 4096, value: "é".repeat(2048) },
+  ];
+  const samplesPerSize = 4;
+  const measurements = {};
+  for (const { bytes, value } of payloads) {
+    if (Buffer.byteLength(value, "utf8") !== bytes) {
+      throw new Error(`application payload size ${bytes} is not exact`);
+    }
+    const samples = [];
+    for (let ordinal = 1; ordinal <= samplesPerSize; ordinal += 1) {
+      const receipt = await invokeWatchedReceipt(
+        session,
+        root,
+        "acceptanceApplicationRoundTrip",
+        [value],
+        `application round trip ${bytes} bytes ${ordinal}`,
+      );
+      const responseBytes = Buffer.byteLength(receipt, "utf8");
+      if (receipt !== value || responseBytes !== bytes) {
+        throw new Error(`application round trip payload changed at ${bytes} bytes`);
+      }
+      const elapsedMs = timingSamples.actionReceipt.at(-1)?.elapsedMs;
+      samples.push({ ordinal, requestUtf8Bytes: bytes, responseUtf8Bytes: responseBytes, roundTripMs: elapsedMs });
+    }
+    measurements[String(bytes)] = {
+      payloadUtf8Bytes: bytes,
+      requestUtf8Bytes: bytes,
+      responseUtf8Bytes: bytes,
+      samples,
+      latency: summarizeTimings(samples.map((sample) => sample.roundTripMs)),
+    };
+  }
+  return {
+    status: "measured",
+    clock: "compiled user story wall-clock milliseconds",
+    payloadSemantics: "application UTF-8 bytes; not transport wire bytes",
+    samplesPerSize,
+    measurements,
+  };
 }
 
 async function verifyStorageRetention(session, root, description) {
@@ -1166,6 +1220,10 @@ try {
   const liveCreator = await creator.screenshot("creator-three-user-live.png");
   const liveBob = await bob.screenshot("bob-three-user-live.png");
   timingSamples.frameTiming = await creator.frameTiming(creatorPalace.root);
+  timingSamples.applicationRoundTrip = await measureApplicationRoundTrip(
+    creator,
+    creatorPalace.root,
+  );
 
   const orderedMessaging = await sendOrderedSpeech(
     sessions,

@@ -40,8 +40,9 @@ ordered Delivery traffic converges, the door promotes a room transition,
 moderation rejects banned traffic, a missing Storage source fails closed with an
 explicit degraded result, and clients recover after the provider stops.
 Its report records Delivery/Storage latency, a pinned 120-frame Qt interval
-window, and provisional/finalized VM turn durations; UI-backend payload bytes
-and per-turn VM peak memory remain explicitly unmeasured.
+window, semantic UI↔Core payload sizes/latency, and provisional/finalized VM
+turn durations; transport wire bytes and per-turn VM peak memory remain
+explicitly unmeasured.
 The local profile deliberately makes no public-finality claim. A clean
 public-testnet release run still needs public LEZ finality, creator removal, and
 final performance/resource evidence.

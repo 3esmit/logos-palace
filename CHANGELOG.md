@@ -71,7 +71,8 @@ after its first published release.
   source-pinned timing semantics, and a separate framebuffer capture fence.
 - Local compiled MVP evidence now includes provider-offline missing-object
   degradation, pinned frame intervals, and provisional/finalized VM turn
-  durations without embedding asset data in the product.
+  durations plus semantic UI/Core payload measurements without embedding asset
+  data in the product.
 
 ### Changed
 
