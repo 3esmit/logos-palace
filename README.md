@@ -34,12 +34,13 @@ source includes:
   program/root exclusion, transient cgroup-v2 scopes, resumable active-run
   claims, exact evidence reopening, and allowlist-only publication.
 
-The full compiled Basecamp MVP has not yet passed one final end-to-end release
-run. In particular, the LEZ-backed door flow, automatic authority rebuild when
-no local bundle exists, all restart paths, creator removal, and final
-performance/resource evidence remain release requirements. Package builds,
-contract tests, and individual scenario reports do not by themselves establish MVP
-completion.
+The compiled local-development MVP user story now passes with three independent
+Basecamp clients: operator-selected backgrounds are published and fetched,
+ordered Delivery traffic converges, the door promotes a room transition,
+moderation rejects banned traffic, and clients recover after the provider stops.
+The local profile deliberately makes no public-finality claim. A clean
+public-testnet release run still needs public LEZ finality, creator removal, and
+final performance/resource evidence.
 
 See [Architecture](ARCHITECTURE.md), [CHANGELOG](CHANGELOG.md),
 [Security](SECURITY.md), and [Support](SUPPORT.md).
@@ -201,6 +202,38 @@ The first two scenarios have standalone scoped launchers. Production scenarios
 three and four are claim-bound and run only through the full runner. Read each
 generated JSON report before citing a result, and state the source snapshot
 and remaining unverified behavior.
+
+### Local compiled MVP user story
+
+Use the local runner for the stack-complete MVP loop without replaying public
+testnet history. It starts a real local sequencer, deploys the supplied Palace
+program, launches three compiled Basecamp clients, and writes a path-free
+`local-mvp-report.json` plus screenshots under the chosen artifacts directory.
+Every runtime dependency and the asset manifest are explicit inputs:
+
+```sh
+PALACE_LEZ_PROFILE=local-development \
+PALACE_LOCAL_MVP_SEQUENCER=/path/to/sequencer_service \
+PALACE_LOCAL_MVP_SEQUENCER_CONFIG=/path/to/sequencer_config.json \
+PALACE_LOCAL_MVP_BASECAMP=/path/to/LogosBasecamp \
+LOGOS_QT_MCP=/path/to/logos-qt-mcp \
+PALACE_LOCAL_MVP_LGPM=/path/to/lgpm \
+PALACE_LOCAL_MVP_DEPLOY_TOOL=/path/to/deploy_program_ffi \
+PALACE_LOCAL_MVP_PROGRAM=/path/to/palace.bin \
+PALACE_LOCAL_MVP_LEZ_LGX=/path/to/lez_core.lgx \
+PALACE_LOCAL_MVP_STORAGE_LGX=/path/to/storage.lgx \
+PALACE_LOCAL_MVP_DELIVERY_LGX=/path/to/delivery.lgx \
+PALACE_LOCAL_MVP_VM_LGX=/path/to/palace_vm.lgx \
+PALACE_LOCAL_MVP_CONTROL_LGX=/path/to/logos_control_ui.lgx \
+PALACE_LOCAL_MVP_CORE_LGX=/path/to/palace_core.lgx \
+PALACE_LOCAL_MVP_UI_LGX=/path/to/logos_palace_ui.lgx \
+PALACE_E2E_ASSET_INPUT_ROOT=/path/to/asset-inputs \
+PALACE_E2E_ASSET_MANIFEST=/path/to/asset-inputs/manifest-v1.json \
+./scripts/run-basecamp-local-mvp.sh .artifacts/local-mvp
+```
+
+The asset manifest selects backgrounds and optional props; no product asset
+filename is compiled into the runner.
 
 Before creating a scope, each standalone launcher attests its exact lock
 chain. It reopens the supervisor and runner parent relationship, start times,

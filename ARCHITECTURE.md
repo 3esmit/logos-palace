@@ -306,12 +306,15 @@ before public projection.
 
 ## Current integration limits
 
-- The Basecamp door path is not yet proven through one complete
-  provisional-VM → LEZ-finality → finalized-VM promotion cycle.
-- Automatic finalized-history rebuild is not yet wired into every cold-start
-  path.
-- Full identity registration, moderation, restart, and creator-removal
-  behavior still needs one compiled multi-instance release run.
+- The local-development compiled story proves the door path through a
+  provisional-VM → local-sequencer promotion cycle; one public LEZ-finality →
+  finalized-VM release cycle remains outstanding.
+- Local profile authority rebuild and Storage retention are proven after a
+  provider restart; every public finalized-history cold-start path still needs
+  release evidence.
+- Identity registration, moderation, restart, and operator-selected asset
+  recovery pass in the local three-client story. Creator removal still needs a
+  compiled release run.
 - Testnet keys, dependency forks, and the deployed program are not
   production-audited.
 - Private rooms and private LEZ state are out of scope for this MVP.
