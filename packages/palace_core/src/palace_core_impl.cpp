@@ -463,6 +463,21 @@ std::optional<std::string> palaceIdFromUri(
     return palaceId;
 }
 
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+std::optional<std::string> storageAcceptanceHolderId(
+    const std::string& profile)
+{
+    if (profile != "alice"
+        && profile != "bob"
+        && profile != "carol") {
+        return std::nullopt;
+    }
+    return palace::crypto::sha256Hex(
+        "logos-palace-storage-acceptance-holder-v1\n"
+        + profile + "\n");
+}
+#endif
+
 std::string base64Url(const std::string& bytes)
 {
     return QByteArray(
@@ -668,23 +683,35 @@ struct DeliveryStartConfig {
     bool accepted = false;
     std::string reason;
     std::string moduleConfig;
+    std::string acceptanceProfile;
 };
 
 DeliveryStartConfig parseDeliveryStartConfig(const std::string& nodeConfig)
 {
     if (nodeConfig.empty())
-        return {false, "empty-config", {}};
+        return {false, "empty-config", {}, {}};
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(
         QByteArray::fromStdString(nodeConfig), &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
-        return {false, "invalid-config", {}};
+        return {false, "invalid-config", {}, {}};
 
     QJsonObject object = document.object();
+    std::string profile;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    const QJsonValue profileValue =
+        object.take(QStringLiteral("palaceAcceptanceProfile"));
+    if (!profileValue.isUndefined()) {
+        if (!profileValue.isString())
+            return {false, "invalid-acceptance-profile", {}, {}};
+        profile = profileValue.toString().toStdString();
+    }
+#endif
     return {
         true,
         "accepted",
         QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString(),
+        profile,
     };
 }
 
@@ -967,6 +994,16 @@ void PalaceCoreImpl::onContextReady()
         persistStartupProjection();
     }
 
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    if (!m_lezAuthorityReady
+        && !palace::bootstrapDeliveryAcceptanceAuthority(
+            m_deliveryAuthority)) {
+        m_projection.setSyncHealth(palace::SyncHealth::Degraded);
+        persistStartupProjection();
+        return;
+    }
+#endif
+
     m_deliverySession =
         std::make_unique<palace::PalaceDeliverySession>(m_deliveryAuthority);
     const bool deliverySessionExists =
@@ -1054,24 +1091,48 @@ void PalaceCoreImpl::onContextReady()
             persistProjection();
         }
     } else if (m_deliverySession->hasConfiguration()) {
-        const std::string& sender =
-            m_deliverySession->configuration().senderUserId;
-        if (m_deliveryIdentity.valid()
-            && m_deliveryIdentity.accountId() == sender) {
-            m_deliveryProfile =
-                m_deliveryIdentity.accountId();
-            m_deliveryDisplayName =
-                m_deliveryIdentity.displayName();
-            m_deliveryKeyEpoch =
-                m_deliveryIdentity.deliveryKeyEpoch();
-            m_deliverySigner = &m_deliveryIdentity;
-        } else {
-            m_projection.setSyncHealth(
-                palace::SyncHealth::Degraded);
-            persistProjection();
-        }
+            const std::string& sender =
+                m_deliverySession->configuration().senderUserId;
+            if (m_deliveryIdentity.valid()
+                && m_deliveryIdentity.accountId() == sender) {
+                m_deliveryProfile =
+                    m_deliveryIdentity.accountId();
+                m_deliveryDisplayName =
+                    m_deliveryIdentity.displayName();
+                m_deliveryKeyEpoch =
+                    m_deliveryIdentity.deliveryKeyEpoch();
+                m_deliverySigner = &m_deliveryIdentity;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            } else if (palace::deliveryAcceptanceIdentity(
+                           sender,
+                           m_deliveryAcceptanceIdentity)) {
+                m_deliveryProfile =
+                    m_deliveryAcceptanceIdentity.userId;
+                m_deliveryDisplayName =
+                    m_deliveryAcceptanceIdentity.displayName;
+                m_deliveryKeyEpoch =
+                    m_deliveryAcceptanceIdentity.keyEpoch;
+                m_deliverySigner =
+                    &m_deliveryAcceptanceIdentity.signer;
+#endif
+            } else {
+                m_projection.setSyncHealth(
+                    palace::SyncHealth::Degraded);
+                persistProjection();
+            }
     }
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    if (m_deliverySession->hasConfiguration()
+        && m_deliverySession->configuration().networkId
+            == "logos.test") {
+        m_deliverySession->replaceAllowedProps(
+            palace::deliveryAcceptanceAllowedProps());
+    } else {
+        refreshDeliveryAllowedProps();
+    }
+#else
     refreshDeliveryAllowedProps();
+#endif
 }
 
 bool PalaceCoreImpl::persistProjection()
@@ -1519,8 +1580,24 @@ void PalaceCoreImpl::refreshDeliveryAllowedProps()
             if (m_deliverySession->reconcileAuthority())
                 persistDeliverySessionLocked();
         };
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    if (m_deliverySession->hasConfiguration()
+        && m_deliverySession->configuration().networkId
+            == "logos.test") {
+        replaceAndReconcile(
+            palace::deliveryAcceptanceAllowedProps());
+        return;
+    }
+#endif
     if (!m_lezAuthorityReady) {
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+        replaceAndReconcile(
+            m_lezAuthorityState == "missing"
+                ? palace::deliveryAcceptanceAllowedProps()
+                : std::map<std::string, std::string>{});
+#else
         replaceAndReconcile({});
+#endif
         return;
     }
     replaceAndReconcile(productionDeliveryAllowedProps());
@@ -1943,8 +2020,18 @@ std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
             return "rejected=room-transition-recovery";
         if (m_deliverySession
             && m_deliverySession->hasConfiguration()) {
+            const palace::DeliverySessionConfigV1& config =
+                m_deliverySession->configuration();
             std::string finalizedRoomId;
             std::int64_t finalizedRoomEpoch = -1;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            if (config.networkId == "logos.test"
+                && config.palaceId == "palace-1") {
+                finalizedRoomId = roomId;
+                finalizedRoomEpoch =
+                    palace::deliveryAcceptanceRoomEpoch(roomId);
+            } else {
+#endif
             if (!m_lezAuthorityReady)
                 return "rejected=delivery-finalized-authority-required";
             const ActiveGate3Content content =
@@ -1970,6 +2057,9 @@ std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
             finalizedRoomEpoch =
                 static_cast<std::int64_t>(
                     finalizedRoom.revision);
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            }
+#endif
 
             auto stagedSession =
                 std::make_unique<
@@ -4430,7 +4520,7 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
     if (!parsed.accepted)
         return "rejected=delivery-" + parsed.reason;
 
-    std::string selectedProfile;
+    std::string selectedProfile = parsed.acceptanceProfile;
     {
         std::lock_guard<std::mutex> lock(m_deliveryMutex);
         if (!m_deliverySession)
@@ -4439,17 +4529,34 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
             selectedProfile = m_deliverySession->configuration().senderUserId;
     }
 
-    if (!m_deliveryIdentity.valid())
-        return "rejected=delivery-identity-required";
-    if (selectedProfile.empty())
-        selectedProfile = m_deliveryIdentity.accountId();
-    if (selectedProfile != m_deliveryIdentity.accountId())
-        return "rejected=delivery-profile-does-not-match-identity";
-    if (m_deliveryAuthority.deliveryKeyFor(
-            m_deliveryIdentity.accountId(),
-            m_deliveryIdentity.deliveryKeyEpoch())
-        != m_deliveryIdentity.publicKey()) {
-        return "rejected=delivery-identity-not-finalized";
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    palace::DeliveryAcceptanceIdentity acceptanceIdentity;
+    const bool acceptance =
+        !parsed.acceptanceProfile.empty()
+        || (!selectedProfile.empty()
+            && palace::deliveryAcceptanceIdentity(
+                selectedProfile, acceptanceIdentity));
+    if (acceptance
+        && !palace::deliveryAcceptanceIdentity(
+            selectedProfile, acceptanceIdentity)) {
+        return "rejected=delivery-invalid-acceptance-profile";
+    }
+#else
+    const bool acceptance = false;
+#endif
+    if (!acceptance) {
+        if (!m_deliveryIdentity.valid())
+            return "rejected=delivery-identity-required";
+        if (selectedProfile.empty())
+            selectedProfile = m_deliveryIdentity.accountId();
+        if (selectedProfile != m_deliveryIdentity.accountId())
+            return "rejected=delivery-profile-does-not-match-identity";
+        if (m_deliveryAuthority.deliveryKeyFor(
+                m_deliveryIdentity.accountId(),
+                m_deliveryIdentity.deliveryKeyEpoch())
+            != m_deliveryIdentity.publicKey()) {
+            return "rejected=delivery-identity-not-finalized";
+        }
     }
 
     std::vector<palace::DeliverySessionCommand> commands;
@@ -4469,31 +4576,78 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
                 return "rejected=delivery-profile-does-not-match-restart-state";
             }
         } else {
-            const std::string roomId = m_deliveryAuthority.entryRoomId();
-            const std::int64_t roomEpoch =
-                m_deliveryAuthority.roomEpoch(roomId);
+            std::string roomId;
+            std::int64_t roomEpoch = -1;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            if (acceptance) {
+                roomId = m_projection.currentRoomId();
+                roomEpoch =
+                    palace::deliveryAcceptanceRoomEpoch(roomId);
+            } else {
+#endif
+                roomId = m_deliveryAuthority.entryRoomId();
+                roomEpoch = m_deliveryAuthority.roomEpoch(roomId);
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            }
+#endif
             palace::DeliverySessionConfigV1 config;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            config.networkId = acceptance
+                ? "logos.test"
+                : palace::PalaceLezReleaseLock::network().networkId;
+            config.palaceId = acceptance
+                ? "palace-1" : m_deliveryAuthority.palaceId();
+#else
             config.networkId =
                 lezProfile->network.networkId;
             config.palaceId = m_deliveryAuthority.palaceId();
+#endif
             config.roomId = roomId;
             config.roomEpoch = roomEpoch;
             config.senderUserId = selectedProfile;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+            config.senderKeyEpoch = acceptance
+                ? acceptanceIdentity.keyEpoch
+                : m_deliveryIdentity.deliveryKeyEpoch();
+#else
             config.senderKeyEpoch =
                 m_deliveryIdentity.deliveryKeyEpoch();
+#endif
             if (roomEpoch < 0 || !m_deliverySession->configure(config))
                 return "rejected=delivery-session-config";
             persistDeliverySessionLocked();
         }
 
-        m_deliveryDisplayName = m_deliveryIdentity.displayName();
-        m_deliveryKeyEpoch =
-            m_deliveryIdentity.deliveryKeyEpoch();
-        m_deliverySigner = &m_deliveryIdentity;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+        if (acceptance) {
+            m_deliveryAcceptanceIdentity =
+                std::move(acceptanceIdentity);
+            m_deliveryDisplayName =
+                m_deliveryAcceptanceIdentity.displayName;
+            m_deliveryKeyEpoch =
+                m_deliveryAcceptanceIdentity.keyEpoch;
+            m_deliverySigner =
+                &m_deliveryAcceptanceIdentity.signer;
+        } else {
+#endif
+            m_deliveryDisplayName = m_deliveryIdentity.displayName();
+            m_deliveryKeyEpoch =
+                m_deliveryIdentity.deliveryKeyEpoch();
+            m_deliverySigner = &m_deliveryIdentity;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+        }
+#endif
         m_deliveryProfile = selectedProfile;
         m_deliveryNodeConfig = parsed.moduleConfig;
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+        m_deliverySession->replaceAllowedProps(
+            acceptance
+            ? palace::deliveryAcceptanceAllowedProps()
+            : productionDeliveryAllowedProps());
+#else
         m_deliverySession->replaceAllowedProps(
             productionDeliveryAllowedProps());
+#endif
 
         const palace::DeliverySessionState state = m_deliverySession->state();
         const bool sessionActive =
@@ -5443,7 +5597,22 @@ std::string PalaceCoreImpl::startStorage(const std::string& nodeConfig)
         return "rejected=storage-directory-escaped-instance-root";
 
     QJsonObject config = document.object();
+#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
+    const QJsonValue acceptanceHolder =
+        config.take(QStringLiteral("palaceAcceptanceHolderProfile"));
     std::string holderAccountId;
+    if (!acceptanceHolder.isUndefined()) {
+        if (!acceptanceHolder.isString())
+            return "rejected=storage-invalid-acceptance-holder";
+        const auto fixtureHolder = storageAcceptanceHolderId(
+            acceptanceHolder.toString().toStdString());
+        if (!fixtureHolder.has_value())
+            return "rejected=storage-invalid-acceptance-holder";
+        holderAccountId = *fixtureHolder;
+    } else
+#else
+    std::string holderAccountId;
+#endif
     if (m_deliveryIdentity.valid()
                && isLowerHexAccountId(
                    m_deliveryIdentity.accountId())) {

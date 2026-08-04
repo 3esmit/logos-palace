@@ -1,5 +1,8 @@
 #include <logos_test.h>
 
+#include <type_traits>
+
+#include "palace_delivery_acceptance_fixture.h"
 #include "palace_delivery_bridge.h"
 
 LOGOS_TEST(delivery_request_correlation_is_bounded_and_terminally_consumed) {
@@ -446,4 +449,48 @@ LOGOS_TEST(delivery_bridge_projection_is_deterministic_and_length_framed) {
             ";presence_expires=100;motion=25,50,90"
             ";speech=13:hello; lounge;speech_expires=80"
             ";props=2:5:badge9:test-prop\n"));
+}
+
+LOGOS_TEST(delivery_acceptance_fixture_uses_real_bound_ed25519_identities) {
+    static_assert(!std::is_copy_constructible_v<palace::Ed25519KeyPair>);
+    static_assert(!std::is_copy_assignable_v<palace::Ed25519KeyPair>);
+    static_assert(std::is_move_constructible_v<palace::Ed25519KeyPair>);
+
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(
+        palace::bootstrapDeliveryAcceptanceAuthority(authority));
+
+    palace::DeliveryAcceptanceIdentity alice;
+    palace::DeliveryAcceptanceIdentity bob;
+    LOGOS_ASSERT_TRUE(
+        palace::deliveryAcceptanceIdentity("alice", alice));
+    LOGOS_ASSERT_TRUE(
+        palace::deliveryAcceptanceIdentity("bob", bob));
+    LOGOS_ASSERT_FALSE(
+        palace::deliveryAcceptanceIdentity("mallory", bob));
+    LOGOS_ASSERT_EQ(
+        authority.deliveryKeyFor("alice", 1),
+        alice.signer.publicKeyHex());
+    LOGOS_ASSERT_EQ(
+        authority.deliveryKeyFor("acceptance-injector", 4),
+        std::string(
+            "278117fc144c72340f67d0f2316e8386"
+            "ceffbf2b2428c9c51fef7c597f1d426e"));
+    LOGOS_ASSERT_EQ(
+        authority.deliveryKeyFor("bob", 2),
+        bob.signer.publicKeyHex());
+
+    const std::string message = "gate-2-fixture-envelope";
+    palace::Ed25519EnvelopeVerifier verifier;
+    LOGOS_ASSERT_TRUE(verifier.verify(
+        alice.signer.publicKeyHex(), message,
+        alice.signer.signHex(message)));
+    LOGOS_ASSERT_FALSE(verifier.verify(
+        bob.signer.publicKeyHex(), message,
+        alice.signer.signHex(message)));
+    LOGOS_ASSERT_EQ(
+        palace::deliveryAcceptanceRoomEpoch("atrium"),
+        static_cast<std::int64_t>(9));
+    LOGOS_ASSERT_TRUE(
+        palace::deliveryAcceptanceAllowedProps().empty());
 }

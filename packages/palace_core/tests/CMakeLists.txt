@@ -17,6 +17,7 @@ logos_test(
         ../src/palace_delivery.cpp
         ../src/palace_delivery_session.cpp
         ../src/palace_delivery_bridge.cpp
+        fixtures/palace_delivery_acceptance_fixture.cpp
         ../src/palace_callback_lifetime.h
         ../src/palace_projection.cpp
         ../src/palace_room_transition.cpp
@@ -94,6 +95,7 @@ logos_test(
         test_core_vm_recovery.cpp
     EXTRA_INCLUDES
         ../src
+        fixtures
 )
 
 target_link_libraries(

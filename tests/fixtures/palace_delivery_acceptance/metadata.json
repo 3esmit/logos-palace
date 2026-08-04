@@ -1,0 +1,24 @@
+{
+  "name": "palace_delivery_acceptance",
+  "display_name": "Palace Delivery Acceptance",
+  "author": "Ricardo Guilherme Schmidt",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "test",
+  "description": "Local-only canned Delivery adversary for Palace acceptance tests",
+  "main": "palace_delivery_acceptance_plugin",
+  "view": "qml/Main.qml",
+  "dependencies": ["delivery_module"],
+  "codegen": { "rep": "src/palace_delivery_acceptance.rep" },
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

@@ -28,6 +28,19 @@
         flakeInputs = inputs // { palace_vm = palaceVm; };
       };
 
+      # Acceptance gates may receive a Core binary compiled with public
+      # fixture identities. Production Core outputs keep the option disabled.
+      palaceCoreAcceptance = logos-module-builder.lib.mkLogosModule {
+        src = ./packages/palace_core;
+        configFile = ./packages/palace_core/metadata.json;
+        flakeInputs = inputs // { palace_vm = palaceVm; };
+        preConfigure = ''
+          cmakeFlagsArray+=(
+            "-DPALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE=ON"
+          )
+        '';
+      };
+
       palaceUi = logos-module-builder.lib.mkLogosQmlModule {
         src = ./packages/logos_palace_ui;
         configFile = ./packages/logos_palace_ui/metadata.json;
@@ -37,8 +50,109 @@
         };
       };
 
+      palaceDeliveryAcceptance = logos-module-builder.lib.mkLogosQmlModule {
+        src = ./tests/fixtures/palace_delivery_acceptance;
+        configFile = ./tests/fixtures/palace_delivery_acceptance/metadata.json;
+        flakeInputs = inputs;
+      };
+
       systems = builtins.attrNames palaceVm.packages;
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      palaceCoreProductionFixtureAuditFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          productionCoreLib = palaceCore.packages.${system}.lib;
+        in pkgs.runCommand
+          "logos-palace-core-production-fixture-audit"
+          {
+            nativeBuildInputs = [
+              pkgs.binutils
+              pkgs.findutils
+              pkgs.gnugrep
+            ];
+          }
+          ''
+            core_plugin="$(
+              find "${productionCoreLib}" -type f \
+                -name 'palace_core_plugin.*' -print -quit
+            )"
+            if [ -z "$core_plugin" ]; then
+              echo "Production Core plugin was not found" >&2
+              exit 1
+            fi
+            for forbidden in \
+              logos-palace-storage-acceptance-holder-v1 \
+              palace_delivery_acceptance_fixture.cpp \
+              9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60 \
+              4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb \
+              c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7
+            do
+              if grep -R -a -F -q \
+                -- "$forbidden" "${productionCoreLib}"; then
+                echo "Production Core contains an acceptance fixture marker" >&2
+                exit 1
+              fi
+            done
+            for forbidden_wide in \
+              palaceAcceptanceProfile \
+              palaceAcceptanceHolderProfile
+            do
+              if strings -a -el "$core_plugin" \
+                  | grep -F -- "$forbidden_wide" >/dev/null; then
+                echo "Production Core contains an acceptance profile hook" >&2
+                exit 1
+              fi
+            done
+            mkdir -p "$out"
+            touch "$out/passed"
+          '';
+      palaceCoreAcceptanceFixtureAuditFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          acceptanceCoreLib =
+            palaceCoreAcceptance.packages.${system}.lib;
+        in pkgs.runCommand
+          "logos-palace-core-acceptance-fixture-audit"
+          {
+            nativeBuildInputs = [
+              pkgs.binutils
+              pkgs.findutils
+              pkgs.gnugrep
+            ];
+          }
+          ''
+            core_plugin="$(
+              find "${acceptanceCoreLib}" -type f \
+                -name 'palace_core_plugin.*' -print -quit
+            )"
+            if [ -z "$core_plugin" ]; then
+              echo "Acceptance Core plugin was not found" >&2
+              exit 1
+            fi
+            for required in \
+              logos-palace-storage-acceptance-holder-v1 \
+              palace_delivery_acceptance_fixture.cpp \
+              9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
+            do
+              if ! grep -R -a -F -q \
+                -- "$required" "${acceptanceCoreLib}"; then
+                echo "Acceptance Core is missing its fixture marker" >&2
+                exit 1
+              fi
+            done
+            for required_wide in \
+              palaceAcceptanceProfile \
+              palaceAcceptanceHolderProfile
+            do
+              if ! strings -a -el "$core_plugin" \
+                  | grep -F -- "$required_wide" >/dev/null; then
+                echo "Acceptance Core is missing a profile hook" >&2
+                exit 1
+              fi
+            done
+            mkdir -p "$out"
+            touch "$out/passed"
+          '';
       palaceImageIdFor = system:
         let pkgs = import nixpkgs { inherit system; };
         in pkgs.rustPlatform.buildRustPackage {
@@ -378,6 +492,14 @@
           palace-release-artifact = palaceReleaseArtifact;
           delivery-module-lgx-portable =
             inputs.delivery_module.packages.${system}.lgx-portable;
+          palace-delivery-acceptance-lgx-portable =
+            palaceDeliveryAcceptance.packages.${system}.lgx-portable;
+          palace-core-acceptance-lgx-portable =
+            palaceCoreAcceptance.packages.${system}.lgx-portable;
+          palace-core-production-fixture-audit =
+            palaceCoreProductionFixtureAuditFor system;
+          palace-core-acceptance-fixture-audit =
+            palaceCoreAcceptanceFixtureAuditFor system;
           storage-module-lgx-portable =
             inputs.storage_module.packages.${system}.lgx-portable;
           lez-core-lgx-portable =
@@ -403,6 +525,10 @@
         in {
           palace-vm-contracts = palaceVm.checks.${system}.unit-tests;
           palace-core-contracts = palaceCore.checks.${system}.unit-tests;
+          palace-core-production-fixture-audit =
+            palaceCoreProductionFixtureAuditFor system;
+          palace-core-acceptance-fixture-audit =
+            palaceCoreAcceptanceFixtureAuditFor system;
           palace-release-artifact = palaceReleaseArtifactFor system;
         } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           palace-acceptance-seams = palaceAcceptanceSeamsFor system;
