@@ -14,7 +14,7 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
     LOGOS_ASSERT_EQ(network.programBytecodeSha256Hex.size(), 64U);
     LOGOS_ASSERT_EQ(
         network.moduleRevision,
-        std::string("a302960d92468dec8ad7d65e2a9ee81ab7abf3d0"));
+        std::string("a23e706f7a462c0fbf9fbf853efb76296b21c0cd"));
     LOGOS_ASSERT_EQ(
         network.runtimeRevision,
         std::string("8b2a2ee80739c66368ab24ed1751b83fb532bdce"));
@@ -31,26 +31,26 @@ LOGOS_TEST(lez_release_lock_binds_wallet_module_runtime_program_and_explorer)
         std::string("3022937127152978530"));
 
     LOGOS_ASSERT_TRUE(palace::PalaceLezReleaseLock::acceptsLiveModule(
-        "lez_core", "0.4.0-alpha.2",
+        "lez_core", "0.4.0-alpha.3",
         "https://testnet.lez.logos.co"));
     LOGOS_ASSERT_TRUE(palace::PalaceLezReleaseLock::acceptsLiveModule(
-        "lez_core", "0.4.0-alpha.2",
+        "lez_core", "0.4.0-alpha.3",
         "https://testnet.lez.logos.co/"));
 }
 
 LOGOS_TEST(lez_release_lock_rejects_any_live_surface_drift)
 {
     LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
-        "lez-core", "0.4.0-alpha.2",
+        "lez-core", "0.4.0-alpha.3",
+        "https://testnet.lez.logos.co"));
+    LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
+        "lez_core", "0.4.0-alpha.2",
         "https://testnet.lez.logos.co"));
     LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
         "lez_core", "0.4.0-alpha.3",
-        "https://testnet.lez.logos.co"));
-    LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
-        "lez_core", "0.4.0-alpha.2",
         "https://other.example"));
     LOGOS_ASSERT_FALSE(palace::PalaceLezReleaseLock::acceptsLiveModule(
-        "lez_core", "0.4.0-alpha.2",
+        "lez_core", "0.4.0-alpha.3",
         "https://testnet.lez.logos.co/other"));
     const std::string& walletConfig =
         palace::PalaceLezReleaseLock::walletConfigJson();
