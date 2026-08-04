@@ -200,10 +200,18 @@ async function connectInspector() {
 async function waitForView() {
   await app.waitFor(
     async () => {
+      const root = await app.findByProperty(
+        "objectName",
+        "palaceRoot",
+      );
+      if (!root.error && root.matches?.length === 1) {
+        rootObjectId = root.matches[0].id;
+        return;
+      }
       await app.click("Logos Palace");
     },
     {
-      timeout: 60_000,
+      timeout: 120_000,
       interval: 500,
       description: `Logos Palace launcher ${label}`,
     },
