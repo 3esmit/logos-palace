@@ -151,6 +151,39 @@ function statusNumber(status, name) {
   return Number.isSafeInteger(value) ? value : 0;
 }
 
+function catalogObject(catalogBase64, objectId) {
+  const catalog = Buffer.from(String(catalogBase64), "base64url").toString("utf8");
+  const line = catalog.split("\n").find((entry) => entry.startsWith(`object=${objectId};`));
+  if (!line) throw new Error(`Storage catalog lacks ${objectId}`);
+  const fields = line.slice("object=".length).split(";");
+  if (fields.length !== 6 || fields[0] !== objectId
+    || fields[2] !== "image/png" || !/^[0-9a-f]{64}$/.test(fields[5])) {
+    throw new Error(`Storage catalog object ${objectId} is invalid`);
+  }
+  const byteLength = Number(fields[4]);
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
+    throw new Error(`Storage catalog object ${objectId} byte length is invalid`);
+  }
+  return {
+    objectId,
+    type: fields[1],
+    mediaType: fields[2],
+    cid: fields[3],
+    byteLength,
+    contentSha256: fields[5],
+  };
+}
+
+function derivedMissingCid(cid, offset) {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const value = String(cid);
+  const index = alphabet.indexOf(value.at(-1));
+  if (value.length < 4 || index < 0) {
+    throw new Error(`Storage CID cannot derive missing fixture: ${value}`);
+  }
+  return value.slice(0, -1) + alphabet[(index + offset) % alphabet.length];
+}
+
 function propertyMap(response) {
   if (response.error) throw new Error(`properties: ${response.error}`);
   return Object.fromEntries((response.properties ?? []).map((entry) => [entry.name, entry.value]));
@@ -285,6 +318,18 @@ class BasecampSession {
     });
     if (result.error) throw new Error(`${this.label} ${method}: ${result.error}`);
     return result.result;
+  }
+
+  async evaluate(root, expression) {
+    if (typeof expression !== "string" || expression.length > 70_000) {
+      throw new Error(`${this.label} evaluate expression is invalid`);
+    }
+    const result = await this.inspector.send("evaluate", {
+      objectId: root,
+      expression,
+    });
+    if (result.error) throw new Error(`${this.label} evaluate: ${result.error}`);
+    return result;
   }
 
   async waitForProperty(objectId, predicate, description, timeout = 120_000) {
@@ -520,6 +565,22 @@ async function invokeWatchedReceipt(session, root, method, args, description) {
   return receipt;
 }
 
+async function invokeWatchedExpression(session, root, expression, description) {
+  const startedAt = Date.now();
+  const before = await session.properties(root);
+  const sequence = Number(before.invocationSequence ?? 0);
+  const immediate = await session.evaluate(root, expression);
+  if (isRejected(immediate.result)) throw new Error(`${description}: ${immediate.result}`);
+  const state = await session.waitForProperty(root, (value) =>
+    Number(value.invocationSequence ?? 0) > sequence
+      && !isRejected(value.invocationError)
+      && String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0,
+  `${description} receipt`, 180_000);
+  const receipt = String(state.watchedActionReceipt || state.lastActionReceipt);
+  timingSamples.actionReceipt.push({ operation: expression.split("(", 1)[0], elapsedMs: Date.now() - startedAt });
+  return receipt;
+}
+
 async function verifyStorageRetention(session, root, description) {
   const startedAt = Date.now();
   const receipt = await invokeWatchedReceipt(
@@ -541,6 +602,82 @@ async function verifyStorageRetention(session, root, description) {
   }, `${description} retained catalog`, 300_000);
   timingSamples.storageRetention.push(Date.now() - startedAt);
   return { receipt, status: state.storageStatus };
+}
+
+async function proveMissingStorageObject(session, root, catalogBase64) {
+  const object = catalogObject(catalogBase64, "background-atrium");
+  const missingSourceCid = derivedMissingCid(object.cid, 1);
+  const missingDerivativeCid = derivedMissingCid(object.cid, 2);
+  const before = await invokeWatchedReceipt(
+    session,
+    root,
+    "gate3AssetStatus",
+    [missingDerivativeCid],
+    "missing Storage object initial status",
+  );
+  if (before !== "missing") {
+    throw new Error(`missing Storage fixture was not missing: ${before}`);
+  }
+  const dispatched = await invokeWatchedExpression(
+    session,
+    root,
+    `gate3FetchPng(${[
+      missingSourceCid,
+      missingDerivativeCid,
+      object.byteLength,
+      object.contentSha256,
+      1600,
+      900,
+    ].map((argument) => JSON.stringify(argument)).join(",")})`,
+    "missing Storage object fetch",
+  );
+  if (dispatched.startsWith("degraded;reason=")) {
+    return {
+      status: "passed",
+      objectId: object.objectId,
+      missingSourceCid,
+      derivativeCid: missingDerivativeCid,
+      expectedContentSha256: object.contentSha256,
+      states: ["missing", "degraded"],
+      before,
+      dispatched,
+      degraded: dispatched,
+      recovery: "missing source is explicit; canonical catalog remains verified",
+    };
+  }
+  if (!dispatched.startsWith("ok;asset=fetching;")) {
+    throw new Error(`missing Storage fetch entered unexpected state: ${dispatched}`);
+  }
+  const deadline = Date.now() + 180_000;
+  let last = dispatched;
+  while (Date.now() < deadline) {
+    last = await invokeWatchedReceipt(
+      session,
+      root,
+      "gate3AssetStatus",
+      [missingDerivativeCid],
+      "missing Storage object status",
+    );
+    if (last.startsWith("degraded;reason=")) {
+      return {
+        status: "passed",
+        objectId: object.objectId,
+        missingSourceCid,
+        derivativeCid: missingDerivativeCid,
+        expectedContentSha256: object.contentSha256,
+        states: ["missing", "fetching", "degraded"],
+        before,
+        dispatched,
+        degraded: last,
+        recovery: "missing source is explicit; canonical catalog remains verified",
+      };
+    }
+    if (last !== "fetching") {
+      throw new Error(`missing Storage object entered unexpected state: ${last}`);
+    }
+    await sleep(500);
+  }
+  throw new Error(`missing Storage object did not degrade: ${last}`);
 }
 
 async function waitForLocalAuthorityAction(session, root, action, description) {
@@ -1185,6 +1322,11 @@ try {
     bobRecoveryRoot,
     "restarted Bob Storage",
   );
+  const missingStorageObject = await proveMissingStorageObject(
+    bob,
+    bobRecoveryRoot,
+    creatorPalace.catalog,
+  );
   const carolRecoveryRetention = await verifyStorageRetention(
     carol,
     carolRecoveryRoot,
@@ -1222,6 +1364,7 @@ try {
   const recovery = {
     providerAOffline: true,
     palaceId,
+    missingStorageObject,
     bob: { screenshot: bobRecoveryEvidence, recoveredSpeech, retention: bobRecoveryRetention, state: await bob.properties(bobRecoveryRoot) },
     carol: { screenshot: carolRecoveryEvidence, bannedEnforced: true, bannedRecoverySend, retention: carolRecoveryRetention, state: carolBannedRecovery },
   };

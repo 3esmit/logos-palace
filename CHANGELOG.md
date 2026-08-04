@@ -100,12 +100,11 @@ after its first published release.
 
 ### Known limitations
 
-- No final compiled Basecamp run yet proves the entire MVP in one source
-  snapshot.
-- The LEZ-backed door path and automatic cold-start history rebuild remain
-  integration gates.
-- Creator removal, complete restart recovery, and performance/resource
-  evidence remain release gates.
+- A public-testnet release run has not yet been demonstrated from one clean
+  source snapshot; the local-development profile is the reproducible MVP
+  acceptance profile.
+- Public finality, creator removal from the public Storage/Delivery topology,
+  and final performance/resource evidence remain release gates.
 - The testnet deployment and dependency forks have not received a production
   security audit.
 - Private rooms and private LEZ state are not implemented.

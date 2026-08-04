@@ -32,6 +32,8 @@ test("local MVP runner requires explicit runtime and asset inputs", async () => 
   assert.match(runner, /timings: result\.timings/);
   assert.match(runner, /propAssigned: Boolean\(result\.creator\?\.palace\?\.propId\)/);
   assert.match(runner, /propBanned: Number\(result\.moderation\?\.banPropAction \?\? 0\) > 0/);
+  assert.match(runner, /missingStorageObject: result\.recovery\?\.missingStorageObject\?\.status === "passed"/);
+  assert.match(runner, /missingStorageStates: result\.recovery\?\.missingStorageObject\?\.states \?\? \[\]/);
   assert.doesNotMatch(runner, /\/home\//);
   assert.doesNotMatch(runner, /PALACE_E2E_ASSET_DIR|PALACE_E2E_ASSET_INPUT_ROOT=.*default/);
 });
@@ -48,6 +50,9 @@ test("local MVP user story derives assets from the validated manifest", async ()
   assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|\/home\//);
   assert.match(flow, /sendToReceive: \{[\s\S]*status: timingSamples\.deliveryReceive\.length > 0 \? "measured" : "not-measured"/);
   assert.match(flow, /every 30th ordered message is awaited/);
+  assert.match(flow, /proveMissingStorageObject/);
+  assert.match(flow, /states: \["missing", "fetching", "degraded"\]/);
+  assert.match(flow, /derivedMissingCid/);
   assert.match(flow, /measurementPolicy/);
 });
 

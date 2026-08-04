@@ -37,7 +37,8 @@ source includes:
 The compiled local-development MVP user story now passes with three independent
 Basecamp clients: operator-selected backgrounds are published and fetched,
 ordered Delivery traffic converges, the door promotes a room transition,
-moderation rejects banned traffic, and clients recover after the provider stops.
+moderation rejects banned traffic, a missing Storage source fails closed with an
+explicit degraded result, and clients recover after the provider stops.
 The local profile deliberately makes no public-finality claim. A clean
 public-testnet release run still needs public LEZ finality, creator removal, and
 final performance/resource evidence.

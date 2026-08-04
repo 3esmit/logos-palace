@@ -257,6 +257,8 @@ const report = {
   moderation: Boolean(result.moderation?.rawDeliveryRejected),
   propBanned: Number(result.moderation?.banPropAction ?? 0) > 0,
   providerRestarted: result.recovery?.providerAOffline === true,
+  missingStorageObject: result.recovery?.missingStorageObject?.status === "passed",
+  missingStorageStates: result.recovery?.missingStorageObject?.states ?? [],
   timings: result.timings ?? null,
 };
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
