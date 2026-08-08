@@ -8,7 +8,7 @@ People meet through a locally run Basecamp application. Live presence and conver
 
 The current release is an **x86_64 Linux productization pre-alpha**. It is an experiment in architecture and community software, not a production social network.
 
-Download [v0.2.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.2.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.2.0-pre-alpha.1/logos-palace-0.2.0-pre-alpha.1-x86_64-linux.tar.gz). The archive SHA-256 is `570715a63c9c7bfbb40f11741318ee4bd37cfe5d1e1ad2448544088cdad613cf`.
+Download [v0.2.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.2.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.2.0-pre-alpha.1/logos-palace-0.2.0-pre-alpha.1-x86_64-linux.tar.gz). Verify its SHA-256 against the checksum sidecar attached to that release.
 
 Before installing Palace, add the [3esmit release catalog](https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json) to the Basecamp package manager. The catalog supplies the forked Delivery, Storage, LEZ Core, and Logos Control packages required by the Palace modules.
 
