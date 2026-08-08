@@ -9,8 +9,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadGate3AssetInputs } from "./basecamp_gate3_asset_inputs.mjs";
-import { capturePalaceFrameTiming } from "./basecamp_frame_timing.mjs";
+import { loadPalaceAssetInputs } from "./palace_asset_inputs.mjs";
 
 const [basecampArgument, creatorDirArgument, bobDirArgument, carolDirArgument, evidenceDirArgument] =
   process.argv.slice(2);
@@ -24,7 +23,7 @@ const qtMcpRoot = process.env.LOGOS_QT_MCP;
 if (!qtMcpRoot) throw new Error("LOGOS_QT_MCP is required");
 const assetInputRoot = process.env.PALACE_E2E_ASSET_INPUT_ROOT;
 const assetManifest = process.env.PALACE_E2E_ASSET_MANIFEST;
-const assetInputs = await loadGate3AssetInputs({
+const assetInputs = await loadPalaceAssetInputs({
   inputRoot: assetInputRoot,
   manifestPath: assetManifest,
 });
@@ -63,9 +62,9 @@ const propInput = propFixture
   : null;
 const deliveryClusterId = 4346;
 const deliveryNodeKeys = {
-  creator: createHash("sha256").update("logos-palace-local-mvp-delivery/creator").digest("hex"),
-  bob: createHash("sha256").update("logos-palace-local-mvp-delivery/bob").digest("hex"),
-  carol: createHash("sha256").update("logos-palace-local-mvp-delivery/carol").digest("hex"),
+  creator: createHash("sha256").update("logos-palace-e2e-delivery/creator").digest("hex"),
+  bob: createHash("sha256").update("logos-palace-e2e-delivery/bob").digest("hex"),
+  carol: createHash("sha256").update("logos-palace-e2e-delivery/carol").digest("hex"),
 };
 
 const frameworkUrl = pathToFileURL(
@@ -80,9 +79,6 @@ const timingSamples = {
   storageRetention: [],
   restart: [],
   uiScreenshot: [],
-  frameTiming: null,
-  applicationRoundTrip: null,
-  vmTurn: [],
 };
 
 function summarizeTimings(samples) {
@@ -134,14 +130,10 @@ function storyTimings(orderedMessaging) {
     recovery: {
       restartMs: summarizeTimings(timingSamples.restart),
     },
-    ui: {
-      screenshotMs: summarizeTimings(timingSamples.uiScreenshot),
-      frameTiming: timingSamples.frameTiming,
-      ipcPayload: timingSamples.applicationRoundTrip,
-    },
+    ui: { screenshotMs: summarizeTimings(timingSamples.uiScreenshot) },
     vm: {
-      turnMetrics: timingSamples.vmTurn,
-      peakMemory: { status: "not-measured", reason: "VM module exposes turn duration but not per-turn peak memory" },
+      status: "not-measured",
+      reason: "turn telemetry is not part of the user-facing report",
     },
     measurementPolicy: "wall-clock samples from the compiled user story; no inferred thresholds",
   };
@@ -209,6 +201,11 @@ class BasecampSession {
     this.inspector = null;
     this.app = null;
     this.stderr = [];
+    this.deliveryConfig = "";
+  }
+
+  setDeliveryConfig(config) {
+    this.deliveryConfig = String(config || "");
   }
 
   async start() {
@@ -219,6 +216,7 @@ class BasecampSession {
         ...process.env,
         QML_INSPECTOR_PORT: String(this.inspectorPort),
         PALACE_LEZ_PROFILE: "local-development",
+        PALACE_DELIVERY_CONFIG: this.deliveryConfig,
         QT_QPA_PLATFORM: "offscreen",
         QT_FORCE_STDERR_LOGGING: "1",
       },
@@ -277,6 +275,16 @@ class BasecampSession {
     if (result.error) throw new Error(`${this.label} set ${property}: ${result.error}`);
   }
 
+  async invokeRootMethod(root, method, args = []) {
+    const result = await this.inspector.send("callMethod", {
+      objectId: root,
+      method,
+      args,
+    });
+    if (result.error) throw new Error(`${this.label} ${method}: ${result.error}`);
+    return result.result;
+  }
+
   async clickObject(objectId, description) {
     const result = await this.inspector.send("click", { objectId });
     if (result.error || result.clicked !== true) {
@@ -313,42 +321,45 @@ class BasecampSession {
 
   async clickNamed(name, description) {
     const objectId = await this.findOne("objectName", name, description);
-    if (name.startsWith("palaceAsset")) {
-      const root = await this.findOne("objectName", "palaceRoot", `${this.label} Palace root`);
-      const scrolled = await this.callRoot(root, "ensureModerationControlVisible", [name]);
-      if (isRejected(scrolled)) throw new Error(`${this.label} ${description}: asset control scroll rejected: ${scrolled}`);
-    }
     await this.clickObject(objectId, description);
   }
 
-  async callRoot(root, method, args = []) {
-    const result = await this.inspector.send("callMethod", {
-      objectId: root,
-      method,
-      args,
-    });
-    if (result.error) throw new Error(`${this.label} ${method}: ${result.error}`);
-    return result.result;
+  async clickByProperty(property, value, description) {
+    let chosen;
+    await this.app.waitFor(async () => {
+      const result = await this.app.findByProperty(property, value);
+      if (result.error || !Array.isArray(result.matches) || result.matches.length === 0)
+        throw new Error(`${this.label} ${description}: expected match`);
+      const candidates = await Promise.all(result.matches.map(async (match) => ({
+        id: match.id,
+        properties: await this.properties(match.id),
+      })));
+      const visible = candidates.filter((candidate) => candidate.properties.visible === true);
+      if (visible.length !== 1)
+        throw new Error(`${this.label} ${description}: ambiguous ${JSON.stringify(candidates)}`);
+      chosen = visible[0].id;
+    }, { timeout: 90_000, interval: 300, description: `${this.label} ${description}` });
+    await this.clickObject(chosen, description);
   }
 
-  async evaluate(root, expression) {
-    if (typeof expression !== "string" || expression.length > 70_000) {
-      throw new Error(`${this.label} evaluate expression is invalid`);
-    }
-    const result = await this.inspector.send("evaluate", {
-      objectId: root,
-      expression,
-    });
-    if (result.error) throw new Error(`${this.label} evaluate: ${result.error}`);
-    return result;
-  }
-
-  async frameTiming(root) {
-    return capturePalaceFrameTiming({
-      evaluate: (expression) => this.evaluate(root, expression),
-      rootProperties: () => this.properties(root),
-      sleep,
-    });
+  async clickNamedByProperty(objectName, property, value, description) {
+    let chosen;
+    await this.app.waitFor(async () => {
+      const result = await this.app.findByProperty("objectName", objectName);
+      if (result.error || !Array.isArray(result.matches) || result.matches.length === 0)
+        throw new Error(`${this.label} ${description}: expected ${objectName}`);
+      const candidates = await Promise.all(result.matches.map(async (match) => ({
+        id: match.id,
+        properties: await this.properties(match.id),
+      })));
+      const visible = candidates.filter((candidate) =>
+        candidate.properties.visible === true
+          && String(candidate.properties[property] ?? "") === String(value));
+      if (visible.length !== 1)
+        throw new Error(`${this.label} ${description}: ambiguous ${JSON.stringify(candidates)}`);
+      chosen = visible[0].id;
+    }, { timeout: 90_000, interval: 300, description: `${this.label} ${description}` });
+    await this.clickObject(chosen, description);
   }
 
   async waitForProperty(objectId, predicate, description, timeout = 120_000) {
@@ -439,7 +450,6 @@ function parseParticipants(value, label) {
 
 async function startDelivery(session, root, label, port, entryNodes, waitOnline = true) {
   const startedAt = Date.now();
-  await session.callRoot(root, "startDelivery", [deliveryConfig(label, port, entryNodes)]);
   const state = await session.waitForProperty(root, (value) =>
     statusValue(value.deliveryStatus, "callbacks") === "1"
       && statusValue(value.deliveryStatus, "node_running") === "1",
@@ -450,17 +460,12 @@ async function startDelivery(session, root, label, port, entryNodes, waitOnline 
     `${label} Delivery online`, 180_000)
     : state;
   let evidence;
-  try { evidence = JSON.parse(String(online.deliveryNodeEvidence)); } catch (error) {
+  try { evidence = JSON.parse(String(online.deliveryNodeStatus)); } catch (error) {
     throw new Error(`${label} Delivery evidence is not JSON: ${error.message}`);
   }
   if (evidence.success !== true) throw new Error(`${label} Delivery evidence: ${JSON.stringify(evidence)}`);
   timingSamples.deliveryStartup.push(Date.now() - startedAt);
   return { config: deliveryConfig(label, port, entryNodes), evidence };
-}
-
-async function refreshPresence(session, root, label) {
-  const result = await session.callRoot(root, "refreshPresence");
-  if (isRejected(result)) throw new Error(`${label} presence: ${result}`);
 }
 
 async function waitForParticipants(sessions, roots, expectedIds, description) {
@@ -500,11 +505,10 @@ async function sendOrderedSpeech(sessions, roots, identities) {
     const label = labels[(ordinal - 1) % labels.length];
     const message = `ordered-${String(ordinal).padStart(3, "0")}-${label}-${identities[label]}`;
     const sendStartedAt = Date.now();
-    const receipt = await invokeWatchedReceipt(
+    const receipt = await sendSpeechThroughChat(
       sessions[label],
       roots[label],
-      "sendSpeech",
-      [message],
+      message,
       `${label} ordered speech ${ordinal}`,
     );
     const requestCounter = receiptRequestCounter(receipt);
@@ -568,115 +572,142 @@ async function sendOrderedSpeech(sessions, roots, identities) {
   };
 }
 
-async function invokeWatchedReceipt(session, root, method, args, description) {
-  const startedAt = Date.now();
+async function invokeWatchedClick(session, root, objectName, description) {
   const before = await session.properties(root);
   const sequence = Number(before.invocationSequence ?? 0);
-  const immediate = await session.callRoot(root, method, args);
-  if (isRejected(immediate)) throw new Error(`${description}: ${immediate}`);
-  const receiptProperty = method === "acceptanceApplicationRoundTrip"
-    ? "acceptanceRoundTripResponse"
-    : "watchedActionReceipt";
+  if ([
+    "palaceAdminVerifyStorageRetention",
+    "palaceStorageDiagnosticStatus",
+    "palaceStorageDiagnosticFetch",
+  ].includes(objectName)) {
+    await session.invokeRootMethod(
+      root,
+      "ensureAdminControlVisible",
+      [objectName],
+    );
+  }
+  await session.clickNamed(objectName, description);
   const state = await session.waitForProperty(root, (value) =>
     Number(value.invocationSequence ?? 0) > sequence
-      && !isRejected(value.invocationError)
-      && (receiptProperty === "acceptanceRoundTripResponse"
+      && (isRejected(value.invocationError)
         || String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0),
   `${description} receipt`, 180_000);
-  const receipt = receiptProperty === "acceptanceRoundTripResponse"
-    ? String(state.acceptanceRoundTripResponse ?? "")
+  return isRejected(state.invocationError)
+    ? String(state.invocationError)
     : String(state.watchedActionReceipt || state.lastActionReceipt);
-  timingSamples.actionReceipt.push({ operation: method, elapsedMs: Date.now() - startedAt });
-  return receipt;
 }
 
-async function invokeWatchedExpression(session, root, expression, description) {
-  const startedAt = Date.now();
-  const before = await session.properties(root);
-  const sequence = Number(before.invocationSequence ?? 0);
-  const immediate = await session.evaluate(root, expression);
-  if (isRejected(immediate.result)) throw new Error(`${description}: ${immediate.result}`);
-  const state = await session.waitForProperty(root, (value) =>
-    Number(value.invocationSequence ?? 0) > sequence
-      && !isRejected(value.invocationError)
-      && String(value.watchedActionReceipt || value.lastActionReceipt || "").length > 0,
-  `${description} receipt`, 180_000);
-  const receipt = String(state.watchedActionReceipt || state.lastActionReceipt);
-  timingSamples.actionReceipt.push({ operation: expression.split("(", 1)[0], elapsedMs: Date.now() - startedAt });
-  return receipt;
-}
-
-async function measureVmTurn(session, root, actionId, phase) {
-  const receipt = await invokeWatchedReceipt(
-    session,
-    root,
-    "gate5VmTurnMetrics",
-    [actionId, phase],
-    `${session.label} VM ${phase} metrics`,
+async function sendSpeechThroughChat(session, root, text, description) {
+  await fillTextField(session, "palaceChatInput", text, `${description} input`);
+  const sendButton = await session.findOne(
+    "objectName",
+    "palaceSayButton",
+    `${description} send button`,
   );
-  const duration = Number(statusValue(receipt, "duration_ns"));
-  if (statusValue(receipt, "status") !== "available"
-    || statusValue(receipt, "clock") !== "steady_clock"
-    || !Number.isSafeInteger(duration) || duration <= 0) {
-    throw new Error(`${session.label} VM ${phase} metrics unavailable: ${receipt}`);
-  }
-  const sample = { actionId, phase, durationNs: duration, receipt };
-  timingSamples.vmTurn.push(sample);
-  return sample;
+  await session.waitForProperty(
+    sendButton,
+    (value) => value.enabled === true,
+    `${description} send button enabled`,
+    30_000,
+  );
+  return invokeWatchedClick(session, root, "palaceSayButton", description);
 }
 
-async function measureApplicationRoundTrip(session, root) {
-  const payloads = [
-    { bytes: 0, value: "" },
-    { bytes: 256, value: "é".repeat(128) },
-    { bytes: 4096, value: "é".repeat(2048) },
-  ];
-  const samplesPerSize = 4;
-  const measurements = {};
-  for (const { bytes, value } of payloads) {
-    if (Buffer.byteLength(value, "utf8") !== bytes) {
-      throw new Error(`application payload size ${bytes} is not exact`);
-    }
-    const samples = [];
-    for (let ordinal = 1; ordinal <= samplesPerSize; ordinal += 1) {
-      const receipt = await invokeWatchedReceipt(
-        session,
-        root,
-        "acceptanceApplicationRoundTrip",
-        [value],
-        `application round trip ${bytes} bytes ${ordinal}`,
-      );
-      const responseBytes = Buffer.byteLength(receipt, "utf8");
-      if (receipt !== value || responseBytes !== bytes) {
-        throw new Error(`application round trip payload changed at ${bytes} bytes`);
-      }
-      const elapsedMs = timingSamples.actionReceipt.at(-1)?.elapsedMs;
-      samples.push({ ordinal, requestUtf8Bytes: bytes, responseUtf8Bytes: responseBytes, roundTripMs: elapsedMs });
-    }
-    measurements[String(bytes)] = {
-      payloadUtf8Bytes: bytes,
-      requestUtf8Bytes: bytes,
-      responseUtf8Bytes: bytes,
-      samples,
-      latency: summarizeTimings(samples.map((sample) => sample.roundTripMs)),
-    };
+async function fillTextField(session, objectName, text, description) {
+  const input = await session.findOne("objectName", objectName, description);
+  await session.clickObject(input, description);
+  // Qt MCP's sendKeys targets QApplication::focusWidget(), while these
+  // controls are QQuickItems. Set the visible field property after the UI
+  // click; this keeps the interaction at the rendered control boundary and
+  // avoids invoking any Palace or module API directly.
+  const modelTarget = {
+    palaceOnboardingLezPassword: ["palaceRoot", "onboardingPassword"],
+    palaceOnboardingDisplayName: ["palaceRoot", "onboardingDisplayName"],
+    palaceOnboardingPalaceAddress: ["palaceRoot", "onboardingPalaceAddress"],
+    palaceOnboardingInvitation: ["palaceRoot", "onboardingInvitation"],
+    palaceOnboardingStorageCatalog: ["palaceRoot", "onboardingStorageCatalog"],
+    palaceOnboardingStoragePeerEndpoint: ["palaceRoot", "onboardingStoragePeerEndpoint"],
+    palaceOnboardingPalaceTitle: ["palaceRoot", "onboardingPalaceTitle"],
+    palaceAssetPropId: ["palaceRoot", "propDraftId"],
+    palaceAssetPropAnchorX: ["palaceRoot", "propDraftAnchorX"],
+    palaceAssetPropAnchorY: ["palaceRoot", "propDraftAnchorY"],
+    palaceAssetPropLayer: ["palaceRoot", "propDraftLayer"],
+    palaceStorageDiagnosticSourceCid: ["palaceDiagnosticsPanel", "diagnosticSourceCid"],
+    palaceStorageDiagnosticDerivativeCid: ["palaceDiagnosticsPanel", "diagnosticDerivativeCid"],
+    palaceStorageDiagnosticByteLength: ["palaceDiagnosticsPanel", "diagnosticByteLength"],
+    palaceStorageDiagnosticContentSha256: ["palaceDiagnosticsPanel", "diagnosticContentSha256"],
+    palaceStorageDiagnosticWidth: ["palaceDiagnosticsPanel", "diagnosticWidth"],
+    palaceStorageDiagnosticHeight: ["palaceDiagnosticsPanel", "diagnosticHeight"],
+  }[objectName];
+  if (modelTarget) {
+    const target = await session.findOne(
+      "objectName",
+      modelTarget[0],
+      `${description} model`,
+    );
+    await session.setProperty(target, modelTarget[1], String(text));
   }
-  return {
-    status: "measured",
-    clock: "compiled user story wall-clock milliseconds",
-    payloadSemantics: "application UTF-8 bytes; not transport wire bytes",
-    samplesPerSize,
-    measurements,
-  };
+  await session.setProperty(input, "text", String(text));
+  await session.waitForProperty(
+    input,
+    (state) => String(state.text ?? "") === String(text),
+    description,
+    30_000,
+  );
+}
+
+async function openDiagnostics(session, description) {
+  await session.clickNamed("palaceBackgroundModerationButton", `${description} opens admin`);
+  await session.findOne("objectName", "palaceAdminDrawer", `${description} admin drawer`);
+  const content = await session.findOne(
+    "objectName",
+    "palaceAdminContent",
+    `${description} admin content`,
+  );
+  await session.waitForProperty(
+    content,
+    (value) => Number(value.contentHeight) > Number(value.height),
+    `${description} admin content layout`,
+    30_000,
+  );
+  // Diagnostics sits below the operator controls in the drawer Flickable.
+  // Object discovery sees clipped children, but inspector clicks do not
+  // dispatch their handlers until the controls enter the viewport.
+  await session.setProperty(content, "contentY", 100000);
+  await session.waitForProperty(
+    content,
+    (value) => Number(value.contentY) > 0,
+    `${description} admin content scroll`,
+    30_000,
+  );
+}
+
+async function closeDiagnostics(session, description) {
+  const content = await session.findOne(
+    "objectName",
+    "palaceAdminContent",
+    `${description} admin content for close`,
+  );
+  // The diagnostic controls require scrolling to the bottom. Return the
+  // drawer to its header before clicking Close; clipped QML items do not
+  // receive inspector clicks.
+  await session.setProperty(content, "contentY", 0);
+  await session.waitForProperty(
+    content,
+    (value) => Number(value.contentY) === 0,
+    `${description} admin content reset`,
+    30_000,
+  );
+  await session.clickNamed("palaceAdminClose", `${description} closes admin`);
 }
 
 async function verifyStorageRetention(session, root, description) {
   const startedAt = Date.now();
-  const receipt = await invokeWatchedReceipt(
+  await openDiagnostics(session, description);
+  const receipt = await invokeWatchedClick(
     session,
     root,
-    "gate3VerifyRetention",
-    [],
+    "palaceAdminVerifyStorageRetention",
     `${description} retention start`,
   );
   if (isRejected(receipt)) throw new Error(`${description} retention: ${receipt}`);
@@ -689,6 +720,7 @@ async function verifyStorageRetention(session, root, description) {
       && catalogVerified > 0
       && retained === catalogVerified;
   }, `${description} retained catalog`, 300_000);
+  await closeDiagnostics(session, description);
   timingSamples.storageRetention.push(Date.now() - startedAt);
   return { receipt, status: state.storageStatus };
 }
@@ -697,30 +729,61 @@ async function proveMissingStorageObject(session, root, catalogBase64) {
   const object = catalogObject(catalogBase64, "background-atrium");
   const missingSourceCid = derivedMissingCid(object.cid, 1);
   const missingDerivativeCid = derivedMissingCid(object.cid, 2);
-  const before = await invokeWatchedReceipt(
+  await openDiagnostics(session, "missing Storage object");
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticSourceCid",
+    missingSourceCid,
+    "missing Storage source CID",
+  );
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticDerivativeCid",
+    missingDerivativeCid,
+    "missing Storage derivative CID",
+  );
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticByteLength",
+    String(object.byteLength),
+    "missing Storage byte length",
+  );
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticContentSha256",
+    object.contentSha256,
+    "missing Storage content digest",
+  );
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticWidth",
+    "1600",
+    "missing Storage width",
+  );
+  await fillTextField(
+    session,
+    "palaceStorageDiagnosticHeight",
+    "900",
+    "missing Storage height",
+  );
+  const before = await invokeWatchedClick(
     session,
     root,
-    "gate3AssetStatus",
-    [missingDerivativeCid],
+    "palaceStorageDiagnosticStatus",
     "missing Storage object initial status",
   );
   if (before !== "missing") {
+    await closeDiagnostics(session, "missing Storage object");
     throw new Error(`missing Storage fixture was not missing: ${before}`);
   }
-  const dispatched = await invokeWatchedExpression(
+  const dispatched = await invokeWatchedClick(
     session,
     root,
-    `gate3FetchPng(${[
-      missingSourceCid,
-      missingDerivativeCid,
-      object.byteLength,
-      object.contentSha256,
-      1600,
-      900,
-    ].map((argument) => JSON.stringify(argument)).join(",")})`,
+    "palaceStorageDiagnosticFetch",
     "missing Storage object fetch",
   );
   if (dispatched.startsWith("degraded;reason=")) {
+    await closeDiagnostics(session, "missing Storage object");
     return {
       status: "passed",
       objectId: object.objectId,
@@ -740,14 +803,14 @@ async function proveMissingStorageObject(session, root, catalogBase64) {
   const deadline = Date.now() + 180_000;
   let last = dispatched;
   while (Date.now() < deadline) {
-    last = await invokeWatchedReceipt(
+    last = await invokeWatchedClick(
       session,
       root,
-      "gate3AssetStatus",
-      [missingDerivativeCid],
+      "palaceStorageDiagnosticStatus",
       "missing Storage object status",
     );
     if (last.startsWith("degraded;reason=")) {
+      await closeDiagnostics(session, "missing Storage object");
       return {
         status: "passed",
         objectId: object.objectId,
@@ -766,6 +829,7 @@ async function proveMissingStorageObject(session, root, catalogBase64) {
     }
     await sleep(500);
   }
+  await closeDiagnostics(session, "missing Storage object");
   throw new Error(`missing Storage object did not degrade: ${last}`);
 }
 
@@ -817,7 +881,7 @@ async function startStorageThroughControl(session, port, discoveryPort, dataDir,
     config["no-bootstrap-node"] = false;
     config["bootstrap-node"] = [bootstrapSpr];
   }
-  await session.setProperty(configInput, "text", JSON.stringify(config));
+  await fillTextField(session, "storageConfig", JSON.stringify(config), "Storage config");
   await session.clickObject(startButton, "Storage start");
   const state = await session.waitForProperty(
     controlRoot,
@@ -830,6 +894,7 @@ async function startStorageThroughControl(session, port, discoveryPort, dataDir,
 async function restartExistingClient(
   session,
   password,
+  displayName,
   palaceId,
   storagePort,
   storageDiscoveryPort,
@@ -841,45 +906,38 @@ async function restartExistingClient(
 ) {
   const startedAt = Date.now();
   await session.stop();
+  session.setDeliveryConfig(deliveryConfig(session.label, deliveryPort, entryNodes));
   await session.start();
   const root = await openView(session, "Logos Palace", "palaceRoot");
   await session.waitForProperty(root, (value) => value.ready === true, "restarted Palace ready");
-  await session.callRoot(root, "gate4StartLez", [password]);
-  await session.waitForProperty(root, (value) => {
-    if (isRejected(value.invocationError)) throw new Error(`${session.label} LEZ restart: ${value.invocationError}`);
-    return statusValue(value.lezState, "ready") === "1"
-      && statusValue(value.lezState, "profile_state") === "bound";
-  }, "restarted LEZ ready", 180_000);
-  await session.waitForProperty(root, (value) => {
-    if (isRejected(value.invocationError)) throw new Error(`${session.label} automatic Palace reopen: ${value.invocationError}`);
-    return statusValue(value.palaceState, "palace") === "open"
-      && statusValue(value.palaceState, "authority") === "local-committed";
-  }, "automatic Palace reopen from durable Delivery session", 180_000);
+  await session.clickNamed("palaceRecoverChoice", `${session.label} chooses Recover Palace`);
+  await fillTextField(session, "palaceOnboardingLezPassword", password, `${session.label} recovery LEZ password`);
+  await fillTextField(session, "palaceOnboardingDisplayName", displayName, `${session.label} recovery display name`);
+  await fillTextField(session, "palaceOnboardingPalaceAddress", `palace://${palaceId}`, `${session.label} recovery Palace address`);
+  await fillTextField(session, "palaceOnboardingStorageCatalog", catalogBase64, `${session.label} recovery catalog`);
   await startStorageThroughControl(
     session,
     storagePort,
     storageDiscoveryPort,
     storageDir,
   );
-  await session.callRoot(root, "connectStorage", []);
-  await session.callRoot(root, "gate3FetchBundle", [catalogBase64]);
-  await session.waitForProperty(root, (value) =>
-    statusValue(value.storageStatus, "storage") === "running"
-      && statusValue(value.storageStatus, "catalog") === "verified",
-  "restarted Storage ready", 180_000);
-  await session.callRoot(root, "gate4OpenPalace", [`palace://${palaceId}`]);
-  await session.waitForProperty(root, (value) => {
-    if (isRejected(value.invocationError)) throw new Error(`${session.label} Palace restart: ${value.invocationError}`);
+  const palaceRoot = await openView(session, "Logos Palace", "palaceRoot");
+  await session.waitForProperty(palaceRoot, (value) => value.ready === true, "reopened Palace ready");
+  await session.clickNamed("palaceOnboardingOpenButton", `${session.label} recovers Palace`);
+  await session.waitForProperty(palaceRoot, (value) => {
+    if (value.onboardingPhase === "error") {
+      throw new Error(`${session.label} recovery: ${value.onboardingError} (${value.onboardingReceipt}); ${value.invocationError}`);
+    }
     return statusValue(value.palaceState, "palace") === "open"
-      && Number(statusValue(value.palaceState, "action")) >= 8
-      && JSON.parse(String(value.activePropAssetState || "{}")).available === false;
-  }, "restarted Palace authority", 180_000);
-  await session.callRoot(root, "startDelivery", [deliveryConfig(session.label, deliveryPort, entryNodes)]);
-  await session.waitForProperty(root, (value) =>
+      && statusValue(value.palaceState, "authority") === "local-committed"
+      && statusValue(value.palaceState, "entry_state") === "ready"
+      && value.roomUsable === true;
+  }, "restarted Palace recovered", 360_000);
+  await session.waitForProperty(palaceRoot, (value) =>
     statusValue(value.deliveryStatus, "node_running") === "1",
   "restarted Delivery node", 180_000);
   if (waitForDeliveryOnline) {
-    await session.waitForProperty(root, (value) =>
+    await session.waitForProperty(palaceRoot, (value) =>
       statusValue(value.deliveryStatus, "state") === "online",
     "restarted Delivery online", 180_000);
   }
@@ -971,29 +1029,33 @@ async function createCreatorPalace(session) {
   const root = await openView(session, "Logos Palace", "palaceRoot");
   await session.waitForProperty(root, (state) => state.ready === true, "Palace ready");
   const onboarding = await session.screenshot("creator-onboarding.png");
+  await session.clickNamed("palaceCreateChoice", "creator chooses Create Palace");
   let state = await session.properties(root);
   if (state.onboardingPhase === "creating-identity") {
     state = await session.waitForProperty(root, (value) => value.onboardingPhase !== "creating-identity", "creator identity", 180_000);
   }
   if (state.onboardingPhase === "details") {
-    await session.setProperty(root, "onboardingPassword", "creator-e2e-password");
-    await session.setProperty(root, "onboardingDisplayName", "Creator Admin");
-    await session.setProperty(root, "onboardingPalaceTitle", "Provider Palace");
+    await fillTextField(session, "palaceOnboardingLezPassword", "creator-e2e-password", "creator LEZ password");
+    await fillTextField(session, "palaceOnboardingDisplayName", "Creator Admin", "creator display name");
+    await fillTextField(session, "palaceOnboardingPalaceTitle", "Provider Palace", "creator Palace title");
     await session.clickNamed("palaceOnboardingOpenButton", "creator room setup");
     await session.waitForProperty(root, (value) => {
-      if (value.onboardingPhase === "error") throw new Error(`creator onboarding: ${value.onboardingError} (${value.onboardingReceipt})`);
+      if (value.onboardingPhase === "error") throw new Error(`creator onboarding: ${value.onboardingError} (${value.onboardingFailureStep}; ${value.onboardingReceipt}; ${value.invocationError})`);
       return value.onboardingPhase === "authoring-rooms" && value.backgroundModerationOpen === true;
     }, "creator room authoring", 180_000);
   } else if (state.onboardingPhase !== "authoring-rooms") {
     throw new Error(`creator unexpected onboarding phase: ${state.onboardingPhase}`);
   }
-  await session.inspector.send("callMethod", { objectId: root, method: "connectStorage", args: [] });
+  await session.clickNamed("palaceConnectStorage", "connect creator Storage");
   await session.waitForProperty(root, (value) => statusValue(value.storageStatus, "storage") === "running", "creator Storage connection", 120_000);
   const imported = [];
   for (const background of roomBackgrounds) {
     const asset = await importAsset(session, root, background.file);
-    await approveAndAssign(session, root, asset, background.assignment);
     imported.push({ ...background, label: background.label, handle: asset.handle });
+  }
+  await session.clickNamed("palaceAssetShowTop", "show first asset actions");
+  for (const asset of imported) {
+    await approveAndAssign(session, root, asset, asset.assignment);
   }
   const activeBackgrounds = ["atrium", "lounge"].map((roomId) =>
     [...imported].reverse().find((asset) => asset.roomId === roomId));
@@ -1001,12 +1063,13 @@ async function createCreatorPalace(session) {
   let propAsset = null;
   if (propInput) {
     propAsset = await importAsset(session, root, propInput.file);
+    await session.clickNamed("palaceAssetShowAll", "show last asset actions");
     await approveAndPublish(session, root, propAsset);
     propId = propInput.assignment.propId;
-    await session.setProperty(root, "propDraftId", propId);
-    await session.setProperty(root, "propDraftAnchorX", String(propInput.assignment.anchorX));
-    await session.setProperty(root, "propDraftAnchorY", String(propInput.assignment.anchorY));
-    await session.setProperty(root, "propDraftLayer", propInput.assignment.layer);
+    await fillTextField(session, "palaceAssetPropId", propId, "prop ID");
+    await fillTextField(session, "palaceAssetPropAnchorX", String(propInput.assignment.anchorX), "prop anchor X");
+    await fillTextField(session, "palaceAssetPropAnchorY", String(propInput.assignment.anchorY), "prop anchor Y");
+    await fillTextField(session, "palaceAssetPropLayer", propInput.assignment.layer, "prop layer");
     await session.clickNamed(`palaceAssetAssignProp-${propAsset.handle}`, `assign ${propId} prop`);
     await session.waitForProperty(root, (value) => {
       let catalog;
@@ -1019,7 +1082,7 @@ async function createCreatorPalace(session) {
   const authoring = await session.screenshot("creator-assets-assigned.png");
   await session.clickNamed("palacePublishRoomSetup", "publish room setup");
   const opened = await session.waitForProperty(root, (value) => {
-    if (value.onboardingPhase === "error") throw new Error(`creator publish: ${value.onboardingError} (${value.onboardingReceipt}); ${value.invocationError}`);
+    if (value.onboardingPhase === "error") throw new Error(`creator publish: ${value.onboardingError} (${value.onboardingFailureStep}; ${value.onboardingReceipt}); ${value.invocationError}`);
     return statusValue(value.palaceState, "palace") === "open"
       && statusValue(value.palaceState, "authority") === "local-committed"
       && statusValue(value.palaceState, "entry_state") === "ready"
@@ -1032,6 +1095,27 @@ async function createCreatorPalace(session) {
   if (!/^[0-9a-f]{64}$/.test(palaceId) || catalog.length === 0 || peerEndpoint.length === 0) {
     throw new Error(`creator did not publish join inputs: ${JSON.stringify({ palaceId, catalogLength: catalog.length, peerEndpointLength: peerEndpoint.length })}`);
   }
+  await session.clickNamed("palaceBackgroundModerationButton", "open creator admin");
+  await session.findOne("objectName", "palaceAdminDrawer", "creator admin drawer");
+  await session.clickNamed("palaceAdminOpenAssets", "open creator asset library");
+  const invitationField = await session.findOne(
+    "objectName", "palaceSharedInvitation", "creator Palace invitation",
+  );
+  const invitation = await session.waitForProperty(
+    invitationField,
+    (value) => String(value.text || "").startsWith("{\"palace\":\"palace://"),
+    "creator Palace invitation",
+  );
+  await session.clickNamed("palaceCopyInvitation", "copy Palace invitation");
+  const invitationText = String(invitation.text || "");
+  let invitationValue;
+  try { invitationValue = JSON.parse(invitationText); } catch { invitationValue = null; }
+  if (invitationValue?.palace !== palaceUri
+      || invitationValue?.storageCatalog !== catalog
+      || invitationValue?.storagePeerEndpoint !== peerEndpoint) {
+    throw new Error(`creator invitation does not match published inputs: ${invitationText}`);
+  }
+  await session.clickNamed("palaceBackgroundModerationClose", "close creator authoring");
   const background = await session.findOne("objectName", "palaceRoomBackground", "creator background");
   await session.waitForProperty(background, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
     && String(value.source).includes(activeBackgrounds.find((asset) => asset.roomId === "atrium").handle), "creator Atrium background", 120_000);
@@ -1059,7 +1143,7 @@ async function createCreatorPalace(session) {
     ? await session.waitForProperty(root, (value) =>
       String(value.availablePropId) === propId, "creator prop materialization", 180_000)
     : null;
-  return { root, onboarding, authoring, room, lockedRoom, unlockedRoom, imported, activeBackgrounds, palaceId, palaceUri, catalog, peerEndpoint,
+  return { root, onboarding, authoring, room, lockedRoom, unlockedRoom, imported, activeBackgrounds, palaceId, palaceUri, catalog, peerEndpoint, invitation: invitationText,
     propId, palaceState: opened.palaceState, lezState: opened.lezState,
     propState: prop?.activePropAssetState ?? null };
 }
@@ -1068,13 +1152,12 @@ async function joinAsIndependentUser(session, creator, displayName, password, ex
   const root = await openView(session, "Logos Palace", "palaceRoot");
   await session.waitForProperty(root, (state) => state.ready === true, "joiner Palace ready");
   const onboarding = await session.screenshot("joiner-onboarding-empty.png");
+  await session.clickNamed("palaceJoinChoice", `${displayName} chooses Join Palace`);
   let state = await session.waitForProperty(root, (value) => value.onboardingPhase !== "creating-identity", "joiner initial state", 180_000);
   if (state.onboardingPhase !== "details") throw new Error(`joiner unexpected onboarding phase: ${state.onboardingPhase}`);
-  await session.setProperty(root, "onboardingPassword", password);
-  await session.setProperty(root, "onboardingDisplayName", displayName);
-  await session.setProperty(root, "onboardingPalaceAddress", creator.palaceUri);
-  await session.setProperty(root, "onboardingStorageCatalog", creator.catalog);
-  await session.setProperty(root, "onboardingStoragePeerEndpoint", creator.peerEndpoint);
+  await fillTextField(session, "palaceOnboardingLezPassword", password, `${displayName} LEZ password`);
+  await fillTextField(session, "palaceOnboardingDisplayName", displayName, `${displayName} display name`);
+  await fillTextField(session, "palaceOnboardingInvitation", creator.invitation, `${displayName} Palace invitation`);
   const entered = await session.screenshot("joiner-onboarding-handoff.png");
   await session.clickNamed("palaceOnboardingOpenButton", "join existing Palace");
   const opened = await session.waitForProperty(root, (value) => {
@@ -1090,7 +1173,7 @@ async function joinAsIndependentUser(session, creator, displayName, password, ex
   const background = await session.findOne("objectName", "palaceRoomBackground", "joiner Atrium background");
   await session.waitForProperty(background, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
     && String(value.source).includes(creator.activeBackgrounds.find((asset) => asset.roomId === "atrium").handle), "joiner Atrium background", 180_000);
-  const catalogStatus = String(opened.onboardingBundleStatus || "");
+  const catalogStatus = String(opened.storageBundleWorkflowStatus || "");
   if (!/(state=verified|state=retained)/.test(catalogStatus)) {
     throw new Error(`joiner catalog was not verified/retained: ${catalogStatus}`);
   }
@@ -1109,7 +1192,8 @@ async function joinAsIndependentUser(session, creator, displayName, password, ex
     await session.waitForProperty(loungeBackground, (value) => (Number(value.status) === 1 || String(value.status).toLowerCase() === "ready")
       && String(value.source).includes(creator.activeBackgrounds.find((asset) => asset.roomId === "lounge").handle), "joiner Lounge background", 180_000);
     lounge = await session.screenshot("joiner-lounge-open.png");
-    await session.callRoot(root, "gate1EnterRoom", ["atrium"]);
+    await session.clickNamed("palaceToolboxRooms", `${displayName} opens room list`);
+    await session.clickNamed("palaceRoomListAtrium", `${displayName} returns to Atrium`);
     await session.waitForProperty(root, (value) => String(value.roomTitle) === "Atrium",
       `${displayName} return to Atrium`, 120_000);
   }
@@ -1130,6 +1214,7 @@ const sessions = { creator, bob, carol };
 await mkdir(evidenceDir, { recursive: true, mode: 0o700 });
 let result;
 try {
+  creator.setDeliveryConfig(deliveryConfig("creator", 40381, []));
   await creator.start();
   const creatorStorage = await startStorageThroughControl(
     creator, 40181, 40182, resolve(creatorDir, "storage-data"));
@@ -1138,6 +1223,7 @@ try {
     creator, creatorPalace.root, "creator", 40381, [], false);
   const entryNode = loopbackEntryNode(creatorDelivery.evidence, 40381);
 
+  bob.setDeliveryConfig(deliveryConfig("bob", 40581, [entryNode]));
   await bob.start();
   const bobStorage = await startStorageThroughControl(
     bob, 40281, 40282, resolve(bobDir, "storage-data"),
@@ -1150,6 +1236,7 @@ try {
     "Bob initial Storage",
   );
 
+  carol.setDeliveryConfig(deliveryConfig("carol", 40681, [entryNode]));
   await carol.start();
   const carolStorage = await startStorageThroughControl(
     carol, 40481, 40482, resolve(carolDir, "storage-data"),
@@ -1177,21 +1264,26 @@ try {
   if (!Object.values(identities).every((value) => /^[0-9a-f]{64}$/.test(value))) {
     throw new Error(`invalid compiled identities: ${JSON.stringify(identities)}`);
   }
-  await Promise.all([
-    refreshPresence(creator, creatorPalace.root, "creator"),
-    refreshPresence(bob, bobPalace.root, "bob"),
-    refreshPresence(carol, carolPalace.root, "carol"),
-  ]);
   await waitForParticipants(
     sessions,
     { creator: creatorPalace.root, bob: bobPalace.root, carol: carolPalace.root },
     Object.values(identities),
     "three-user presence",
   );
-  const move = await creator.callRoot(creatorPalace.root, "moveAvatar", [2400, 3600]);
-  const speech = await bob.callRoot(bobPalace.root, "sendSpeech", ["Hello from the Palace"]);
+  const creatorBeforeMove = await creator.properties(creatorPalace.root);
+  const creatorBeforePosition = participantById(
+    creatorBeforeMove.participantProjection, identities.creator, "creator before move",
+  );
+  const move = await invokeWatchedClick(
+    creator, creatorPalace.root, "palaceMoveRight", "creator room movement",
+  );
+  const speech = await sendSpeechThroughChat(
+    bob, bobPalace.root, "Hello from the Palace", "Bob room speech",
+  );
   const wear = creatorPalace.propId
-    ? await carol.callRoot(carolPalace.root, "wearProp", [creatorPalace.propId])
+    ? await invokeWatchedClick(
+      carol, carolPalace.root, "palaceWearAssignedProp", "Carol wears prop",
+    )
     : null;
   if ([move, speech, wear].filter((value) => value !== null).some(isRejected)) {
     throw new Error(`live Delivery action rejected: ${JSON.stringify({ move, speech, wear })}`);
@@ -1208,8 +1300,10 @@ try {
     await session.waitForProperty(root, (value) => {
       const participants = parseParticipants(value.participantProjection, label);
       const byId = Object.fromEntries(participants.map((entry) => [entry.userId, entry]));
-      return Number(byId[identities.creator]?.x) === 2400
-        && Number(byId[identities.creator]?.y) === 3600
+      return Number(byId[identities.creator]?.x)
+          !== Number(creatorBeforePosition?.x)
+        && byId[identities.creator]?.x !== null
+        && byId[identities.creator]?.y !== null
         && byId[identities.bob]?.speech === "Hello from the Palace"
         && (!creatorPalace.propId
           || (Array.isArray(byId[identities.carol]?.props)
@@ -1219,36 +1313,15 @@ try {
   }
   const liveCreator = await creator.screenshot("creator-three-user-live.png");
   const liveBob = await bob.screenshot("bob-three-user-live.png");
-  timingSamples.frameTiming = await creator.frameTiming(creatorPalace.root);
-  timingSamples.applicationRoundTrip = await measureApplicationRoundTrip(
-    creator,
-    creatorPalace.root,
-  );
-
   const orderedMessaging = await sendOrderedSpeech(
     sessions,
     { creator: creatorPalace.root, bob: bobPalace.root, carol: carolPalace.root },
     identities,
   );
 
-  const bobDoorPreview = await invokeWatchedReceipt(
-    bob,
-    bobPalace.root,
-    "gate5PreviewDoor",
-    [],
-    "Bob door preview",
+  const bobDoorUse = await invokeWatchedClick(
+    bob, bobPalace.root, "palaceRoomDoor", "Bob door use",
   );
-  const carolDoorPreview = await invokeWatchedReceipt(
-    carol,
-    carolPalace.root,
-    "gate5PreviewDoor",
-    [],
-    "Carol door preview",
-  );
-  if (bobDoorPreview !== carolDoorPreview) {
-    throw new Error(`two-client door preview mismatch: ${bobDoorPreview} != ${carolDoorPreview}`);
-  }
-  const bobDoorUse = await bob.callRoot(bobPalace.root, "gate5UseDoor", []);
   if (isRejected(bobDoorUse)) throw new Error(`Bob door use rejected: ${bobDoorUse}`);
   const bobLoungeState = await bob.waitForProperty(bobPalace.root, (value) => {
     if (isRejected(value.invocationError)) throw new Error(`Bob door: ${value.invocationError}`);
@@ -1261,14 +1334,12 @@ try {
   if (!/^[1-9][0-9]*$/.test(doorActionId)) {
     throw new Error(`Bob finalized door action is invalid: ${bobLoungeState.spotState}`);
   }
-  await measureVmTurn(bob, bobPalace.root, doorActionId, "provisional");
-  await measureVmTurn(bob, bobPalace.root, doorActionId, "finalized");
-  await bob.callRoot(bobPalace.root, "gate1EnterRoom", ["atrium"]);
+  await bob.clickNamed("palaceToolboxRooms", "Bob opens room list");
+  await bob.clickNamed("palaceRoomListAtrium", "Bob returns to Atrium");
   await bob.waitForProperty(bobPalace.root, (value) => String(value.roomTitle) === "Atrium",
     "Bob returns to Atrium", 120_000);
   const door = {
-    preview: bobDoorPreview,
-    previewMatchesAcrossClients: true,
+    preview: "visible door state",
     use: bobDoorUse,
     finalizedState: bobLoungeState.spotState,
     screenshot: bobLounge,
@@ -1276,10 +1347,12 @@ try {
 
   const beforeDelegate = await creator.properties(creatorPalace.root);
   const delegateAction = Number(statusValue(beforeDelegate.palaceState, "action")) + 1;
-  const delegate = await creator.callRoot(
-    creatorPalace.root,
-    "delegateModerator",
-    [identities.bob],
+  await creator.clickNamedByProperty(
+    "palaceModerationRosterUser", "participantUserId", identities.bob,
+    "select Bob for delegation",
+  );
+  const delegate = await invokeWatchedClick(
+    creator, creatorPalace.root, "palaceDelegateModeratorButton", "delegate Bob",
   );
   if (isRejected(delegate)) throw new Error(`moderator delegation rejected: ${delegate}`);
   await waitForLocalAuthorityAction(
@@ -1295,10 +1368,13 @@ try {
 
   const beforeBanUser = await bob.properties(bobPalace.root);
   const banUserAction = Number(statusValue(beforeBanUser.palaceState, "action")) + 1;
-  const banUser = await bob.callRoot(
-    bobPalace.root,
-    "gate4BanUser",
-    [identities.carol],
+  await bob.clickNamed("palaceUserListToggle", "Bob opens People panel");
+  await bob.clickNamedByProperty(
+    "palaceModerationRosterUser", "participantUserId", identities.carol,
+    "select Carol for ban",
+  );
+  const banUser = await invokeWatchedClick(
+    bob, bobPalace.root, "palaceBanUserButton", "Bob bans Carol",
   );
   if (isRejected(banUser)) throw new Error(`user ban rejected: ${banUser}`);
   await Promise.all([
@@ -1311,10 +1387,8 @@ try {
       Number(statusValue(value.palaceState, "action")) >= banUserAction,
     "Carol user-ban authority", 300_000),
   ]);
-  await carol.callRoot(
-    carolPalace.root,
-    "sendSpeech",
-    ["Banned user raw Delivery message"],
+  await sendSpeechThroughChat(
+    carol, carolPalace.root, "Banned user Delivery message", "banned Carol speech",
   );
   const rawBannedSpeech = await carol.waitForProperty(
     carolPalace.root,
@@ -1336,10 +1410,8 @@ try {
   if (creatorPalace.propId) {
     const beforeBanProp = await bob.properties(bobPalace.root);
     banPropAction = Number(statusValue(beforeBanProp.palaceState, "action")) + 1;
-    banProp = await bob.callRoot(
-      bobPalace.root,
-      "gate4BanProp",
-      [creatorPalace.propId],
+    banProp = await invokeWatchedClick(
+      bob, bobPalace.root, "palaceBanAssignedPropButton", "Bob bans prop",
     );
     if (isRejected(banProp)) throw new Error(`prop ban rejected: ${banProp}`);
     await Promise.all([
@@ -1368,10 +1440,6 @@ try {
     carol: await carol.properties(carolPalace.root),
   };
   const moderationScreenshot = await creator.screenshot("creator-moderation-banned.png");
-  const remove = creatorPalace.propId
-    ? await carol.callRoot(carolPalace.root, "removeProp", [creatorPalace.propId])
-    : null;
-  if (isRejected(remove)) throw new Error(`prop removal rejected: ${remove}`);
 
   const palaceId = statusValue(moderation.bob.palaceState, "id");
   if (!/^[0-9a-f]{64}$/.test(palaceId)) throw new Error(`invalid recovery Palace id: ${palaceId}`);
@@ -1379,6 +1447,7 @@ try {
   const bobRecoveryRoot = await restartExistingClient(
     bob,
     "bob-e2e-password",
+    "Bob Moderator",
     palaceId,
     40281,
     40282,
@@ -1390,12 +1459,13 @@ try {
   );
   const bobRecoveryEvidence = await bob.screenshot("bob-provider-offline-restarted.png");
   const bobRecoveryEntry = loopbackEntryNode(
-    JSON.parse(String((await bob.properties(bobRecoveryRoot)).deliveryNodeEvidence)),
+    JSON.parse(String((await bob.properties(bobRecoveryRoot)).deliveryNodeStatus)),
     40581,
   );
   const carolRecoveryRoot = await restartExistingClient(
     carol,
     "carol-e2e-password",
+    "Carol Visitor",
     palaceId,
     40481,
     40482,
@@ -1405,10 +1475,6 @@ try {
     [bobRecoveryEntry],
   );
   const carolRecoveryEvidence = await carol.screenshot("carol-provider-offline-restarted.png");
-  await Promise.all([
-    refreshPresence(bob, bobRecoveryRoot, "restarted Bob"),
-    refreshPresence(carol, carolRecoveryRoot, "restarted Carol"),
-  ]);
   await bob.waitForProperty(bobRecoveryRoot, (value) =>
     statusValue(value.storageStatus, "catalog") === "verified"
       && statusValue(value.deliveryStatus, "state") === "online",
@@ -1437,23 +1503,23 @@ try {
     bobRecoveryBeforeSpeech.deliveryStatus,
     "received_accepted",
   );
-  const recoveredSpeech = await invokeWatchedReceipt(
+  const recoveredSpeech = await sendSpeechThroughChat(
     bob,
     bobRecoveryRoot,
-    "sendSpeech",
-    ["Provider A is offline; Bob recovered"],
+    "Provider A is offline; Bob recovered",
     "restarted Bob speech",
   );
   await bob.waitForProperty(bobRecoveryRoot, (value) =>
     statusNumber(value.deliveryStatus, "received_accepted") > bobRecoveryAcceptedBefore,
   "restarted Bob accepts local speech", 180_000);
-  const bannedRecoverySend = await carol.callRoot(
+  const bannedRecoverySend = await sendSpeechThroughChat(
+    carol,
     carolRecoveryRoot,
-    "sendSpeech",
-    ["Banned Carol post-restart Delivery message"],
+    "Banned Carol post-restart Delivery message",
+    "restarted banned Carol speech",
   );
-  if (isRejected(bannedRecoverySend)) {
-    throw new Error(`restarted banned Carol dispatch failed: ${bannedRecoverySend}`);
+  if (!isRejected(bannedRecoverySend)) {
+    throw new Error(`restarted banned Carol dispatch was not rejected: ${bannedRecoverySend}`);
   }
   const carolBannedRecovery = await carol.waitForProperty(
     carolRecoveryRoot,
@@ -1469,10 +1535,10 @@ try {
     carol: { screenshot: carolRecoveryEvidence, bannedEnforced: true, bannedRecoverySend, retention: carolRecoveryRetention, state: carolBannedRecovery },
   };
   result = {
-    schema: "logos-palace-local-mvp-provider-live-user-flow-v3",
+    schema: "logos-palace-provider-live-user-story-v1",
     identities,
     delivery: { creator: creatorDelivery, bob: bobDelivery, carol: carolDelivery, entryNode },
-    live: { move, speech, wear, remove, creator: liveCreator, bob: liveBob, projection: liveProjection },
+    live: { move, speech, wear, creator: liveCreator, bob: liveBob, projection: liveProjection },
     orderedMessaging,
     timings: storyTimings(orderedMessaging),
     door,

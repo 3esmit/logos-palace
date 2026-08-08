@@ -18,6 +18,38 @@ const mainQml = readFileSync(
   join(root, "packages/logos_palace_ui/src/qml/Main.qml"),
   "utf8",
 );
+const roomViewQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/room/RoomView.qml"),
+  "utf8",
+);
+const participantViewQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/room/ParticipantView.qml"),
+  "utf8",
+);
+const roomToolbarQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/room/RoomToolbar.qml"),
+  "utf8",
+);
+const roomUtilityQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/room/RoomUtilityPanels.qml"),
+  "utf8",
+);
+const assetAuthoringPanelQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/admin/AssetAuthoringPanel.qml"),
+  "utf8",
+);
+const connectionStatusQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/components/ConnectionStatus.qml"),
+  "utf8",
+);
+const chatBarQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/room/ChatBar.qml"),
+  "utf8",
+);
+const onboardingDetailsQml = readFileSync(
+  join(root, "packages/logos_palace_ui/src/qml/onboarding/OnboardingDetails.qml"),
+  "utf8",
+);
 const backendCpp = readFileSync(
   join(root, "packages/logos_palace_ui/src/logos_palace_ui_backend.cpp"),
   "utf8",
@@ -116,14 +148,24 @@ test("Main.qml wires destroy/reset cleanup on real paths", () => {
   assert.match(mainQml, /function syncSelectedModerationUser\(\)/);
   assert.match(mainQml, /Component\.onDestruction:\s*root\.abandonAssetImport\(\)/);
   assert.match(mainQml, /resetAuthoringPreviewState\(\)/);
-  assert.match(mainQml, /active:\s*root\.backgroundModerationOpen/);
-  assert.match(mainQml, /objectName:\s*"palaceToolbox"/);
+  assert.match(mainQml, /visible:\s*root\.backgroundModerationOpen/);
+  assert.match(assetAuthoringPanelQml, /onVisibleChanged:\s*\{[\s\S]{0,120}app\.resetAuthoringPreviewState\(\)/);
+  assert.match(roomToolbarQml, /objectName:\s*"palaceToolbox"/);
   assert.match(mainQml, /objectName:\s*"palaceStatusStrip"/);
-  assert.match(mainQml, /objectName:\s*"palaceInputStrip"/);
-  assert.match(mainQml, /objectName:\s*"palacePropBag"/);
+  assert.match(chatBarQml, /objectName:\s*"palaceInputStrip"/);
+  assert.match(uiRep, /SLOT\(QString beginAssetImport\(QString label, qint64 byteLength\)\)/);
+  assert.match(uiRep, /SLOT\(QString appendAssetImportChunk\(QString base64Chunk\)\)/);
+  assert.match(uiRep, /PROP\(QString assetImportStatus="state=idle" READONLY\)/);
+  assert.match(backendCpp, /QString LogosPalaceUiBackend::beginAssetImport\(/);
+  assert.match(backendCpp, /m_assetImportExpectedSequence/);
+  assert.doesNotMatch(
+    mainQml,
+    /backend\.(beginAssetStage|appendAssetStageChunk|commitAssetStage|cancelAssetStage)\(/,
+  );
   assert.match(mainQml, /objectName:\s*"palacePropTrash"/);
-  assert.match(mainQml, /objectName:\s*"palacePropBagPanel"/);
-  assert.match(mainQml, /objectName:\s*"palaceUserListToggle"/);
+  assert.match(mainQml, /objectName:\s*"palacePropBag"/);
+  assert.match(roomUtilityQml, /objectName:\s*"palacePropBagPanel"/);
+  assert.match(roomToolbarQml, /objectName:\s*"palaceUserListToggle"/);
   assert.match(mainQml, /Users:\s*"\s*\+\s*root\.participants\.length/);
 });
 
@@ -136,11 +178,11 @@ test("Palace selects verified assets from its active persistence profile", () =>
     allowed_profiles: ["release", "local-development"],
   });
   assert.match(
-    mainQml,
+    roomViewQml,
     /objectName:\s*"palaceRoomBackground"[\s\S]{0,420}image:\/\/basecamp-verified\//,
   );
   assert.match(
-    mainQml,
+    roomViewQml,
     /objectName:\s*"palaceRoomBackgroundPlaceholder"[\s\S]{0,800}roomBackground\.status !== Image\.Ready/,
   );
 });
@@ -151,10 +193,10 @@ test("local development keeps its unavailable public finality visible", () => {
     /readonly property bool localDevelopmentMode:[\s\S]{0,180}locallyCommittedAuthority[\s\S]{0,180}localDevelopmentProfile/,
   );
   assert.match(
-    mainQml,
-    /objectName:\s*"palaceLocalDevelopmentIndicator"[\s\S]{0,180}visible:\s*root\.localDevelopmentMode/,
+    roomToolbarQml,
+    /objectName:\s*"palaceLocalDevelopmentIndicator"[\s\S]{0,180}visible:\s*toolbar\.app\.localDevelopmentMode/,
   );
-  assert.match(mainQml, /Local development · public finality unavailable/);
+  assert.match(roomToolbarQml, /Local development · public finality unavailable/);
 });
 
 test("room chrome exposes synchronization and Storage degradation", () => {
@@ -162,28 +204,21 @@ test("room chrome exposes synchronization and Storage degradation", () => {
   assert.match(mainQml, /syncHealth === "fully_synchronized" \? "ok" : syncHealth/);
   assert.match(mainQml, /readonly property string storageDisplayState/);
   assert.match(mainQml, /encodedStatusValue\(storageStatus, "catalog"\)/);
-  assert.match(mainQml, /" · sync " \+ root\.syncDisplayState/);
-  assert.match(mainQml, /" · Storage " \+ root\.storageDisplayState/);
+  assert.match(connectionStatusQml, /syncState/);
+  assert.match(connectionStatusQml, /storageState/);
 });
 
 test("creator onboarding retries only sequencer visibility races", () => {
+  assert.match(backendCpp, /bool isRetryableDurableActionReceipt/);
+  assert.match(backendCpp, /rejected=lez-stable-account-read;reason=/);
+  assert.match(backendCpp, /rejected=lez-observation;reason=/);
+  assert.match(backendCpp, /transaction-not-materialized/);
+  assert.match(backendCpp, /const auto retryOrFail =/);
   assert.match(
-    mainQml,
-    /function retryableCreatorActionRejection\(receipt\)/,
+    backendCpp,
+    /QStringLiteral\("state="\) \+ m_onboardingWorkflowPhase/,
   );
-  assert.match(
-    mainQml,
-    /rejected=lez-stable-account-read;reason=/,
-  );
-  assert.match(
-    mainQml,
-    /rejected=lez-observation;reason=/,
-  );
-  assert.match(mainQml, /transaction-not-materialized/);
-  assert.match(
-    mainQml,
-    /updateCreatorActionRejection\(receipt\)/,
-  );
+  assert.doesNotMatch(mainQml, /function retryableCreatorActionRejection\(receipt\)/);
   assert.match(
     mainQml,
     /Waiting for LEZ to expose the new Palace…/,
@@ -191,10 +226,14 @@ test("creator onboarding retries only sequencer visibility races", () => {
 });
 
 test("creator onboarding materializes the entry-room state before enabling its door", () => {
-  assert.match(uiRep, /SLOT\(QString createInitialRoomState\(\)\)/);
+  assert.match(uiRep, /SLOT\(QString beginPalaceCreation\(QString title\)\)/);
+  assert.match(uiRep, /PROP\(QString onboardingWorkflowStatus=\"state=idle\" READONLY\)/);
+  const onboardingWorkflowCpp = backendCpp.slice(
+    backendCpp.indexOf("void LogosPalaceUiBackend::driveOnboardingWorkflow()"),
+  );
   assert.match(
-    backendCpp,
-    /QString LogosPalaceUiBackend::createInitialRoomState\(\)[\s\S]{0,280}modules\(\)\.palace_core\.createInitialRoomState\(\)/,
+    onboardingWorkflowCpp,
+    /void LogosPalaceUiBackend::driveOnboardingWorkflow\(\)[\s\S]{0,20000}modules\(\)\.palace_core[\s\S]{0,80}createInitialRoomState\(\)/,
   );
   const initialRoomStateStart = coreImpl.indexOf(
     "std::string PalaceCoreImpl::createInitialRoomState()",
@@ -210,29 +249,12 @@ test("creator onboarding materializes the entry-room state before enabling its d
   );
   assert.match(initialRoomState, /buildPalaceInitialRoomStateV1/);
   assert.match(initialRoomState, /submitPalaceInstruction/);
-  assert.match(mainQml, /function prepareInitialRoomState\(\)/);
-  assert.match(mainQml, /function createInitialRoomState\(\)/);
-  assert.match(
-    mainQml,
-    /onboardingCreatorActionId === "0"[\s\S]{0,180}prepareInitialRoomState\(\)/,
-  );
-  const createInitialRoomStateStart = mainQml.indexOf(
-    "function createInitialRoomState()",
-  );
-  const createInitialRoomStateEnd = mainQml.indexOf(
-    "function activateOnboarding()",
-    createInitialRoomStateStart,
-  );
-  assert.ok(
-    createInitialRoomStateStart >= 0
-      && createInitialRoomStateEnd > createInitialRoomStateStart,
-  );
-  const createInitialRoomState = mainQml.slice(
-    createInitialRoomStateStart,
-    createInitialRoomStateEnd,
-  );
-  assert.match(createInitialRoomState, /backend\.createInitialRoomState\(\)/);
-  assert.match(createInitialRoomState, /confirming-initial-room-state/);
+  assert.doesNotMatch(mainQml, /function prepareInitialRoomState\(\)/);
+  assert.doesNotMatch(mainQml, /function createInitialRoomState\(\)/);
+  assert.doesNotMatch(mainQml, /backend\.createInitialRoomState\(\)/);
+  assert.doesNotMatch(mainQml, /onboardingCreatedPalaceRetryTimer/);
+  assert.match(mainQml, /onOnboardingWorkflowStatusChanged/);
+  assert.match(mainQml, /confirming-initial-room-state/);
   assert.match(
     mainQml,
     /readonly property bool roomUsable:[\s\S]{0,180}entryRoomStateReady[\s\S]{0,180}onboardingInitialRoomStatePending/,
@@ -252,10 +274,61 @@ test("creator onboarding can resume room setup from existing LEZ identity", () =
     mainQml,
     /function startOnboarding\(\)\s*{[\s\S]{0,1200}if \(onboardingResumeReady\)[\s\S]{0,400}enterCreatorMode\(\)/,
   );
+  const onboardingStart = mainQml.indexOf("function startOnboarding()");
+  const onboardingEnd = mainQml.indexOf("function publishRoomSetup()", onboardingStart);
+  assert.ok(onboardingStart >= 0 && onboardingEnd > onboardingStart);
+  const onboardingFlow = mainQml.slice(onboardingStart, onboardingEnd);
+  assert.match(onboardingFlow, /backend\.preparePalaceOnboarding\(/);
+  assert.doesNotMatch(onboardingFlow, /backend\.(startLez|createIdentity)\(/);
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::preparePalaceOnboarding\([\s\S]{0,1600}modules\(\)\.palace_core\.startLez\(/,
+  );
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::preparePalaceOnboarding\([\s\S]{0,1600}modules\(\)\.palace_core\.createIdentity\(/,
+  );
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::preparePalaceOnboarding\([\s\S]{0,2200}resumeExistingPalace\(/,
+  );
+  assert.match(
+    uiRep,
+    /SLOT\(QString preparePalaceOnboarding\(QString mode, QString password, QString displayName, QString palaceAddress, QString catalogBase64, QString peerId, QString addressesJson\)\)/,
+  );
+  assert.match(mainQml, /backend\.beginPalaceCreation\(title\)/);
+  assert.match(mainQml, /backend\.resumePalaceOnboarding\(\)/);
+  assert.match(mainQml, /backend\.resumeExistingPalace\(/);
+  assert.doesNotMatch(mainQml, /backend\.(trackDurableAction|trackStorageBundle|trackPalaceRegistration)\(/);
+  assert.doesNotMatch(mainQml, /onboarding(Finality|Bundle|JoinRegistration)PollTimer/);
+  assert.doesNotMatch(
+    mainQml,
+    /backend\.(observePalaceTransition|reconcilePalaceTransition)\(/,
+  );
+  assert.match(
+    backendCpp,
+    /void LogosPalaceUiBackend::driveOnboardingWorkflow\(\)[\s\S]{0,12000}reconcilePalaceTransition/,
+  );
+  assert.match(
+    backendCpp,
+    /void LogosPalaceUiBackend::driveOnboardingWorkflow\(\)[\s\S]{0,2200}mvpStorageBundleStatus\(\)/,
+  );
+  assert.match(uiRep, /SLOT\(QString resumeExistingPalace\(/);
+  assert.match(backendCpp, /QString LogosPalaceUiBackend::resumeExistingPalace\(/);
   assert.match(mainQml, /Continue room setup/);
 });
 
 test("joining an existing Palace imports its user-shared Storage catalog before opening", () => {
+  assert.match(mainQml, /property string onboardingInvitation:\s*""/);
+  assert.match(mainQml, /function applyOnboardingInvitation\(\)/);
+  assert.match(
+    assetAuthoringPanelQml,
+    /objectName:\s*"palaceCopyInvitation"[\s\S]{0,260}sharedInvitationField\.copy\(\)/,
+  );
+  assert.match(
+    assetAuthoringPanelQml,
+    /objectName:\s*"palaceSharedInvitation"[\s\S]{0,300}app\.sharedPalaceInvitation/,
+  );
   assert.match(
     mainQml,
     /property string onboardingStorageCatalog:\s*""/,
@@ -269,11 +342,11 @@ test("joining an existing Palace imports its user-shared Storage catalog before 
     /readonly property bool onboardingResumeReady:[\s\S]{0,420}onboardingStorageCatalog\.trim\(\)\.length > 0/,
   );
   assert.match(
-    mainQml,
+    onboardingDetailsQml,
     /objectName:\s*"palaceOnboardingStorageCatalog"[\s\S]{0,520}maximumLength:\s*16384/,
   );
   assert.match(
-    mainQml,
+    onboardingDetailsQml,
     /objectName:\s*"palaceOnboardingStoragePeerEndpoint"[\s\S]{0,520}maximumLength:\s*16384/,
   );
   assert.match(
@@ -281,7 +354,7 @@ test("joining an existing Palace imports its user-shared Storage catalog before 
     /readonly property string sharedStorageCatalog:[\s\S]{0,160}onboardingBundleStatus/,
   );
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /objectName:\s*"palaceSharedStorageCatalog"[\s\S]{0,420}readOnly:\s*true/,
   );
   assert.match(
@@ -289,24 +362,33 @@ test("joining an existing Palace imports its user-shared Storage catalog before 
     /readonly property string sharedStoragePeerEndpoint:[\s\S]{0,100}onboardingStoragePeerEndpoint/,
   );
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /objectName:\s*"palaceSharedStoragePeerEndpoint"[\s\S]{0,420}readOnly:\s*true/,
   );
-  const joinStart = mainQml.indexOf("function openExistingPalace()");
-  const joinEnd = mainQml.indexOf("function enterCreatorMode()", joinStart);
-  assert.ok(joinStart >= 0 && joinEnd > joinStart);
-  const joinFlow = mainQml.slice(joinStart, joinEnd);
-  assert.match(joinFlow, /backend\.connectStorage\(\)/);
-  assert.match(joinFlow, /backend\.connectStoragePeer\(/);
-  assert.match(joinFlow, /backend\.fetchMvpStorageBundle\(/);
-  assert.match(joinFlow, /pollRoomSetupPublication\(\)/);
-  assert.match(mainQml, /function parseStoragePeerEndpoint\(encoded\)/);
+  assert.match(mainQml, /function resumeExistingPalaceWorkflow\(\)/);
+  assert.match(mainQml, /backend\.resumeExistingPalace\(/);
+  assert.doesNotMatch(mainQml, /backend\.prepareExistingPalaceStorage\(/);
+  assert.doesNotMatch(mainQml, /function fetchExistingStorageCatalog\(\)/);
   assert.match(
-    mainQml,
-    /function updateExistingStorageCatalog\(receipt\)[\s\S]{0,700}openExistingPalaceAfterCatalog\(\)/,
+    backendCpp,
+    /QString LogosPalaceUiBackend::resumeExistingPalace\([\s\S]{0,900}prepareExistingPalaceStorage\(/,
   );
+  assert.match(
+    backendCpp,
+    /QString LogosPalaceUiBackend::prepareExistingPalaceStorage\(/,
+  );
+  assert.match(backendCpp, /modules\(\)\.palace_core\.fetchMvpStorageBundle\(/);
+  assert.match(
+    uiRep,
+    /SLOT\(QString prepareExistingPalaceStorage\(QString catalogBase64, QString peerId, QString addressesJson, bool attachPeer\)\)/,
+  );
+  assert.match(mainQml, /function parseStoragePeerEndpoint\(encoded\)/);
+  assert.match(mainQml, /onOnboardingWorkflowStatusChanged/);
   assert.match(mainQml, /fetching-storage-catalog/);
-  assert.match(mainQml, /Shared room catalog \(required for an existing Palace\)/);
+  assert.match(
+    onboardingDetailsQml,
+    /Shared room catalog \(required for an existing Palace\)/,
+  );
 });
 
 test("Storage attachment stays explicit and reports a stopped Control node", () => {
@@ -319,9 +401,9 @@ test("Storage attachment stays explicit and reports a stopped Control node", () 
     mainQml,
     /function connectStorage\(\)[\s\S]{0,520}backend\.connectStorage\(\)/,
   );
-  assert.match(mainQml, /objectName:\s*"palaceConnectStorage"/);
+  assert.match(assetAuthoringPanelQml, /objectName:\s*"palaceConnectStorage"/);
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /Start Storage in Logos Control first\. Palace only connects to an already running node\./,
   );
   assert.match(
@@ -335,6 +417,7 @@ test("Storage attachment stays explicit and reports a stopped Control node", () 
 });
 
 test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
+  const roomQml = roomViewQml;
   assert.match(
     mainQml,
     /function canvasPixelToProtocol\s*\(\s*pixel,\s*inset,\s*usableSpan\s*\)/,
@@ -343,22 +426,22 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
     mainQml,
     /function canvasPixelsToProtocol\s*\(\s*pixelX,\s*pixelY\s*\)/,
   );
-  assert.match(mainQml, /objectName:\s*"palaceRoomMoveSurface"/);
+  assert.match(roomQml, /objectName:\s*"palaceRoomMoveSurface"/);
   assert.match(
-    mainQml,
+    roomQml,
     /objectName:\s*"palaceRoomMoveSurface"[\s\S]{0,220}z:\s*2/,
   );
   assert.match(
-    mainQml,
-    /var coordinate\s*=\s*root\.canvasPixelsToProtocol\(\s*mouse\.x,\s*mouse\.y\s*\)[\s\S]{0,120}root\.moveAvatar\(coordinate\.x,\s*coordinate\.y\)/,
+    roomQml,
+    /var coordinate\s*=\s*roomView\.app\.canvasPixelsToProtocol\(\s*mouse\.x,\s*mouse\.y\s*\)[\s\S]{0,120}roomView\.app\.moveAvatar\(coordinate\.x,\s*coordinate\.y\)/,
   );
 
-  const moveSurfaceOffset = mainQml.indexOf('objectName: "palaceRoomMoveSurface"');
-  const participantOffset = mainQml.indexOf('objectName: "palaceParticipants"');
-  const doorOffset = mainQml.indexOf('objectName: "palaceRoomDoor"');
-  const doorBlock = mainQml.slice(
+  const moveSurfaceOffset = roomQml.indexOf('objectName: "palaceRoomMoveSurface"');
+  const participantOffset = roomQml.indexOf('objectName: "palaceParticipants"');
+  const doorOffset = roomQml.indexOf('objectName: "palaceRoomDoor"');
+  const doorBlock = roomQml.slice(
     doorOffset,
-    mainQml.indexOf("onClicked:", doorOffset),
+    roomQml.indexOf("onClicked:", doorOffset),
   );
   assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < participantOffset);
   assert.ok(moveSurfaceOffset >= 0 && moveSurfaceOffset < doorOffset);
@@ -370,16 +453,16 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
     mainQml,
     /roomCanvasVerticalInset:\s*\n\s*roomCanvasTopInset \+ roomCanvasBottomInset/,
   );
-  assert.match(mainQml, /objectName:\s*"palaceRoomListPanel"/);
-  assert.match(mainQml, /objectName:\s*"palaceRoomListAtrium"/);
-  assert.match(mainQml, /objectName:\s*"palaceRoomListLounge"/);
+  assert.match(roomUtilityQml, /objectName:\s*"palaceRoomListPanel"/);
+  assert.match(roomUtilityQml, /objectName:\s*"palaceRoomListAtrium"/);
+  assert.match(roomUtilityQml, /objectName:\s*"palaceRoomListLounge"/);
   assert.match(
-    mainQml,
-    /objectName:\s*"palaceRoomListAtrium"[\s\S]{0,420}root\.selectFixedRoom\("atrium"\)/,
+    roomUtilityQml,
+    /objectName:\s*"palaceRoomListAtrium"[\s\S]{0,420}utility\.app\.selectFixedRoom\("atrium"\)/,
   );
   assert.match(
-    mainQml,
-    /objectName:\s*"palaceRoomListLounge"[\s\S]{0,520}root\.selectFixedRoom\("lounge"\)/,
+    roomUtilityQml,
+    /objectName:\s*"palaceRoomListLounge"[\s\S]{0,520}utility\.app\.selectFixedRoom\("lounge"\)/,
   );
   assert.match(mainQml, /function selectFixedRoom\s*\(\s*roomId\s*\)/);
   assert.match(
@@ -388,34 +471,34 @@ test("Main.qml maps canvas clicks below actors and exposes fixed rooms", () => {
   );
   assert.match(
     mainQml,
-    /selectedRoom === "lounge"[\s\S]{0,180}root\.gate5UseDoor\(\)/,
+    /selectedRoom === "lounge"[\s\S]{0,180}root\.useDoor\(\)/,
   );
   assert.match(
     mainQml,
     /selectedRoom === "atrium"[\s\S]{0,220}backend\.enterRoom\("atrium"\)/,
   );
   assert.match(
-    mainQml,
-    /objectName:\s*"palaceToolboxRooms"[\s\S]{0,420}root\.roomListOpen\s*=\s*!root\.roomListOpen/,
+    roomToolbarQml,
+    /objectName:\s*"palaceToolboxRooms"[\s\S]{0,420}toolbar\.app\.roomListOpen\s*=\s*!toolbar\.app\.roomListOpen/,
   );
   assert.match(
-    mainQml,
+    roomQml,
     /id: roomDoor[\s\S]{0,160}objectName:\s*"palaceRoomDoor"/,
   );
   assert.match(
     doorBlock,
-    /anchors\.bottomMargin:\s*root\.roomCanvasDoorBottomMargin/,
+    /anchors\.bottomMargin:\s*roomView\.app\.roomCanvasDoorBottomMargin/,
   );
   assert.match(
     doorBlock,
     /background:\s*Rectangle[\s\S]*contentItem:\s*Text/,
   );
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /property int cardWidth:\s*Math\.max\(\s*320,/,
   );
-  assert.match(mainQml, /text: "Set Atrium"/);
-  assert.match(mainQml, /text: "Set Lounge"/);
+  assert.match(assetAuthoringPanelQml, /text: "Set Atrium"/);
+  assert.match(assetAuthoringPanelQml, /text: "Set Lounge"/);
 });
 
 test("asset authoring capability stays sourced from Core owner status", () => {
@@ -459,31 +542,54 @@ test("asset authoring capability stays sourced from Core owner status", () => {
   );
   assert.match(
     mainQml,
-    /gate3PublishBundle\(\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+    /storagePublishBundle\(\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
   );
   assert.match(
     mainQml,
-    /gate3PublishPng\(handle\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
+    /storagePublishPng\(handle\)[\s\S]{0,220}if \(!canManageAssets\)\s*return rejectAssetAuthoringReadOnly\(\)/,
   );
   assert.match(
     mainQml,
-    /ToolTip\.text:\s*root\.assetAuthoringReadOnlyMessage\(\)/,
+    /reviewAndPublishAsset\(handle\)[\s\S]{0,260}backend\.approveAndPublishAsset\(String\(handle\)\)/,
   );
   assert.match(
-    mainQml,
-    /enabled:\s*root\.ready[\s\S]{0,160}root\.canManageAssets[\s\S]{0,160}!root\.assetImportRunning/,
+    roomToolbarQml,
+    /ToolTip\.text:\s*toolbar\.app\.assetAuthoringReadOnlyMessage\(\)/,
+  );
+  assert.match(
+    assetAuthoringPanelQml,
+    /enabled:\s*app\.ready[\s\S]{0,160}app\.canManageAssets[\s\S]{0,160}!app\.assetImportRunning/,
   );
   assert.match(
     backendCpp,
     /setActivePropAsset\([\s\S]{0,240}refreshAssetAuthoringCapabilityState\(\);/,
   );
+  const publicationStart = backendCpp.indexOf(
+    "QString LogosPalaceUiBackend::approveAndPublishAsset(",
+  );
+  const publicationEnd = backendCpp.indexOf(
+    "QString LogosPalaceUiBackend::assignRoomBackground(",
+    publicationStart,
+  );
+  assert.ok(publicationStart >= 0 && publicationEnd > publicationStart);
+  const publicationBlock = backendCpp.slice(
+    publicationStart,
+    publicationEnd,
+  );
+  assert.match(publicationBlock, /reviewAsset\(/);
+  assert.match(publicationBlock, /modules\(\)\.palace_core\.publishAsset\(/);
+  assert.match(uiRep, /SLOT\(QString approveAndPublishAsset\(QString handle\)\)/);
 });
 
 test("backend stops poll timers on teardown", () => {
+  assert.match(backendH, /class PalaceUiController/);
+  assert.match(backendH, /void configure\(RefreshCallback refresh/);
   assert.match(backendH, /~LogosPalaceUiBackend\(\)/);
   assert.match(backendCpp, /stopPollingTimers/);
-  assert.match(backendCpp, /m_deliveryPollTimer->stop\(\)/);
-  assert.match(backendCpp, /m_nodeEvidencePollTimer->stop\(\)/);
+  assert.match(backendCpp, /m_uiController\.stop\(\)/);
+  assert.match(backendCpp, /m_uiController\.configure\(/);
+  assert.match(backendCpp, /m_durableActionTracking = false/);
+  assert.match(backendCpp, /if \(m_durableActionTracking\)\s+driveDurableAction\(\)/);
 });
 
 test("LEZ moderation controls reflect Core materialized capability only", () => {
@@ -548,7 +654,7 @@ test("LEZ moderation controls reflect Core materialized capability only", () => 
   assert.match(submitSource, /currentHumanModerationContext\(\)/);
   assert.match(
     submitSource,
-    /humanModerationAuthority\(context, requiredCapability\)/,
+    /humanModerationAuthority\(\s*context, requiredCapability\)/,
   );
 
   assert.match(
@@ -559,7 +665,7 @@ test("LEZ moderation controls reflect Core materialized capability only", () => 
     backendCpp,
     /setModerationCapabilityState\(\s*modules\(\)\.palace_core\.moderationCapabilityStatus\(\)\);/,
   );
-  assert.match(mainQml, /gate4ModerationCapabilityState:\s*moderationCapabilityState/);
+  assert.match(mainQml, /readonly property string moderationCapabilityState:/);
   assert.match(
     mainQml,
     /readonly property bool canBanUser:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_user"\)\s*=== "1"/,
@@ -570,44 +676,57 @@ test("LEZ moderation controls reflect Core materialized capability only", () => 
     /readonly property bool canBanProp:[\s\S]{0,280}authority"\)\s*=== "finalized"[\s\S]{0,280}can_ban_prop"\)\s*=== "1"/,
   );
 
-  const banUserOffset = mainQml.indexOf('objectName: "palaceBanUserButton"');
-  const banPropOffset = mainQml.indexOf(
+  const banUserOffset = roomUtilityQml.indexOf('objectName: "palaceBanUserButton"');
+  const delegateOffset = roomUtilityQml.indexOf(
+    'objectName: "palaceDelegateModeratorButton"',
+  );
+  const footerOffset = roomUtilityQml.indexOf(
+    'objectName: "palaceModerationUserFooter"',
+  );
+  const banPropOffset = roomUtilityQml.indexOf(
     'objectName: "palaceBanAssignedPropButton"',
   );
   const trashOffset = mainQml.indexOf('objectName: "palacePropTrash"');
-  const assetsOffset = mainQml.indexOf(
+  const assetsOffset = roomToolbarQml.indexOf(
     'objectName: "palaceBackgroundModerationButton"',
   );
-  assert.ok(banUserOffset >= 0 && banPropOffset >= 0);
-  assert.ok(trashOffset >= 0 && assetsOffset >= 0);
-  const banUserBlock = mainQml.slice(banUserOffset, banPropOffset);
-  const banPropBlock = mainQml.slice(banPropOffset, banPropOffset + 600);
-  const trashBlock = mainQml.slice(trashOffset, trashOffset + 800);
-  const assetsBlock = mainQml.slice(
-    assetsOffset,
-    mainQml.indexOf("onClicked:", assetsOffset),
+  assert.ok(
+    banUserOffset >= 0
+      && delegateOffset > banUserOffset
+      && footerOffset < delegateOffset
+      && banPropOffset > footerOffset,
   );
-  assert.match(banUserBlock, /visible:\s*root\.canBanUser/);
-  assert.match(banUserBlock, /enabled:\s*root\.canBanUser/);
-  assert.match(banPropBlock, /visible:\s*root\.canBanProp/);
-  assert.match(banPropBlock, /enabled:\s*root\.canBanProp/);
+  assert.ok(trashOffset >= 0 && assetsOffset >= 0);
+  const banUserBlock = roomUtilityQml.slice(banUserOffset, banPropOffset);
+  const banPropBlock = roomUtilityQml.slice(banPropOffset, banPropOffset + 600);
+  const trashBlock = mainQml.slice(trashOffset, trashOffset + 800);
+  const assetsBlock = roomToolbarQml.slice(
+    assetsOffset,
+    roomToolbarQml.indexOf("onClicked:", assetsOffset),
+  );
+  assert.match(banUserBlock, /visible:\s*utility\.app\.canBanUser/);
+  assert.match(banUserBlock, /enabled:\s*utility\.app\.canBanUser/);
+  const footerBlock = roomUtilityQml.slice(footerOffset, delegateOffset);
+  assert.match(footerBlock, /height:\s*70/);
+  assert.match(banPropBlock, /visible:\s*utility\.app\.canBanProp/);
+  assert.match(banPropBlock, /enabled:\s*utility\.app\.canBanProp/);
   assert.match(trashBlock, /visible:\s*root\.canBanProp/);
   assert.match(trashBlock, /enabled:\s*root\.canBanProp/);
   assert.doesNotMatch(assetsBlock, /canBan(User|Prop)/);
 });
 
 test("moderation roster scrolls inside fixed operator panel", () => {
-  const panelOffset = mainQml.indexOf('objectName: "palaceModerationPanel"');
-  const rosterOffset = mainQml.indexOf('objectName: "palaceModerationRoster"');
-  const propOffset = mainQml.indexOf(
+  const panelOffset = roomUtilityQml.indexOf('objectName: "palaceModerationPanel"');
+  const rosterOffset = roomUtilityQml.indexOf('objectName: "palaceModerationRoster"');
+  const propOffset = roomUtilityQml.indexOf(
     'objectName: "palaceBanAssignedPropButton"',
   );
-  const statusOffset = mainQml.indexOf('objectName: "palaceModerationStatus"');
+  const statusOffset = roomUtilityQml.indexOf('objectName: "palaceModerationStatus"');
   assert.ok(panelOffset >= 0 && rosterOffset >= 0);
   assert.ok(panelOffset < rosterOffset);
   assert.ok(rosterOffset < propOffset);
   assert.ok(propOffset < statusOffset);
-  const rosterBlock = mainQml.slice(rosterOffset, rosterOffset + 900);
+  const rosterBlock = roomUtilityQml.slice(rosterOffset, rosterOffset + 900);
   assert.match(rosterBlock, /Flickable/);
   assert.match(
     rosterBlock,
@@ -619,7 +738,7 @@ test("moderation roster scrolls inside fixed operator panel", () => {
   );
   assert.match(
     rosterBlock,
-    /Repeater\s*\{[\s\S]{0,180}model:\s*root\.participants\.length/,
+    /Repeater\s*\{[\s\S]{0,180}model:\s*utility\.app\.participants\.length/,
   );
 });
 
@@ -654,58 +773,58 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
   assert.match(statusBanBlock, /visible:\s*root\.canBanUser/);
   assert.match(
     statusBanBlockLong,
-    /onClicked:\s*root\.gate4BanUser\(subjectUserId\)/,
+    /onClicked:\s*root\.banUser\(subjectUserId\)/,
   );
 
-  const rosterOffset = mainQml.indexOf(
+  const rosterOffset = roomUtilityQml.indexOf(
     'objectName: "palaceModerationRoster"',
   );
-  const footerOffset = mainQml.indexOf(
+  const footerOffset = roomUtilityQml.indexOf(
     'objectName: "palaceModerationUserFooter"',
   );
-  const banUserOffset = mainQml.indexOf(
+  const banUserOffset = roomUtilityQml.indexOf(
     'objectName: "palaceBanUserButton"',
   );
-  const banPropOffset = mainQml.indexOf(
+  const banPropOffset = roomUtilityQml.indexOf(
     'objectName: "palaceBanAssignedPropButton"',
   );
   assert.ok(rosterOffset >= 0 && footerOffset > rosterOffset);
   assert.ok(banUserOffset > footerOffset && banPropOffset > banUserOffset);
   assert.equal(
-    [...mainQml.matchAll(/objectName:\s*"palaceBanUserButton"/g)].length,
+    [...roomUtilityQml.matchAll(/objectName:\s*"palaceBanUserButton"/g)].length,
     1,
   );
 
-  const rosterBlock = mainQml.slice(rosterOffset, footerOffset);
+  const rosterBlock = roomUtilityQml.slice(rosterOffset, footerOffset);
   assert.match(rosterBlock, /delegate:\s*Button/);
   assert.match(rosterBlock, /objectName:\s*"palaceModerationRosterUser"/);
   assert.match(rosterBlock, /checkable:\s*true/);
   assert.match(
     rosterBlock,
-    /checked:\s*root\.selectedModerationUserId[\s\S]{0,100}participantUserId/,
+    /checked:\s*utility\.app\.selectedModerationUserId[\s\S]{0,100}participantUserId/,
   );
   assert.match(
     rosterBlock,
-    /onClicked:\s*root\.selectedModerationUserId\s*=\s*participantUserId/,
+    /onClicked:\s*utility\.app\.selectedModerationUserId\s*=\s*participantUserId/,
   );
   assert.match(rosterBlock, /Accessible\.name:\s*"Select " \+ participantName/);
 
-  const footerBlock = mainQml.slice(footerOffset, banPropOffset);
+  const footerBlock = roomUtilityQml.slice(footerOffset, banPropOffset);
   assert.match(
     footerBlock,
-    /property string subjectUserId:\s*root\.selectedModerationUserId/,
+    /property string subjectUserId:\s*utility\.app\.selectedModerationUserId/,
   );
-  assert.match(footerBlock, /visible:\s*root\.canBanUser/);
+  assert.match(footerBlock, /visible:\s*utility\.app\.canBanUser/);
   assert.match(
     footerBlock,
-    /onClicked:\s*root\.gate4BanUser\(subjectUserId\)/,
+    /onClicked:\s*utility\.app\.banUser\(subjectUserId\)/,
   );
 
-  const participantSelectOffset = mainQml.indexOf(
+  const participantSelectOffset = participantViewQml.indexOf(
     'objectName: "palaceParticipantSelect"',
   );
   assert.ok(participantSelectOffset >= 0);
-  const participantSelectBlock = mainQml.slice(
+  const participantSelectBlock = participantViewQml.slice(
     participantSelectOffset,
     participantSelectOffset + 640,
   );
@@ -715,7 +834,7 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
   );
   assert.match(
     participantSelectBlock,
-    /onClicked:[\s\S]{0,120}root\.selectedModerationUserId[\s\S]{0,80}= participantDelegate\.participantUserId/,
+    /onClicked:[\s\S]{0,120}participantView\.app\.selectedModerationUserId[\s\S]{0,80}= participantView\.participantUserId/,
   );
 
   assert.match(mainQml, /function closeActiveUtilityPanel\(\)/);
@@ -726,9 +845,10 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
   assert.match(mainQml, /function focusChatWhenUnobstructed\(\)/);
   assert.match(
     mainQml,
-    /function focusChatWhenUnobstructed\(\)[\s\S]{0,240}chatInput\.forceActiveFocus\(\)/,
+    /function focusChatWhenUnobstructed\(\)[\s\S]{0,240}roomChatBar\.focusInput\(\)/,
   );
 
+  const roomControlsQml = roomToolbarQml + chatBarQml;
   for (const [objectName, accessibleName] of [
     ["palaceToolboxDoor", "Door / room exit"],
     ["palaceToolboxRooms", "Rooms"],
@@ -739,15 +859,15 @@ test("operator utilities keep selected-user moderation and keyboard access", () 
     ["palaceWearAssignedProp", "Wear assigned prop"],
     ["palaceRemoveAssignedProp", "Remove worn prop"],
   ]) {
-    const offset = mainQml.indexOf(`objectName: "${objectName}"`);
+    const offset = roomControlsQml.indexOf(`objectName: "${objectName}"`);
     assert.ok(offset >= 0, `${objectName} selector remains available`);
     assert.match(
-      mainQml.slice(offset, offset + 360),
+      roomControlsQml.slice(offset, offset + 360),
       new RegExp(`Accessible\\.name:\\s*"${accessibleName}"`),
     );
   }
   assert.match(
-    mainQml,
+    chatBarQml,
     /objectName:\s*"palaceChatInput"[\s\S]{0,260}Accessible\.name:\s*"Chat message"/,
   );
 });
@@ -762,21 +882,21 @@ test("prop placement uses bounded layer presets and click preview", () => {
     /function propDraftReady\(\)[\s\S]{0,220}validPropLayer\(propDraftLayer\)/,
   );
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /model:\s*\["head",\s*"body",\s*"hand",\s*"back"\]/,
   );
   assert.match(
-    mainQml,
-    /onClicked:\s*root\.propDraftLayer = modelData/,
+    assetAuthoringPanelQml,
+    /onClicked:\s*app\.propDraftLayer = modelData/,
   );
-  assert.match(mainQml, /objectName:\s*"palaceAssetPropPreview-"\s*\+\s*backgroundCard\.handle/);
-  assert.match(mainQml, /objectName:\s*"palaceAssetPropPreviewHit-"\s*\+\s*backgroundCard\.handle/);
+  assert.match(assetAuthoringPanelQml, /objectName:\s*"palaceAssetPropPreview-"\s*\+\s*backgroundCard\.handle/);
+  assert.match(assetAuthoringPanelQml, /objectName:\s*"palaceAssetPropPreviewHit-"\s*\+\s*backgroundCard\.handle/);
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /setPropDraftAnchorFromPreview\([\s\S]{0,220}mouse\.x,[\s\S]{0,120}mouse\.y/,
   );
   assert.match(
-    mainQml,
+    assetAuthoringPanelQml,
     /Pick layer, then click prop preview to set hot spot/,
   );
 });

@@ -58,66 +58,13 @@ particular:
 - a submitted transaction is not finalized until exact explorer evidence is
   verified.
 
-## Development acceptance safety
+## Development E2E safety
 
-The Basecamp gate scripts install unsigned LGXs only into temporary,
-test-specific user directories. Do not reuse their `--allow-unsigned` workflow
-for a production profile. Evidence under `.artifacts/` may contain peer IDs,
-public account IDs, screenshots, timing, and logs; review it before sharing.
+The supported launcher, [`scripts/run-palace-e2e.sh`](scripts/run-palace-e2e.sh), is a local-development workflow. It starts a local sequencer, installs explicit LGX inputs into three temporary Basecamp profiles, and drives the compiled UI through normal user controls. It must receive canonical runtime paths and an asset manifest located outside Git. The manifest may select ignored local assets, but the runner never stages or embeds them.
 
-The full MVP runner is not a disposable local fixture. It registers public
-testnet identities, requires the fixed Palace root to be uninitialized, and
-submits public LEZ transactions whose effects remain after local artifacts are
-deleted. Its canonical `0600` program/root lock lives in the fixed, mode-`0700`
-`/var/tmp/logos-palace-<uid>` claim directory and is held only by an exact
-close-on-exec supervisor; gates and application processes never inherit the
-descriptor. The immutable runner and release mutators are killed if that
-supervisor dies. Before any release-state mutation, the lock-holding runner
-validates the prior claim and retires its exact v2 scope; legacy claims must
-have no bound process. Every runtime gate runs in an attested cgroup-v2 unit
-beneath one per-run slice. Barrier release proves the exact sole stopped
-leader; a parent-death guardian holds the exact scope `cgroup.kill` descriptor
-and its `cgroup.procs` descriptor and kills all descendants if the runner
-disappears. After the gate child exits, two membership reads must show only the
-guardian; otherwise it kills the exact cgroup and fails before disarming. PASS
-requires status zero, no unit or slice residue, and manager unload. Interrupted
-attempts are cleaned and archived before retry. An exact-cleanup failure exits
-the interruption path immediately, without waiting on an untrusted numeric
-background PID or continuing report processing.
+The launcher uses unsigned local LGX installation only inside its temporary profiles. Do not reuse that option for a release or personal profile. Evidence under `.artifacts/` can contain peer IDs, public account IDs, screenshots, and logs; review it before sharing and remove credentials, recovery phrases, private keys, personal data, and unrelated local paths.
 
-Direct-child termination does not trust a numeric PID or process-group ID.
-The harness captures PID plus kernel start time, then invokes a helper compiled
-from this repository. The helper calls `pidfd_open`, rechecks
-`/proc/<pid>/stat` through a no-follow descriptor, rejects an identity
-mismatch, and delivers only the requested `SIGTERM` or `SIGKILL` through
-`pidfd_send_signal`. A bounded child-exit timeout fails the gate; exact outer
-cgroup cleanup owns any remaining descendant or daemon residue.
-
-Standalone Gate 1 and Gate 2 also attest their lock supervisor before scope
-creation. The attestation binds the exact parent/start-time/executable/argv
-chain and lock device/inode, proves sole descriptor ownership by `flock`,
-requires the matching exclusive kernel row in `/proc/locks`, tests
-contention, and repeats identity/descriptor reads to reject a mid-check
-replacement.
-
-The controller treats the local Unix account and immutable Nix store as
-trusted. It is designed for crashes, stale PIDs, PID reuse, detached
-descendants, symlink replacement, and accidental concurrent launches, not a
-malicious process already running as the same UID.
-
-If interrupted after production Gate 3 begins, resume only the exact recorded
-run and immutable source snapshot; starting over can conflict with already
-accepted transactions.
-
-These process controls require Linux cgroup v2 and the per-user `systemd`
-manager only for acceptance and release evidence. They are not part of Palace
-protocol execution, contracts, LGX APIs, persisted schemas, or ordinary
-Basecamp runtime.
-
-The checked-in `program/testnet-v0.2-wallet.json` is public network
-configuration, not a wallet or credential. Deployment tools require a
-disposable testnet wallet directory and must never print or commit its recovery
-phrase.
+The local story does not submit public-testnet transactions and does not claim public finality. Public deployment and finalized-history work remains tracked by issue #2. Logos Control owns Storage and LEZ node startup; Palace does not manage system services, cgroups, or an application server.
 
 ## Current limitations
 

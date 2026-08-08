@@ -122,7 +122,7 @@ test("release manifest validates exact pinned public metadata", () => {
   assert.equal(validated.network.lezNetworkId, "logos-lez-testnet-v0.2.0");
   assert.equal(
     validated.dependencies.basecamp,
-    "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
+    "3esmit/logos-basecamp@4313ef96a20887552b1dced32d41347a3c16944b",
   );
   assertReleaseRootBindings();
 });

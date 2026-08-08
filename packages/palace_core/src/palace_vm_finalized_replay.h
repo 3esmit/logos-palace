@@ -90,7 +90,7 @@ struct PalaceVmFinalizedReplayPlanV1 {
     bool canMutateSharedState = false;
 };
 
-// Reconstructs the one pinned Gate 5 VM turn from already-finalized durable
+// Reconstructs one pinned room-transition VM turn from already-finalized durable
 // evidence. It never queues or submits an action.
 PalaceVmFinalizedReplayPlanV1
 buildPalaceVmFinalizedReplayPlanV1(

@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 output_root="${1:-${repo_root}/.artifacts/prealpha-release}"
-release_version="${PALACE_RELEASE_VERSION:-v0.1.0-pre-alpha.1}"
+release_version="${PALACE_RELEASE_VERSION:-v0.2.0-pre-alpha.1}"
 platform="${PALACE_RELEASE_PLATFORM:-x86_64-linux}"
 
 if [[ ! "${release_version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-pre-alpha\.[0-9]+$ ]]; then
@@ -150,7 +150,7 @@ install -m 0444 "${repo_root}/README.md" "${package_root}/README.md"
 install -m 0444 "${repo_root}/LICENSE" "${package_root}/LICENSE"
 install -m 0444 "${repo_root}/SECURITY.md" "${package_root}/SECURITY.md"
 
-archive_name="logos-palace-mvp-${release_version#v}-${platform}.tar.gz"
+archive_name="logos-palace-${release_version#v}-${platform}.tar.gz"
 tar \
   --sort=name \
   --mtime='UTC 1970-01-01' \

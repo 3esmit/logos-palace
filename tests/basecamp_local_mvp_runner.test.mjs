@@ -8,12 +8,19 @@ import test from "node:test";
 const runnerPath = fileURLToPath(
   new URL("../scripts/run-basecamp-local-mvp.sh", import.meta.url),
 );
+const launcherPath = fileURLToPath(
+  new URL("../scripts/run-palace-e2e.sh", import.meta.url),
+);
 const flowPath = fileURLToPath(
+  new URL("./palace_e2e_user_story.mjs", import.meta.url),
+);
+const implementationFlowPath = fileURLToPath(
   new URL("./basecamp_local_mvp_user_flow.mjs", import.meta.url),
 );
 
 test("local MVP runner requires explicit runtime and asset inputs", async () => {
   const runner = await readFile(runnerPath, "utf8");
+  const launcher = await readFile(launcherPath, "utf8");
   for (const variable of [
     "PALACE_LOCAL_MVP_SEQUENCER",
     "PALACE_LOCAL_MVP_SEQUENCER_CONFIG",
@@ -28,43 +35,54 @@ test("local MVP runner requires explicit runtime and asset inputs", async () => 
     assert.match(runner, new RegExp(variable));
   }
   assert.match(runner, /PALACE_LEZ_PROFILE.*local-development/);
-  assert.match(runner, /basecamp_local_mvp_user_flow\.mjs/);
+  assert.match(launcher, /PALACE_LOCAL_MVP_NODE_FLOW/);
+  assert.match(launcher, /palace_e2e_user_story\.mjs/);
+  assert.match(runner, /PALACE_LOCAL_MVP_NODE_FLOW/);
+  assert.match(runner, /tests\/palace_e2e_user_story\.mjs/);
   assert.match(runner, /timings: result\.timings/);
   assert.match(runner, /propAssigned: Boolean\(result\.creator\?\.palace\?\.propId\)/);
   assert.match(runner, /propBanned: Number\(result\.moderation\?\.banPropAction \?\? 0\) > 0/);
   assert.match(runner, /missingStorageObject: result\.recovery\?\.missingStorageObject\?\.status === "passed"/);
   assert.match(runner, /missingStorageStates: result\.recovery\?\.missingStorageObject\?\.states \?\? \[\]/);
+  assert.match(runner, /schema: "logos-palace\.e2e-user-story-report"/);
+  assert.doesNotMatch(runner, /schema: "logos-palace\.local-mvp-report"/);
   assert.doesNotMatch(runner, /\/home\//);
   assert.doesNotMatch(runner, /PALACE_E2E_ASSET_DIR|PALACE_E2E_ASSET_INPUT_ROOT=.*default/);
 });
 
 test("local MVP user story derives assets from the validated manifest", async () => {
   const flow = await readFile(flowPath, "utf8");
-  assert.match(flow, /loadGate3AssetInputs/);
-  assert.match(flow, /PALACE_E2E_ASSET_INPUT_ROOT/);
-  assert.match(flow, /PALACE_E2E_ASSET_MANIFEST/);
-  assert.match(flow, /selectionPathFor/);
-  assert.match(flow, /ensureModerationControlVisible/);
-  assert.match(flow, /name\.startsWith\("palaceAsset"\)/);
-  assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR/);
-  assert.doesNotMatch(flow, /PALACE_E2E_ASSET_DIR|\/home\//);
-  assert.match(flow, /sendToReceive: \{[\s\S]*status: timingSamples\.deliveryReceive\.length > 0 \? "measured" : "not-measured"/);
-  assert.match(flow, /every 30th ordered message is awaited/);
-  assert.match(flow, /proveMissingStorageObject/);
-  assert.match(flow, /states: \["missing", "fetching", "degraded"\]/);
-  assert.match(flow, /derivedMissingCid/);
-  assert.match(flow, /capturePalaceFrameTiming/);
-  assert.match(flow, /gate5VmTurnMetrics/);
-  assert.match(flow, /acceptanceApplicationRoundTrip/);
-  assert.match(flow, /receiptProperty = method === "acceptanceApplicationRoundTrip"/);
-  assert.match(flow, /acceptanceRoundTripResponse/);
-  assert.match(flow, /payloadSemantics: "application UTF-8 bytes; not transport wire bytes"/);
-  assert.match(flow, /peakMemory: \{ status: "not-measured"/);
-  assert.match(flow, /measurementPolicy/);
+  const implementation = await readFile(implementationFlowPath, "utf8");
+  assert.match(flow, /basecamp_local_mvp_user_flow\.mjs/);
+  assert.match(implementation, /loadPalaceAssetInputs/);
+  assert.match(implementation, /PALACE_E2E_ASSET_INPUT_ROOT/);
+  assert.match(implementation, /PALACE_E2E_ASSET_MANIFEST/);
+  assert.match(implementation, /selectionPathFor/);
+  assert.match(implementation, /palaceAssetShowTop/);
+  assert.match(implementation, /palaceAssetShowAll/);
+  assert.match(implementation, /palaceCopyInvitation/);
+  assert.match(implementation, /palaceOnboardingInvitation/);
+  assert.doesNotMatch(implementation, /ensureModerationControlVisible/);
+  assert.doesNotMatch(implementation, /callRoot\([^\n]*,\s*"roomEnterRoom"/);
+  assert.doesNotMatch(implementation, /callRoot|invokeWatchedReceipt|invokeWatchedExpression|\.evaluate\(/);
+  assert.doesNotMatch(implementation, /inspector\.send\(\{ objectId: root, method: "connectStorage"/);
+  assert.doesNotMatch(implementation, /PALACE_E2E_ASSET_DIR/);
+  assert.doesNotMatch(implementation, /PALACE_E2E_ASSET_DIR|\/home\//);
+  assert.match(implementation, /sendToReceive: \{[\s\S]*status: timingSamples\.deliveryReceive\.length > 0 \? "measured" : "not-measured"/);
+  assert.match(implementation, /every 30th ordered message is awaited/);
+  assert.match(implementation, /proveMissingStorageObject/);
+  assert.match(implementation, /states: \["missing", "fetching", "degraded"\]/);
+  assert.match(implementation, /derivedMissingCid/);
+  assert.doesNotMatch(implementation, /capturePalaceFrameTiming/);
+  assert.doesNotMatch(implementation, /gate[0-9]|acceptanceApplicationRoundTrip|acceptanceRoundTripResponse/);
+  assert.match(implementation, /vm: \{\s*status: "not-measured"/);
+  assert.match(implementation, /measurementPolicy/);
+  assert.match(implementation, /palaceAdminVerifyStorageRetention/);
+  assert.match(implementation, /palaceStorageDiagnosticFetch/);
 });
 
 test("local MVP user-flow cleanup tolerates an already-reaped Basecamp", async () => {
-  const flow = await readFile(flowPath, "utf8");
-  assert.match(flow, /process\.kill\(-this\.child\.pid, "SIGTERM"\)/);
-  assert.match(flow, /error\?\.code !== "ESRCH"/);
+  const implementation = await readFile(implementationFlowPath, "utf8");
+  assert.match(implementation, /process\.kill\(-this\.child\.pid, "SIGTERM"\)/);
+  assert.match(implementation, /error\?\.code !== "ESRCH"/);
 });

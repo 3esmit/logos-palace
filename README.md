@@ -6,9 +6,9 @@ Logos Palace is an experimental, room-first social space for [Logos Basecamp](ht
 
 People meet through a locally run Basecamp application. Live presence and conversation travel over Logos Delivery. Room backgrounds, props, scripts, and catalogs are published through Logos Storage. Durable identity, permissions, moderation, and shared state are handled by a Palace program on Logos Execution Zone (LEZ). Palace itself has no application-owned backend.
 
-The current release is an **x86_64 Linux MVP pre-alpha**. It is an experiment in architecture and community software, not a production social network.
+The current release is an **x86_64 Linux productization pre-alpha**. It is an experiment in architecture and community software, not a production social network.
 
-Download [v0.1.0-pre-alpha.7](https://github.com/3esmit/logos-palace/releases/tag/v0.1.0-pre-alpha.7) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.1.0-pre-alpha.7/logos-palace-mvp-0.1.0-pre-alpha.7-x86_64-linux.tar.gz). The archive SHA-256 is `a9266fdfe2399bf820816800084ebc3ee153a0757bff24b2fa7f509955ec4c08`.
+Download [v0.2.0-pre-alpha.1](https://github.com/3esmit/logos-palace/releases/tag/v0.2.0-pre-alpha.1) or its [x86_64 Linux archive](https://github.com/3esmit/logos-palace/releases/download/v0.2.0-pre-alpha.1/logos-palace-0.2.0-pre-alpha.1-x86_64-linux.tar.gz). The archive SHA-256 is `570715a63c9c7bfbb40f11741318ee4bd37cfe5d1e1ad2448544088cdad613cf`.
 
 Before installing Palace, add the [3esmit release catalog](https://raw.githubusercontent.com/3esmit/logos-3esmit-release/main/logos-repo.json) to the Basecamp package manager. The catalog supplies the forked Delivery, Storage, LEZ Core, and Logos Control packages required by the Palace modules.
 
@@ -135,13 +135,21 @@ dependencies are installed from the 3esmit release catalog:
 
 The Palace LEZ program is built separately from those packages, but its source, schema, state machine, SPEL guest, and RISC Zero image build are owned by this repository under [`program/`](program/).
 
-For the complete trust model, transition lifecycle, verified-asset boundary, recovery rules, and release harness, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For the end-to-end product story and validation plan, read [`MVP_IMPLEMENTATION_PLAN.md`](MVP_IMPLEMENTATION_PLAN.md).
+For the complete trust model, transition lifecycle, verified-asset boundary,
+recovery rules, and validation model, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For the end-to-end product story and validation plan, read
+[`MVP_IMPLEMENTATION_PLAN.md`](MVP_IMPLEMENTATION_PLAN.md).
 
 ## Current status
 
-**MVP pre-alpha - Linux `x86_64` - tag `v0.1.0-pre-alpha.1`**
+**Published productization pre-alpha - Linux `x86_64` - tag `v0.2.0-pre-alpha.1`**
 
-The compiled local-development story currently passes with three independent Basecamp clients:
+This release is built on Basecamp `0.2.4-alpha.1`, with `palace_core` and
+`logos_palace_ui` at `0.2.0`. The Palace VM remains at `0.1.0`; all required
+platform packages are installed from the 3esmit release catalog.
+
+The last recorded compiled local-development story passes with three
+independent Basecamp clients:
 
 - administrator-selected backgrounds are published and fetched;
 - ordered Delivery traffic converges across clients;
@@ -150,7 +158,11 @@ The compiled local-development story currently passes with three independent Bas
 - a missing Storage source fails closed with an explicit degraded result;
 - clients recover after the original provider stops.
 
-The project does **not** yet claim completion of the public-testnet MVP. A clean release run still needs public LEZ finality, creator removal with retained records and content, every required cold-start/rebuild path, final resource evidence, and a production security review.
+The project does **not** yet claim public-testnet completion. Local LEZ
+committed state is the current release authority; public finality, creator
+removal with retained records and content, cold rebuild coverage, and a
+production security review remain tracked work. Issue #2 tracks the public
+testnet evidence boundary.
 
 ### Privacy boundary
 
@@ -163,12 +175,10 @@ Logos is building a private-by-default stack. **The current Logos Palace MVP is 
 - Linux `x86_64`;
 - Nix with flakes enabled;
 - network access for pinned GitHub and Nix dependencies;
-- a per-user `systemd` manager and unified cgroup v2 for the official acceptance runners;
 - Rust and the RISC Zero toolchain only when building the Palace program directly.
 
-The `systemd` and cgroup requirements apply only to the official acceptance
-runners below. Ordinary Basecamp execution and the local MVP user story do not
-require systemd-managed scopes.
+The local user story uses Logos Control for Storage and LEZ startup. Ordinary
+Basecamp execution does not require systemd-managed scopes.
 
 Dependency revisions are frozen by [`flake.lock`](flake.lock).
 
@@ -184,13 +194,24 @@ nix build \
   .#lez-core-lgx-portable
 ```
 
-### Run contract and release-seam checks
+### Run unit, component, and product-boundary checks
 
 ```sh
 nix build \
   .#checks.x86_64-linux.palace-vm-contracts \
   .#checks.x86_64-linux.palace-core-contracts \
-  .#checks.x86_64-linux.palace-acceptance-seams
+  .#checks.x86_64-linux.palace-core-production-fixture-audit \
+  .#checks.x86_64-linux.palace-product-checks
+
+node --check tests/palace_e2e_user_story.mjs
+node --test tests/*.test.mjs
+
+qmllint -I packages/logos_palace_ui/src/qml \
+  packages/logos_palace_ui/src/qml/Main.qml \
+  packages/logos_palace_ui/src/qml/components/*.qml \
+  packages/logos_palace_ui/src/qml/onboarding/*.qml \
+  packages/logos_palace_ui/src/qml/room/*.qml \
+  packages/logos_palace_ui/src/qml/admin/*.qml
 ```
 
 ### Build and test the Palace program
@@ -204,7 +225,7 @@ cargo build --manifest-path program/palace_program/methods/Cargo.toml --release
 
 The final command requires the RISC Zero guest toolchain. Program schemas, bounds, capabilities, PDA seeds, and migration notes are documented in [`program/README.md`](program/README.md).
 
-### Run the local MVP user story
+### Run the compiled local user story
 
 This is the stack-complete local loop described above. It starts a real local
 sequencer, deploys the supplied Palace program, launches three compiled
@@ -230,25 +251,22 @@ PALACE_LOCAL_MVP_CORE_LGX=/path/to/palace_core.lgx \
 PALACE_LOCAL_MVP_UI_LGX=/path/to/logos_palace_ui.lgx \
 PALACE_E2E_ASSET_INPUT_ROOT=/path/to/asset-inputs \
 PALACE_E2E_ASSET_MANIFEST=/path/to/asset-inputs/manifest-v1.json \
-./scripts/run-basecamp-local-mvp.sh .artifacts/local-mvp
+./scripts/run-palace-e2e.sh .artifacts/e2e
 ```
 
 Keep the asset inputs outside Git. The manifest selects the backgrounds and
 optional props used by this user story.
 
-### Run compiled Basecamp end-to-end checks
-
-```sh
-./scripts/run-basecamp-gate1.sh
-./scripts/run-basecamp-gate2.sh
-```
-
-The local and public full-stack runners require explicit runtime paths and produce persistent evidence. Read [`MVP_IMPLEMENTATION_PLAN.md`](MVP_IMPLEMENTATION_PLAN.md) and the script usage before running them. The public runner creates testnet effects that cannot be undone by deleting local artifacts.
+The E2E runner requires explicit runtime paths and an ignored asset manifest.
+It starts the local sequencer, installs the required packages into three
+independent Basecamp profiles, drives the compiled UI, and writes one
+path-free report plus local screenshots. Public-testnet execution remains
+separate and is not implied by this command.
 
 ### Build the pre-alpha archive
 
 ```sh
-PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.7 \
+PALACE_RELEASE_VERSION=v0.2.0-pre-alpha.1 \
   ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 ```
 

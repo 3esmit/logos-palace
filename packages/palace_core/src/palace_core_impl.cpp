@@ -26,7 +26,6 @@
 #include "logos_sdk.h"
 #include "logos_json.h"
 
-#include "palace_application_round_trip.h"
 #include "palace_delivery.h"
 #include "palace_human_moderation.h"
 #include "palace_initial_authoring.h"
@@ -188,7 +187,7 @@ bool isColdVmReplayReason(const std::string& reason)
 
 using NamedLezRecord = palace::PalaceLezNamedAuthorityAccountV1;
 
-struct ActiveGate3Content {
+struct ActivePalaceContent {
     bool accepted = false;
     std::string reason;
     palace::PalaceLezRootRecordV3 root;
@@ -201,14 +200,14 @@ struct ActiveGate3Content {
     std::string propCid;
 };
 
-ActiveGate3Content gate3AuthorityLinkedContent(
+ActivePalaceContent activeAuthorityLinkedContent(
     const palace::PalaceLezAuthorityMaterializationV1&
         authority,
     const palace::PalaceStorageMvpBundle& storage)
 {
-    ActiveGate3Content result;
+    ActivePalaceContent result;
     if (!storage.complete()) {
-        result.reason = "gate3-bundle-incomplete";
+        result.reason = "palace-content-bundle-incomplete";
         return result;
     }
 
@@ -230,14 +229,14 @@ ActiveGate3Content gate3AuthorityLinkedContent(
         || !palace::isSafePalaceCid(script->cid)
         || (prop != nullptr
             && !palace::isSafePalaceCid(prop->cid))) {
-        result.reason = "gate3-content-mismatch";
+        result.reason = "palace-content-content-mismatch";
         return result;
     }
 
     result.records.reserve(authority.accounts.size());
     for (const NamedLezRecord& named : authority.accounts) {
         if (!named.account.accepted) {
-            result.reason = "gate3-authority-account-invalid";
+            result.reason = "palace-content-authority-account-invalid";
             return result;
         }
         result.records.push_back(named);
@@ -261,7 +260,7 @@ ActiveGate3Content gate3AuthorityLinkedContent(
             != authority.lastOrderedActionId
         || root->entryRoomId != root->roomIds[0]
         || root->activeManifestCid != palaceManifest->cid) {
-        result.reason = "gate3-root-link-mismatch";
+        result.reason = "palace-content-root-link-mismatch";
         return result;
     }
 
@@ -293,7 +292,7 @@ ActiveGate3Content gate3AuthorityLinkedContent(
             != palace::PalaceLezVmProfileV3::IptScraeMvpV1
         || lounge->vmProfile
             != palace::PalaceLezVmProfileV3::IptScraeMvpV1) {
-        result.reason = "gate3-room-link-mismatch";
+        result.reason = "palace-content-room-link-mismatch";
         return result;
     }
 
@@ -311,22 +310,22 @@ ActiveGate3Content gate3AuthorityLinkedContent(
     return result;
 }
 
-ActiveGate3Content activeGate3Content(
+ActivePalaceContent activePalaceContent(
     const palace::PalaceLezAuthorityMaterializationV1&
         authority,
     const palace::PalaceStorageMvpBundle& storage,
     const std::string& storageMode,
     const std::size_t verifiedObjects)
 {
-    ActiveGate3Content result;
+    ActivePalaceContent result;
     if ((storageMode != "verified"
             && storageMode != "retained")
         || verifiedObjects != storage.artifactCount()) {
-        result.reason = "gate3-bundle-not-verified";
+        result.reason = "palace-content-bundle-not-verified";
         return result;
     }
 
-    result = gate3AuthorityLinkedContent(authority, storage);
+    result = activeAuthorityLinkedContent(authority, storage);
     if (!result.accepted)
         return result;
     if (result.script
@@ -334,7 +333,7 @@ ActiveGate3Content activeGate3Content(
            "SET door_open 1\n"
            "GOTOROOM lounge\n") {
         result.accepted = false;
-        result.reason = "gate3-content-mismatch";
+        result.reason = "palace-content-content-mismatch";
     }
     return result;
 }
@@ -345,7 +344,7 @@ std::string entryRoomStateStatus(
     const std::string& storageMode,
     const std::size_t verifiedObjects)
 {
-    const ActiveGate3Content content = activeGate3Content(
+    const ActivePalaceContent content = activePalaceContent(
         authority, storage, storageMode, verifiedObjects);
     if (!content.accepted)
         return "unavailable";
@@ -462,21 +461,6 @@ std::optional<std::string> palaceIdFromUri(
     }
     return palaceId;
 }
-
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-std::optional<std::string> storageAcceptanceHolderId(
-    const std::string& profile)
-{
-    if (profile != "alice"
-        && profile != "bob"
-        && profile != "carol") {
-        return std::nullopt;
-    }
-    return palace::crypto::sha256Hex(
-        "logos-palace-storage-acceptance-holder-v1\n"
-        + profile + "\n");
-}
-#endif
 
 std::string base64Url(const std::string& bytes)
 {
@@ -683,35 +667,23 @@ struct DeliveryStartConfig {
     bool accepted = false;
     std::string reason;
     std::string moduleConfig;
-    std::string acceptanceProfile;
 };
 
 DeliveryStartConfig parseDeliveryStartConfig(const std::string& nodeConfig)
 {
     if (nodeConfig.empty())
-        return {false, "empty-config", {}, {}};
+        return {false, "empty-config", {}};
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(
         QByteArray::fromStdString(nodeConfig), &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
-        return {false, "invalid-config", {}, {}};
+        return {false, "invalid-config", {}};
 
-    QJsonObject object = document.object();
-    std::string profile;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    const QJsonValue profileValue =
-        object.take(QStringLiteral("palaceAcceptanceProfile"));
-    if (!profileValue.isUndefined()) {
-        if (!profileValue.isString())
-            return {false, "invalid-acceptance-profile", {}, {}};
-        profile = profileValue.toString().toStdString();
-    }
-#endif
+    const QJsonObject object = document.object();
     return {
         true,
         "accepted",
         QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString(),
-        profile,
     };
 }
 
@@ -994,16 +966,6 @@ void PalaceCoreImpl::onContextReady()
         persistStartupProjection();
     }
 
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    if (!m_lezAuthorityReady
-        && !palace::bootstrapDeliveryAcceptanceAuthority(
-            m_deliveryAuthority)) {
-        m_projection.setSyncHealth(palace::SyncHealth::Degraded);
-        persistStartupProjection();
-        return;
-    }
-#endif
-
     m_deliverySession =
         std::make_unique<palace::PalaceDeliverySession>(m_deliveryAuthority);
     const bool deliverySessionExists =
@@ -1102,37 +1064,13 @@ void PalaceCoreImpl::onContextReady()
                 m_deliveryKeyEpoch =
                     m_deliveryIdentity.deliveryKeyEpoch();
                 m_deliverySigner = &m_deliveryIdentity;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            } else if (palace::deliveryAcceptanceIdentity(
-                           sender,
-                           m_deliveryAcceptanceIdentity)) {
-                m_deliveryProfile =
-                    m_deliveryAcceptanceIdentity.userId;
-                m_deliveryDisplayName =
-                    m_deliveryAcceptanceIdentity.displayName;
-                m_deliveryKeyEpoch =
-                    m_deliveryAcceptanceIdentity.keyEpoch;
-                m_deliverySigner =
-                    &m_deliveryAcceptanceIdentity.signer;
-#endif
             } else {
                 m_projection.setSyncHealth(
                     palace::SyncHealth::Degraded);
                 persistProjection();
             }
     }
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    if (m_deliverySession->hasConfiguration()
-        && m_deliverySession->configuration().networkId
-            == "logos.test") {
-        m_deliverySession->replaceAllowedProps(
-            palace::deliveryAcceptanceAllowedProps());
-    } else {
-        refreshDeliveryAllowedProps();
-    }
-#else
     refreshDeliveryAllowedProps();
-#endif
 }
 
 bool PalaceCoreImpl::persistProjection()
@@ -1549,8 +1487,8 @@ PalaceCoreImpl::productionDeliveryAllowedProps() const
         || !m_storageMvpFailures.empty()) {
         return {};
     }
-    const ActiveGate3Content content =
-        activeGate3Content(
+    const ActivePalaceContent content =
+        activePalaceContent(
             m_lezAuthorityMaterialization,
             m_storageMvpBundle,
             m_storageMvpMode,
@@ -1580,24 +1518,8 @@ void PalaceCoreImpl::refreshDeliveryAllowedProps()
             if (m_deliverySession->reconcileAuthority())
                 persistDeliverySessionLocked();
         };
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    if (m_deliverySession->hasConfiguration()
-        && m_deliverySession->configuration().networkId
-            == "logos.test") {
-        replaceAndReconcile(
-            palace::deliveryAcceptanceAllowedProps());
-        return;
-    }
-#endif
     if (!m_lezAuthorityReady) {
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-        replaceAndReconcile(
-            m_lezAuthorityState == "missing"
-                ? palace::deliveryAcceptanceAllowedProps()
-                : std::map<std::string, std::string>{});
-#else
         replaceAndReconcile({});
-#endif
         return;
     }
     replaceAndReconcile(productionDeliveryAllowedProps());
@@ -1989,16 +1911,6 @@ void PalaceCoreImpl::drainDeliveryEvents()
     m_deliveryDrainingEvents = false;
 }
 
-std::string PalaceCoreImpl::applicationRoundTrip(
-    const std::string& payload) const
-{
-    const palace::PalaceApplicationRoundTripResultV1 result =
-        palace::applicationRoundTripV1(payload);
-    return result.accepted
-        ? result.response
-        : "rejected=application-round-trip-" + result.reason;
-}
-
 std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
 {
     if (roomId != "atrium" && roomId != "lounge")
@@ -2020,22 +1932,12 @@ std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
             return "rejected=room-transition-recovery";
         if (m_deliverySession
             && m_deliverySession->hasConfiguration()) {
-            const palace::DeliverySessionConfigV1& config =
-                m_deliverySession->configuration();
             std::string finalizedRoomId;
             std::int64_t finalizedRoomEpoch = -1;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            if (config.networkId == "logos.test"
-                && config.palaceId == "palace-1") {
-                finalizedRoomId = roomId;
-                finalizedRoomEpoch =
-                    palace::deliveryAcceptanceRoomEpoch(roomId);
-            } else {
-#endif
             if (!m_lezAuthorityReady)
                 return "rejected=delivery-finalized-authority-required";
-            const ActiveGate3Content content =
-                activeGate3Content(
+            const ActivePalaceContent content =
+                activePalaceContent(
                     m_lezAuthorityMaterialization,
                     m_storageMvpBundle,
                     m_storageMvpMode,
@@ -2057,10 +1959,6 @@ std::string PalaceCoreImpl::enterRoom(const std::string& roomId)
             finalizedRoomEpoch =
                 static_cast<std::int64_t>(
                     finalizedRoom.revision);
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            }
-#endif
-
             auto stagedSession =
                 std::make_unique<
                     palace::PalaceDeliverySession>(
@@ -2235,8 +2133,8 @@ bool PalaceCoreImpl::preparePalaceVmTurn(
         return false;
     }
 
-    const ActiveGate3Content content =
-        activeGate3Content(
+    const ActivePalaceContent content =
+        activePalaceContent(
             m_lezAuthorityMaterialization,
             m_storageMvpBundle,
             m_storageMvpMode,
@@ -2301,7 +2199,7 @@ bool PalaceCoreImpl::preparePalaceVmTurn(
             == std::numeric_limits<std::uint64_t>::max()
         || shared->lastOrderedActionId
             > m_lezAuthorityMaterialization.lastOrderedActionId) {
-        reason = "gate3-shared-state-mismatch";
+        reason = "palace-content-shared-state-mismatch";
         return false;
     }
 
@@ -2383,7 +2281,7 @@ bool PalaceCoreImpl::preparePalaceVmTurn(
     turn.roomLocked = false;
     turn.canMutateSharedState = true;
     if (!validPalaceVmTurn(turn)) {
-        reason = "invalid-gate5-turn";
+        reason = "invalid-door-turn";
         return false;
     }
     reason = "prepared";
@@ -2406,8 +2304,8 @@ bool PalaceCoreImpl::recoverFinalizedPalaceVmTurn(
         return false;
     }
 
-    const ActiveGate3Content content =
-        activeGate3Content(
+    const ActivePalaceContent content =
+        activePalaceContent(
             m_lezAuthorityMaterialization,
             m_storageMvpBundle,
             m_storageMvpMode,
@@ -3362,17 +3260,6 @@ std::string PalaceCoreImpl::spotStatus()
                      turn.finalizedReceipt));
 }
 
-std::string PalaceCoreImpl::vmTurnMetrics(
-    const std::string& actionId,
-    const std::string& phase)
-{
-    if (!isContextReady()) {
-        return "status=unavailable;action=" + actionId
-            + ";phase=" + phase + ";reason=core-not-ready";
-    }
-    return modules().palace_vm.vmTurnMetrics(actionId, phase);
-}
-
 bool PalaceCoreImpl::syncLezWalletToCurrent(std::string& reason)
 {
     static constexpr std::int64_t kMaximumSyncChunk = 100;
@@ -4010,7 +3897,7 @@ std::string PalaceCoreImpl::createInitialRoomState()
         return "rejected=initial-room-state-identity-required";
     }
 
-    const ActiveGate3Content content = activeGate3Content(
+    const ActivePalaceContent content = activePalaceContent(
         m_lezAuthorityMaterialization,
         m_storageMvpBundle,
         m_storageMvpMode,
@@ -4566,7 +4453,7 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
     if (!parsed.accepted)
         return "rejected=delivery-" + parsed.reason;
 
-    std::string selectedProfile = parsed.acceptanceProfile;
+    std::string selectedProfile;
     {
         std::lock_guard<std::mutex> lock(m_deliveryMutex);
         if (!m_deliverySession)
@@ -4575,34 +4462,17 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
             selectedProfile = m_deliverySession->configuration().senderUserId;
     }
 
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    palace::DeliveryAcceptanceIdentity acceptanceIdentity;
-    const bool acceptance =
-        !parsed.acceptanceProfile.empty()
-        || (!selectedProfile.empty()
-            && palace::deliveryAcceptanceIdentity(
-                selectedProfile, acceptanceIdentity));
-    if (acceptance
-        && !palace::deliveryAcceptanceIdentity(
-            selectedProfile, acceptanceIdentity)) {
-        return "rejected=delivery-invalid-acceptance-profile";
-    }
-#else
-    const bool acceptance = false;
-#endif
-    if (!acceptance) {
-        if (!m_deliveryIdentity.valid())
-            return "rejected=delivery-identity-required";
-        if (selectedProfile.empty())
-            selectedProfile = m_deliveryIdentity.accountId();
-        if (selectedProfile != m_deliveryIdentity.accountId())
-            return "rejected=delivery-profile-does-not-match-identity";
-        if (m_deliveryAuthority.deliveryKeyFor(
-                m_deliveryIdentity.accountId(),
-                m_deliveryIdentity.deliveryKeyEpoch())
-            != m_deliveryIdentity.publicKey()) {
-            return "rejected=delivery-identity-not-finalized";
-        }
+    if (!m_deliveryIdentity.valid())
+        return "rejected=delivery-identity-required";
+    if (selectedProfile.empty())
+        selectedProfile = m_deliveryIdentity.accountId();
+    if (selectedProfile != m_deliveryIdentity.accountId())
+        return "rejected=delivery-profile-does-not-match-identity";
+    if (m_deliveryAuthority.deliveryKeyFor(
+            m_deliveryIdentity.accountId(),
+            m_deliveryIdentity.deliveryKeyEpoch())
+        != m_deliveryIdentity.publicKey()) {
+        return "rejected=delivery-identity-not-finalized";
     }
 
     std::vector<palace::DeliverySessionCommand> commands;
@@ -4610,6 +4480,7 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
     std::uint64_t deliveryGeneration = 0U;
     bool alreadyActive = false;
     bool recoveryInProgress = false;
+    bool roomRebound = false;
     {
         std::lock_guard<std::mutex> lock(m_deliveryMutex);
         if (!m_roomTransitionHealthy.load(
@@ -4621,79 +4492,57 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
                 != selectedProfile) {
                 return "rejected=delivery-profile-does-not-match-restart-state";
             }
+
+            const std::string roomId =
+                m_deliveryAuthority.entryRoomId();
+            const std::int64_t roomEpoch =
+                m_deliveryAuthority.roomEpoch(roomId);
+            if (roomId.empty() || roomEpoch < 0)
+                return "rejected=delivery-session-config";
+            const palace::DeliverySessionConfigV1& current =
+                m_deliverySession->configuration();
+            if (current.networkId != lezProfile->network.networkId
+                || current.palaceId != m_deliveryAuthority.palaceId()) {
+                return "rejected=delivery-session-authority-mismatch";
+            }
+            if (current.roomId != roomId
+                || current.roomEpoch != roomEpoch) {
+                const palace::DeliverySessionTransition rebound =
+                    m_deliverySession->rebindRoom(roomId, roomEpoch);
+                if (!rebound.accepted)
+                    return "rejected=delivery-room-rebind;"
+                        + rebound.reason;
+                commands = rebound.commands;
+                roomRebound = true;
+                persistDeliverySessionLocked();
+            }
         } else {
             std::string roomId;
             std::int64_t roomEpoch = -1;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            if (acceptance) {
-                roomId = m_projection.currentRoomId();
-                roomEpoch =
-                    palace::deliveryAcceptanceRoomEpoch(roomId);
-            } else {
-#endif
-                roomId = m_deliveryAuthority.entryRoomId();
-                roomEpoch = m_deliveryAuthority.roomEpoch(roomId);
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            }
-#endif
+            roomId = m_deliveryAuthority.entryRoomId();
+            roomEpoch = m_deliveryAuthority.roomEpoch(roomId);
             palace::DeliverySessionConfigV1 config;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            config.networkId = acceptance
-                ? "logos.test"
-                : palace::PalaceLezReleaseLock::network().networkId;
-            config.palaceId = acceptance
-                ? "palace-1" : m_deliveryAuthority.palaceId();
-#else
             config.networkId =
                 lezProfile->network.networkId;
             config.palaceId = m_deliveryAuthority.palaceId();
-#endif
             config.roomId = roomId;
             config.roomEpoch = roomEpoch;
             config.senderUserId = selectedProfile;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-            config.senderKeyEpoch = acceptance
-                ? acceptanceIdentity.keyEpoch
-                : m_deliveryIdentity.deliveryKeyEpoch();
-#else
             config.senderKeyEpoch =
                 m_deliveryIdentity.deliveryKeyEpoch();
-#endif
             if (roomEpoch < 0 || !m_deliverySession->configure(config))
                 return "rejected=delivery-session-config";
             persistDeliverySessionLocked();
         }
 
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-        if (acceptance) {
-            m_deliveryAcceptanceIdentity =
-                std::move(acceptanceIdentity);
-            m_deliveryDisplayName =
-                m_deliveryAcceptanceIdentity.displayName;
-            m_deliveryKeyEpoch =
-                m_deliveryAcceptanceIdentity.keyEpoch;
-            m_deliverySigner =
-                &m_deliveryAcceptanceIdentity.signer;
-        } else {
-#endif
-            m_deliveryDisplayName = m_deliveryIdentity.displayName();
-            m_deliveryKeyEpoch =
-                m_deliveryIdentity.deliveryKeyEpoch();
-            m_deliverySigner = &m_deliveryIdentity;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-        }
-#endif
+        m_deliveryDisplayName = m_deliveryIdentity.displayName();
+        m_deliveryKeyEpoch =
+            m_deliveryIdentity.deliveryKeyEpoch();
+        m_deliverySigner = &m_deliveryIdentity;
         m_deliveryProfile = selectedProfile;
         m_deliveryNodeConfig = parsed.moduleConfig;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-        m_deliverySession->replaceAllowedProps(
-            acceptance
-            ? palace::deliveryAcceptanceAllowedProps()
-            : productionDeliveryAllowedProps());
-#else
         m_deliverySession->replaceAllowedProps(
             productionDeliveryAllowedProps());
-#endif
 
         const palace::DeliverySessionState state = m_deliverySession->state();
         const bool sessionActive =
@@ -4729,7 +4578,7 @@ std::string PalaceCoreImpl::startDelivery(const std::string& nodeConfig)
 
     executeDeliveryRecoveryActions(
         recoveryActions, deliveryGeneration);
-    if (!alreadyActive && !recoveryInProgress) {
+    if ((!alreadyActive && !recoveryInProgress) || roomRebound) {
         executeDeliveryCommands(commands, deliveryGeneration);
         std::lock_guard<std::mutex> lock(m_deliveryMutex);
         if (m_deliverySession->state()
@@ -4873,7 +4722,7 @@ std::string PalaceCoreImpl::participantProjection()
         .toJson(QJsonDocument::Compact).toStdString();
 }
 
-std::string PalaceCoreImpl::deliveryNodeEvidence()
+std::string PalaceCoreImpl::deliveryNodeStatus()
 {
     drainDeliveryEvents();
     std::uint64_t generation = 0U;
@@ -4913,10 +4762,10 @@ std::string PalaceCoreImpl::deliveryNodeEvidence()
         || addresses.value.size() > 16384U
         || peerId.value.size() > 1024U
         || connected.value.size() > 65536U) {
-        return R"({"success":false,"reason":"node-evidence-unavailable"})";
+        return R"({"success":false,"reason":"node-status-unavailable"})";
     }
 
-    const auto evidenceValue = [](const std::string& value) {
+    const auto nodeStatusValue = [](const std::string& value) {
         QJsonParseError error;
         const QJsonDocument parsed = QJsonDocument::fromJson(
             QByteArray::fromStdString(value), &error);
@@ -4929,17 +4778,18 @@ std::string PalaceCoreImpl::deliveryNodeEvidence()
         return QJsonValue(QString::fromStdString(value));
     };
 
-    QJsonObject evidence;
-    evidence.insert(QStringLiteral("success"), true);
-    evidence.insert(
-        QStringLiteral("multiaddresses"), evidenceValue(addresses.value));
-    evidence.insert(QStringLiteral("peerId"), evidenceValue(peerId.value));
-    evidence.insert(
-        QStringLiteral("connectedPeers"), evidenceValue(connected.value));
+    QJsonObject nodeStatus;
+    nodeStatus.insert(QStringLiteral("success"), true);
+    nodeStatus.insert(
+        QStringLiteral("multiaddresses"), nodeStatusValue(addresses.value));
+    nodeStatus.insert(
+        QStringLiteral("peerId"), nodeStatusValue(peerId.value));
+    nodeStatus.insert(
+        QStringLiteral("connectedPeers"), nodeStatusValue(connected.value));
     const QByteArray encoded =
-        QJsonDocument(evidence).toJson(QJsonDocument::Compact);
+        QJsonDocument(nodeStatus).toJson(QJsonDocument::Compact);
     if (encoded.size() > 90 * 1024)
-        return R"({"success":false,"reason":"node-evidence-too-large"})";
+        return R"({"success":false,"reason":"node-status-too-large"})";
     return encoded.toStdString();
 }
 
@@ -5578,6 +5428,10 @@ std::string PalaceCoreImpl::publishDelivery(
             || m_deliverySigner == nullptr) {
             return "rejected=delivery-session-not-configured";
         }
+        if (!m_lezAuthorityReady
+            || m_deliveryAuthority.palaceId().empty()) {
+            return "rejected=delivery-authority-unavailable";
+        }
         requestId = nextDeliveryRequestIdLocked("live");
         if (requestId.empty())
             return "rejected=delivery-request-id-exhausted";
@@ -5643,22 +5497,7 @@ std::string PalaceCoreImpl::startStorage(const std::string& nodeConfig)
         return "rejected=storage-directory-escaped-instance-root";
 
     QJsonObject config = document.object();
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    const QJsonValue acceptanceHolder =
-        config.take(QStringLiteral("palaceAcceptanceHolderProfile"));
     std::string holderAccountId;
-    if (!acceptanceHolder.isUndefined()) {
-        if (!acceptanceHolder.isString())
-            return "rejected=storage-invalid-acceptance-holder";
-        const auto fixtureHolder = storageAcceptanceHolderId(
-            acceptanceHolder.toString().toStdString());
-        if (!fixtureHolder.has_value())
-            return "rejected=storage-invalid-acceptance-holder";
-        holderAccountId = *fixtureHolder;
-    } else
-#else
-    std::string holderAccountId;
-#endif
     if (m_deliveryIdentity.valid()
                && isLowerHexAccountId(
                    m_deliveryIdentity.accountId())) {
@@ -6715,7 +6554,7 @@ std::string PalaceCoreImpl::verifyMvpStorageRetention()
     ++m_storageRetentionRound;
     m_storageMvpRetainedObjects.clear();
     // Co-located materialize: never re-enter downloadToUrlV2 for retention.
-    // BOnEa1w7 hung gate3VerifyRetention after verified=8 because local
+    // Retention verification can outlive the initial catalog callback because local
     // verification downloads freeze after write. Re-check exists (above) plus
     // in-memory/materialized digests that already passed peer fetch.
     if (m_storageMvpColocatedMaterialized) {
@@ -9322,8 +9161,8 @@ bool PalaceCoreImpl::completePalaceHistoryRebuild(
         }
 
         if (liveStorageGraph) {
-            const ActiveGate3Content linked =
-                gate3AuthorityLinkedContent(
+            const ActivePalaceContent linked =
+                activeAuthorityLinkedContent(
                     m_lezAuthorityMaterialization,
                     m_storageMvpBundle);
             if (!linked.accepted) {
@@ -10187,7 +10026,7 @@ bool PalaceCoreImpl::restoreStorageMvpCatalog()
         || restored.canonicalCatalog() != record.canonicalCatalog) {
         return reject("sealed-catalog-graph-invalid");
     }
-    const ActiveGate3Content linked = gate3AuthorityLinkedContent(
+    const ActivePalaceContent linked = activeAuthorityLinkedContent(
         m_lezAuthorityMaterialization, restored);
     if (!linked.accepted)
         return reject("sealed-catalog-" + linked.reason);
@@ -10280,7 +10119,7 @@ bool PalaceCoreImpl::beginStorageMvpFetch(std::string& reason)
     }
     m_storageMvpFetchSource = *selectedSource;
     m_storageMvpMode = "fetching";
-    // Defer the first downloadToUrlV2 until after the gate3FetchBundle receipt
+    // Defer the first downloadToUrlV2 until after the catalog-fetch receipt
     // returns. storage_download_manifest blocks the native call for up to
     // several seconds (and has hung peer invoke receipts at the 120s cap when
     // GetProviders cannot resolve co-located providers during the same call).
@@ -10370,7 +10209,7 @@ void PalaceCoreImpl::persistStorageMvpCatalogIfFinalized()
     }
 
     const auto binding = storageMvpCatalogBinding();
-    const ActiveGate3Content linked = gate3AuthorityLinkedContent(
+    const ActivePalaceContent linked = activeAuthorityLinkedContent(
         m_lezAuthorityMaterialization, m_storageMvpBundle);
     if (!binding.has_value() || !linked.accepted)
         return;
@@ -10654,7 +10493,7 @@ bool PalaceCoreImpl::startStorageMvpPublication(
     const palace::PalaceStorageMvpArtifactV1& artifact)
 {
     // Room/prop PNG leaves are uploaded once during admin authoring. Reuse that
-    // Storage CID so the sealed MVP catalog matches authored.cid (Gate 3 graph
+    // Storage CID so the sealed MVP catalog matches authored.cid (content graph
     // bindings). Re-uploadUrl of the same bytes as a different filename yields a
     // distinct manifest CID and fails "active graph leaf" checks.
     const bool pngLeaf =
@@ -11168,7 +11007,7 @@ void PalaceCoreImpl::applyStorageMvpTerminal(
         // The upload just stored these exact artifact bytes. Complete the
         // catalog VerifyingLocal→Published transition from those bytes rather
         // than re-entering storage_module.downloadToUrlV2, which has been
-        // observed to hang on GetProviders during gate3PublishBundle.
+        // observed to hang on GetProviders during catalog publication.
         if (!completeStorageMvpPublicationFromKnownBytes(
                 transfer.objectId, terminal.cid)) {
             return;

@@ -144,9 +144,9 @@ PalaceLezProfileV1 localDevelopmentProfile()
     profile.id = kLocalDevelopmentProfileId;
     profile.network.networkId = "logos-lez-local-development-v1";
     profile.network.programIdHex =
-        "258c2cc5ca0a938707f5ddd8735d018f4862c4a88bf86fad8161342795f12c4d";
+        "6e0676aa8dd6d9e71d9c31b8af441f2c042f30eaa42c4c8b2219eb0dfdab91f8";
     profile.network.programBytecodeSha256Hex =
-        "6b83ce7b48af9ddf92c84476647772b3aca2c452e5a135fb6a12bc87aa3afb82";
+        "48f1f18721be9f04f2cc5aca9920c64604c65258c66409b4680def7f00e291d4";
     profile.walletConfigJson =
         "{\"sequencer_addr\":"
         "\"http://127.0.0.1:3040\","

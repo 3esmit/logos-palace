@@ -6,6 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project will use [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 after its first published release.
 
+## [0.2.0-pre-alpha.1] - 2026-08-08
+
+### Added
+
+- Basecamp `0.2.4-alpha.1` compatibility baseline.
+- Explicit Create Palace and Join Palace onboarding choices with actionable
+  node, catalog, and peer-readiness states.
+- Focused onboarding, room, admin, and async-status QML components.
+- Supported local user-story launcher at `scripts/run-palace-e2e.sh`, with
+  runtime executables, package outputs, and user-selected asset manifests
+  supplied as explicit inputs.
+
+### Changed
+
+- Removed the application-only round-trip measurement API and production
+  acceptance fixture build path.
+- Renamed shipped UI/Core behavior around rooms, Storage, authority, doors,
+  durable actions, and delivery-node status.
+- Moved onboarding preparation, Storage-bundle tracking, Palace identity
+  registration, and durable-action observation/reconciliation behind the UI
+  backend controller boundary.
+- Moved asset-import session ownership, ordered chunk validation, byte budgets,
+  commit, retry-safe failure, and cancellation behind semantic controller
+  commands; extracted room utility panels from the composition root.
+- Local release story now documents Logos Control startup, admin moderation,
+  Storage degradation, and restart recovery as user outcomes.
+
+### Known limitations
+
+- The archive is published for x86_64 Linux. Public-testnet deployment,
+  finalized public history, creator-removal retention, and reconstruction
+  evidence remain tracked by issue #2.
+
+## [0.1.0-pre-alpha.7] - 2026-08-07
+
+This release is the current x86_64 Linux local-development MVP baseline. It
+does not claim public-testnet finality.
+
 ## [0.1.0-pre-alpha.1] - 2026-08-04
 
 This pre-alpha release packages the stack-complete local MVP for x86_64-linux.
@@ -13,8 +51,6 @@ The generated archive contains the six portable LGX packages, the
 repository-built Palace RISC Zero program image, the image-ID verifier, and a
 checksum manifest. It is produced by the tagged GitHub Actions workflow and
 does not claim public-testnet finality.
-
-## [Unreleased]
 
 ### Added
 

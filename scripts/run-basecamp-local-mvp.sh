@@ -125,7 +125,7 @@ if [ -z "${asset_manifest}" ] || [ "${PALACE_E2E_ASSET_MANIFEST}" != "${asset_ma
   exit 2
 fi
 
-node_flow="${PALACE_LOCAL_MVP_NODE_FLOW:-${repo_root}/tests/basecamp_local_mvp_user_flow.mjs}"
+node_flow="${PALACE_LOCAL_MVP_NODE_FLOW:-${repo_root}/tests/palace_e2e_user_story.mjs}"
 node_flow="$(realpath -e -- "${node_flow}" 2>/dev/null || true)"
 if [ -z "${node_flow}" ] || [ -L "${node_flow}" ] || [ ! -f "${node_flow}" ]; then
   printf 'PALACE_LOCAL_MVP_NODE_FLOW must be a canonical regular file\n' >&2
@@ -238,12 +238,12 @@ for path in verified_assets asset_downloads storage_publications storage_catalog
   fi
 done
 
-node --input-type=module - "${run_root}/e2e-result.json" "${run_root}/local-mvp-report.json" <<'NODE'
+node --input-type=module - "${run_root}/e2e-result.json" "${run_root}/palace-e2e-report.json" <<'NODE'
 import { readFile, writeFile } from "node:fs/promises";
 const [input, output] = process.argv.slice(2);
 const result = JSON.parse(await readFile(input, "utf8"));
 const report = {
-  schema: "logos-palace.local-mvp-report",
+  schema: "logos-palace.e2e-user-story-report",
   version: 2,
   profile: "local-development",
   publicFinalityAvailable: false,
@@ -265,4 +265,4 @@ await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 process.stdout.write(`${output}\n`);
 NODE
 
-printf 'Local MVP run complete: %s\n' "${run_root}"
+printf 'Palace E2E user story complete: %s\n' "${run_root}"

@@ -74,7 +74,7 @@ selectPalaceStorageMvpFetchSource(
     const std::vector<std::optional<bool>>& nativeCidAvailability,
     std::size_t expectedArtifactCount);
 
-// Exact, bounded Gate-3 content graph. Media leaves come only from verified
+// Exact, bounded content graph. Media leaves come only from verified
 // administrator-authored assignments. Metadata and script leaves use the
 // protocol's canonical templates. Derived manifests are created only after
 // their child uploads return exact CIDs.

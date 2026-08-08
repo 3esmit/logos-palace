@@ -43,27 +43,27 @@ const releasePackageBindings = Object.freeze([
     name: "palace_core",
     artifact: "logos-palace_core-module-lib.lgx",
     type: "core",
-    version: "0.1.0",
-    sha256: "410ea2fdc6953322de73f6cb49ec5f4ff829edc666b58872c52e9e07ba25a0e3",
-    source: "3esmit/logos-palace@a106f3edcf5ffc3b5e191a6570534211d5061e46",
+    version: "0.2.0",
+    sha256: "f4a749564d4c29da1f24923f4df3986480ecfa7929df5af80c5928f72b11a50e",
+    source: "3esmit/logos-palace@67496fd",
     dependencies: Object.freeze(["palace_vm", "lez_core", "delivery_module", "storage_module"]),
   }),
   Object.freeze({
     name: "logos_palace_ui",
     artifact: "logos-logos_palace_ui-module.lgx",
     type: "ui_qml",
-    version: "0.1.0",
-    sha256: "ff6d65c1085a9808bbe026fcba8b2e2d9411583298f73a155a7cbb7e3ee111b8",
-    source: "3esmit/logos-palace@c4e78f72accd0e1f43a28288b26245eb6971246e",
+    version: "0.2.0",
+    sha256: "55dcebf1be54e83b3cc08a0221c8b8b9684a0bc24829c0fab6e6c22c391950be",
+    source: "3esmit/logos-palace@67496fd",
     dependencies: Object.freeze(["palace_core"]),
   }),
   Object.freeze({
     name: "delivery_module",
     artifact: "logos-delivery_module-module-lib.lgx",
     type: "core",
-    version: "0.1.8",
-    sha256: "986a6a81ad65d42c9b174c1e3c6530a9b2b3174efff57e8dc6de078e37101da2",
-    source: "3esmit/logos-delivery-module@891c43bd6176e17b0aa536ef1aa369bb47e918f4",
+    version: "0.1.10",
+    sha256: "a4c19ae4612febdc76d4610315a8b9a328800e7200190600e32c1477b2a29b8c",
+    source: "3esmit/logos-delivery-module@a5639b10c7e5cdfe61f0b32a120f7e0956ef3c5b",
     dependencies: Object.freeze([]),
   }),
   Object.freeze({
@@ -79,9 +79,9 @@ const releasePackageBindings = Object.freeze([
     name: "lez_core",
     artifact: "logos-lez_core-module-lib.lgx",
     type: "core",
-    version: "0.4.0-alpha.2",
-    sha256: "fd3184a5163604c0f902de6c2cd5b9fda9c3eea89ef1a16bd995bb1d0748ac0f",
-    source: "3esmit/logos-execution-zone-module@a302960d92468dec8ad7d65e2a9ee81ab7abf3d0",
+    version: "0.4.0-alpha.3",
+    sha256: "75fb2a7ed5686cae802fd6db4e01636bf94d31efac9bd94b85dd25832d498864",
+    source: "3esmit/logos-execution-zone-module@a23e706f7a462c0fbf9fbf853efb76296b21c0cd",
     dependencies: Object.freeze([]),
   }),
 ]);
@@ -106,8 +106,8 @@ const releaseNetworkBindings = Object.freeze({
 });
 
 const releaseDependencyBindings = Object.freeze({
-  basecamp: "3esmit/logos-basecamp@98888ed952dd3c147c66aab48aeec6fe41329af3",
-  logosModuleBuilder: "logos-co/logos-module-builder@8e4ea1c1d0e523cea46850f8fd9466dd35af7cc1",
+  basecamp: "3esmit/logos-basecamp@4313ef96a20887552b1dced32d41347a3c16944b",
+  logosModuleBuilder: "logos-co/logos-module-builder@fd07679ecfa1b2d8cfdd06799f3e03ed385b57f6",
   nixpkgs: "NixOS/nixpkgs@535f3e6942cb1cead3929c604320d3db54b542b9",
 });
 
