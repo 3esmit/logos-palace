@@ -12,7 +12,6 @@ logos_test(
         ../src/palace_availability.cpp
         ../src/palace_sha256.cpp
         ../src/palace_initial_authoring.cpp
-        ../src/palace_application_round_trip.cpp
         ../src/palace_authority.cpp
         ../src/palace_delivery.cpp
         ../src/palace_delivery_session.cpp
@@ -55,7 +54,6 @@ logos_test(
     TEST_SOURCES
         main.cpp
         test_availability.cpp
-        test_application_round_trip.cpp
         test_initial_authoring.cpp
         test_authority_delivery.cpp
         test_delivery_session.cpp

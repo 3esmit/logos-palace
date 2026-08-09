@@ -106,6 +106,10 @@ public:
     const DeliverySessionConfigV1& configuration() const;
     DeliverySessionTransition switchRoom(const std::string& roomId,
                                          std::int64_t roomEpoch);
+    // Rebinds a persisted session whose previous room epoch is no longer
+    // present in finalized authority. Used during authority convergence.
+    DeliverySessionTransition rebindRoom(const std::string& roomId,
+                                         std::int64_t roomEpoch);
 
     DeliverySessionTransition start();
     DeliverySessionTransition callbacksRegistered(bool succeeded);

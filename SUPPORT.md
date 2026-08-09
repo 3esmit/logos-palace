@@ -16,6 +16,6 @@ uptime, recovery, or response-time commitment is offered.
 - Contributor workflow: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Before requesting help, reproduce against the pinned dependencies in
-`flake.lock` and state which Basecamp acceptance gate, if any, was run. Remove
+`flake.lock` and state whether the supported local user story passed. Remove
 credentials, recovery phrases, private keys, personal data, and unrelated
 local paths from logs.

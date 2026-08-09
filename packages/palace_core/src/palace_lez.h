@@ -524,7 +524,7 @@ public:
         const PalaceLezTransactionPlanV3& plan,
         const std::string& submissionResponseJson,
         const std::string& expectedRootDataSha256Hex);
-    // Registers explorer-proven acceptance after a write-ahead recovery.
+    // Registers explorer-proven finality after a write-ahead recovery.
     // An exact existing transaction is idempotent; any drift fails closed.
     PalaceLezCoordinatorUpdate registerRecoveredSubmission(
         const PalaceLezTransactionPlanV3& plan,

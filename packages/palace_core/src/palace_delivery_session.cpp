@@ -348,6 +348,43 @@ DeliverySessionTransition PalaceDeliverySession::switchRoom(
     return subscribeIfReady();
 }
 
+DeliverySessionTransition PalaceDeliverySession::rebindRoom(
+    const std::string& roomId,
+    std::int64_t roomEpoch)
+{
+    if (!m_configured)
+        return transition(false, "session-not-configured");
+    if (!isIdentifier(roomId) || roomEpoch < 0)
+        return transition(false, "invalid-room");
+    if (m_authority.palaceId() != m_config.palaceId
+        || m_authority.roomEpoch(roomId) != roomEpoch
+        || m_authority.isRoomLocked(roomId)) {
+        return transition(false, "room-not-in-finalized-authority");
+    }
+    if (roomId == m_config.roomId && roomEpoch == m_config.roomEpoch)
+        return transition(true, "room-unchanged");
+    if (!m_outbox.empty())
+        return transition(false, "room-switch-outbox-not-empty");
+    if (m_subscriptionPending)
+        return transition(false, "room-switch-subscription-pending");
+
+    DeliverySessionConfigV1 nextConfig = m_config;
+    nextConfig.roomId = roomId;
+    nextConfig.roomEpoch = roomEpoch;
+    if (!validConfig(nextConfig, m_authority))
+        return transition(false, "invalid-room-configuration");
+
+    DeliveryIngress emptyIngress;
+    DeliveryEgress emptyEgress;
+    m_config = std::move(nextConfig);
+    m_subscribed = false;
+    m_ingress = std::move(emptyIngress);
+    m_egress = std::move(emptyEgress);
+    m_participants.clear();
+    clearPendingIngress();
+    return subscribeIfReady();
+}
+
 DeliverySessionTransition PalaceDeliverySession::start()
 {
     if (!m_configured
@@ -473,6 +510,15 @@ bool PalaceDeliverySession::reconcileAuthority()
         return false;
 
     bool projectionChanged = false;
+    if (m_authority.isUserBanned(
+            m_config.senderUserId, m_config.roomId)
+        && !m_outbox.empty()) {
+        // A restart may restore queued sends before the latest authority
+        // checkpoint is rebuilt. Never flush work authored by a now-banned
+        // sender.
+        m_outbox.clear();
+        projectionChanged = true;
+    }
     for (auto participant = m_participants.begin();
          participant != m_participants.end();) {
         if (m_authority.isUserBanned(participant->first, m_config.roomId)) {
@@ -527,6 +573,9 @@ DeliverySessionTransition PalaceDeliverySession::publish(
 {
     if (!m_configured)
         return transition(false, "session-not-configured");
+    if (m_authority.isUserBanned(
+            m_config.senderUserId, m_config.roomId))
+        return transition(false, "sender-banned");
     if (!isIdentifier(requestId))
         return transition(false, "invalid-request-id");
     if (m_outbox.find(requestId) != m_outbox.end())

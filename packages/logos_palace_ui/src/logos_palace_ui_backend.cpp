@@ -1,6 +1,7 @@
 #include "logos_palace_ui_backend.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <QByteArray>
 
@@ -9,10 +10,51 @@
 
 #include "logos_sdk.h"
 
+void PalaceUiController::configure(RefreshCallback refresh,
+                                   RefreshCallback refreshNodeStatus)
+{
+    m_refresh = std::move(refresh);
+    m_refreshNodeStatus = std::move(refreshNodeStatus);
+    if (m_configured)
+        return;
+
+    QObject::connect(
+        &m_refreshTimer, &QTimer::timeout, [this]() {
+            if (m_refresh)
+                m_refresh();
+        });
+    QObject::connect(
+        &m_nodeStatusTimer, &QTimer::timeout, [this]() {
+            if (m_refreshNodeStatus)
+                m_refreshNodeStatus();
+        });
+    m_refreshTimer.setInterval(500);
+    m_nodeStatusTimer.setInterval(3'000);
+    m_configured = true;
+}
+
+void PalaceUiController::start()
+{
+    if (!m_configured)
+        return;
+    m_refreshTimer.start();
+    m_nodeStatusTimer.start();
+}
+
+void PalaceUiController::stop()
+{
+    m_refreshTimer.stop();
+    m_nodeStatusTimer.stop();
+}
+
 namespace {
 
 constexpr int kMaximumSpotReconcilePolls = 1'200;
 constexpr int kMaximumModerationReconcilePolls = 120;
+constexpr int kMaximumDurableActionPolls = 1'200;
+constexpr int kMaximumStorageBundlePolls = 1'200;
+constexpr int kMaximumPalaceRegistrationPolls = 1'200;
+constexpr int kMaximumOnboardingWorkflowPolls = 1'200;
 
 QString statusValue(const QString& status, const QString& name)
 {
@@ -61,6 +103,13 @@ bool isLowerHex64(const QString& value)
             });
 }
 
+bool isPalaceAddress(const QString& value)
+{
+    constexpr int palacePrefixLength = 9;
+    return value.startsWith(QStringLiteral("palace://"))
+        && isLowerHex64(value.mid(palacePrefixLength));
+}
+
 bool isAssetIdentifier(const QString& value)
 {
     return !value.isEmpty() && value.size() <= 64
@@ -71,6 +120,50 @@ bool isAssetIdentifier(const QString& value)
                     || (value >= '0' && value <= '9')
                     || value == '-' || value == '_';
             });
+}
+
+bool isActionId(const QString& value)
+{
+    return !value.isEmpty()
+        && std::all_of(
+            value.begin(), value.end(), [](const QChar character) {
+                const ushort value = character.unicode();
+                return value >= '0' && value <= '9';
+            });
+}
+
+bool isRetryableDurableActionReceipt(const QString& receipt)
+{
+    const QString stablePrefix = QStringLiteral(
+        "rejected=lez-stable-account-read;reason=");
+    const QString observationPrefix = QStringLiteral(
+        "rejected=lez-observation;reason=");
+    if (receipt.startsWith(stablePrefix)) {
+        const QString reason = receipt.mid(stablePrefix.size());
+        return reason.startsWith(QStringLiteral("sync-"))
+            || reason == QStringLiteral("height-before")
+            || reason == QStringLiteral("height-after")
+            || reason == QStringLiteral("wallet-height-raced")
+            || (reason.startsWith(QStringLiteral("account-"))
+                && isActionId(reason.mid(8)));
+    }
+    if (receipt.startsWith(observationPrefix)) {
+        const QString reason = receipt.mid(observationPrefix.size());
+        return reason == QStringLiteral("transaction-not-materialized")
+            || reason == QStringLiteral("invalid-account-response")
+            || reason == QStringLiteral("invalid-account-field")
+            || reason == QStringLiteral("invalid-account-data")
+            || reason == QStringLiteral("invalid-record")
+            || reason == QStringLiteral("unexpected-observation-record")
+            || reason == QStringLiteral("observation-mismatch")
+            || reason == QStringLiteral("unstable-height");
+    }
+    return receipt == QStringLiteral(
+               "rejected=palace-identity-registration-pending")
+        || receipt == QStringLiteral(
+               "rejected=lez-root-transaction-pending")
+        || receipt == QStringLiteral(
+               "rejected=lez-authority-history-rebuild-required");
 }
 
 bool isTerminalModerationState(const QString& state)
@@ -95,19 +188,6 @@ bool isRetryableLocalModerationReceipt(const QString& receipt)
 
 } // namespace
 
-QString LogosPalaceUiBackend::applicationRoundTrip(
-    QString payload)
-{
-    if (!isContextReady())
-        return unavailableReceipt();
-    const qsizetype bytes = payload.toUtf8().size();
-    if (bytes != 0 && bytes != 256 && bytes != 4096) {
-        return QStringLiteral(
-            "rejected=application-round-trip-size");
-    }
-    return modules().palace_core.applicationRoundTrip(payload);
-}
-
 LogosPalaceUiBackend::~LogosPalaceUiBackend()
 {
     stopPollingTimers();
@@ -115,23 +195,64 @@ LogosPalaceUiBackend::~LogosPalaceUiBackend()
 
 void LogosPalaceUiBackend::stopPollingTimers()
 {
-    if (m_deliveryPollTimer) {
-        m_deliveryPollTimer->stop();
-    }
-    if (m_nodeEvidencePollTimer) {
-        m_nodeEvidencePollTimer->stop();
-    }
+    m_uiController.stop();
     m_spotTracking = false;
     m_spotDriveActive = false;
     m_moderationTracking = false;
     m_moderationDriveActive = false;
+    m_durableActionTracking = false;
+    m_durableActionObserved = false;
+    m_storageBundleTracking = false;
+    m_palaceRegistrationTracking = false;
+    m_palaceRegistrationObserved = false;
+    m_onboardingWorkflowTracking = false;
+    m_onboardingWorkflowObserved = false;
+    m_onboardingWorkflowInitialRoomReady = false;
+    m_onboardingWorkflowAwaitingInitialRoom = false;
+    resetAssetImportTracking();
+}
+
+void LogosPalaceUiBackend::driveAutomaticDeliveryStart()
+{
+    if (!isContextReady() || m_autoStartDeliveryConfig.isEmpty())
+        return;
+
+    const QString delivery = modules().palace_core.deliverySessionStatus();
+    const bool nodeRunning =
+        statusValue(delivery, QStringLiteral("node_running"))
+            == QStringLiteral("1");
+    if (!m_autoStartDeliveryPending && !nodeRunning)
+        return;
+
+    const QString identity = modules().palace_core.identityStatus();
+    const QString identityId =
+        statusValue(identity, QStringLiteral("identity"));
+    if (identityId.isEmpty() || identityId == QStringLiteral("none"))
+        return;
+
+    const QString palace = modules().palace_core.palaceStatus();
+    if (statusValue(palace, QStringLiteral("palace"))
+            != QStringLiteral("open")
+        || statusValue(palace, QStringLiteral("authority"))
+            != QStringLiteral("local-committed")
+        || statusValue(palace, QStringLiteral("entry_state"))
+            != QStringLiteral("ready")) {
+        return;
+    }
+
+    const QString result = modules().palace_core.startDelivery(
+        m_autoStartDeliveryConfig);
+    refreshDeliveryState();
+    refreshDeliveryNodeStatus();
+    if (!result.startsWith(QStringLiteral("rejected=")))
+        m_autoStartDeliveryPending = false;
 }
 
 void LogosPalaceUiBackend::onContextReady()
 {
     refreshRoomProjection();
     refreshDeliveryState();
-    refreshDeliveryNodeEvidence();
+    refreshDeliveryNodeStatus();
     refreshStorageState();
     refreshAssetAuthoringCapabilityState();
     refreshLezState();
@@ -140,34 +261,39 @@ void LogosPalaceUiBackend::onContextReady()
     refreshRoomLockState();
     refreshSpotState();
 
-    if (!m_deliveryPollTimer) {
-        m_deliveryPollTimer = new QTimer(this);
-        m_deliveryPollTimer->setInterval(500);
-        connect(m_deliveryPollTimer, &QTimer::timeout, this, [this]() {
+    m_uiController.configure(
+        [this]() {
+            // Presence is live projection maintenance, not a QML command.
+            // Keep it in the controller-owned refresh loop so recovery and
+            // normal clients converge without privileged UI calls.
+            if (isContextReady())
+                modules().palace_core.refreshPresence();
             refreshDeliveryState();
             refreshStorageState();
             refreshAssetAuthoringCapabilityState();
             refreshLezState();
             refreshPalaceState();
+            driveAutomaticDeliveryStart();
             refreshModerationState();
             refreshRoomLockState();
             refreshSpotState();
             if (m_moderationTracking)
                 driveLocalModerationAction();
+            if (m_durableActionTracking)
+                driveDurableAction();
+            if (m_storageBundleTracking)
+                driveStorageBundle();
+            if (m_palaceRegistrationTracking)
+                drivePalaceRegistration();
+            if (m_onboardingWorkflowTracking)
+                driveOnboardingWorkflow();
             if (m_spotTracking)
                 driveSpotAction();
+        },
+        [this]() {
+            refreshDeliveryNodeStatus();
         });
-        m_deliveryPollTimer->start();
-    }
-
-    if (!m_nodeEvidencePollTimer) {
-        m_nodeEvidencePollTimer = new QTimer(this);
-        m_nodeEvidencePollTimer->setInterval(3'000);
-        connect(m_nodeEvidencePollTimer, &QTimer::timeout, this, [this]() {
-            refreshDeliveryNodeEvidence();
-        });
-        m_nodeEvidencePollTimer->start();
-    }
+    m_uiController.start();
 
     if (!m_autoStartAttempted) {
         m_autoStartAttempted = true;
@@ -177,7 +303,9 @@ void LogosPalaceUiBackend::onContextReady()
                 setLastActionReceipt(
                     QStringLiteral("rejected=delivery-config-too-large"));
             } else {
-                startDelivery(QString::fromUtf8(config));
+                m_autoStartDeliveryConfig = QString::fromUtf8(config);
+                m_autoStartDeliveryPending = true;
+                driveAutomaticDeliveryStart();
             }
         }
     }
@@ -291,29 +419,13 @@ QString LogosPalaceUiBackend::refreshSpot()
     return rememberSpotReceipt(status);
 }
 
-QString LogosPalaceUiBackend::vmTurnMetrics(
-    QString actionId,
-    QString phase)
-{
-    if (!isContextReady())
-        return rememberSpotReceipt(unavailableReceipt());
-    if (actionId.size() > 20
-        || (phase != QStringLiteral("provisional")
-            && phase != QStringLiteral("finalized"))) {
-        return rememberSpotReceipt(
-            QStringLiteral("rejected=vm-turn-metrics-query"));
-    }
-    return rememberSpotReceipt(
-        modules().palace_core.vmTurnMetrics(actionId, phase));
-}
-
 QString LogosPalaceUiBackend::startDelivery(QString nodeConfig)
 {
     if (!isContextReady())
         return rememberDeliveryReceipt(unavailableReceipt());
     const QString result = modules().palace_core.startDelivery(nodeConfig);
     refreshDeliveryState();
-    refreshDeliveryNodeEvidence();
+    refreshDeliveryNodeStatus();
     return rememberDeliveryReceipt(result);
 }
 
@@ -500,6 +612,155 @@ QString LogosPalaceUiBackend::cancelAssetStage(
     return rememberStorageReceipt(result);
 }
 
+QString LogosPalaceUiBackend::beginAssetImport(
+    QString label,
+    qint64 byteLength)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (m_assetImportTracking)
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-import-in-flight"));
+    if (byteLength < 0 || byteLength > 10 * 1024 * 1024)
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-import-size"));
+
+    const QString result = modules().palace_core.beginAssetStage(label);
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        setAssetImportStatus(
+            QStringLiteral("state=failed;") + result);
+        return rememberStorageReceipt(result);
+    }
+
+    const QString session = statusValue(
+        result, QStringLiteral("session"));
+    if (session.isEmpty()
+        || statusValue(result, QStringLiteral("next"))
+            != QStringLiteral("0")) {
+        const QString failure = QStringLiteral(
+            "rejected=asset-import-invalid-begin");
+        setAssetImportStatus(
+            QStringLiteral("state=failed;") + failure);
+        return rememberStorageReceipt(failure);
+    }
+
+    m_assetImportTracking = true;
+    m_assetImportSession = session;
+    m_assetImportExpectedSequence = 0;
+    m_assetImportByteLength = byteLength;
+    m_assetImportBytes = 0;
+    setAssetImportStatus(
+        QStringLiteral("state=reading;session=") + session
+        + QStringLiteral(";next=0;bytes=0;total=")
+        + QString::number(byteLength));
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::appendAssetImportChunk(
+    QString base64Chunk)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (!m_assetImportTracking)
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-import-not-active"));
+    if (m_assetImportExpectedSequence < 0) {
+        const QString failure = QStringLiteral(
+            "rejected=asset-import-sequence");
+        setAssetImportFailure(failure);
+        return rememberStorageReceipt(failure);
+    }
+
+    const QString result = modules().palace_core.appendAssetStageChunk(
+        m_assetImportSession,
+        QVariant::fromValue(static_cast<qulonglong>(
+            m_assetImportExpectedSequence)),
+        base64Chunk);
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        setAssetImportFailure(result);
+        return rememberStorageReceipt(result);
+    }
+
+    const QString next = statusValue(result, QStringLiteral("next"));
+    const QString bytes = statusValue(result, QStringLiteral("bytes"));
+    bool nextOk = false;
+    bool bytesOk = false;
+    const qint64 nextSequence = next.toLongLong(&nextOk);
+    const qint64 totalBytes = bytes.toLongLong(&bytesOk);
+    if (!nextOk || !bytesOk
+        || nextSequence != m_assetImportExpectedSequence + 1
+        || totalBytes < m_assetImportBytes
+        || totalBytes > m_assetImportByteLength) {
+        const QString failure = QStringLiteral(
+            "rejected=asset-import-invalid-append");
+        setAssetImportFailure(failure);
+        return rememberStorageReceipt(failure);
+    }
+
+    m_assetImportExpectedSequence = nextSequence;
+    m_assetImportBytes = totalBytes;
+    setAssetImportStatus(
+        QStringLiteral("state=reading;session=")
+        + m_assetImportSession + QStringLiteral(";next=")
+        + QString::number(nextSequence) + QStringLiteral(";bytes=")
+        + QString::number(totalBytes) + QStringLiteral(";total=")
+        + QString::number(m_assetImportByteLength));
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::finishAssetImport()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (!m_assetImportTracking)
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-import-not-active"));
+    if (m_assetImportBytes != m_assetImportByteLength) {
+        const QString failure = QStringLiteral(
+            "rejected=asset-import-byte-length");
+        setAssetImportFailure(failure);
+        return rememberStorageReceipt(failure);
+    }
+
+    const QString result = modules().palace_core.commitAssetStage(
+        m_assetImportSession);
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        setAssetImportFailure(result);
+        return rememberStorageReceipt(result);
+    }
+
+    setAssetImportStatus(
+        QStringLiteral("state=ready;session=")
+        + m_assetImportSession + QLatin1Char(';') + result);
+    resetAssetImportTracking();
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::cancelAssetImport()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (!m_assetImportTracking || m_assetImportSession.isEmpty()) {
+        setAssetImportStatus(QStringLiteral("state=idle"));
+        return rememberStorageReceipt(
+            QStringLiteral("ok;asset-import=idle"));
+    }
+
+    const QString result = modules().palace_core.cancelAssetStage(
+        m_assetImportSession);
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        setAssetImportFailure(result);
+        return rememberStorageReceipt(result);
+    }
+    resetAssetImportTracking();
+    setAssetImportStatus(QStringLiteral("state=idle;") + result);
+    refreshStorageState();
+    return rememberStorageReceipt(result);
+}
+
 QString LogosPalaceUiBackend::reviewAsset(
     QString handle,
     QString decision)
@@ -522,6 +783,25 @@ QString LogosPalaceUiBackend::publishAsset(
         modules().palace_core.publishAsset(handle);
     refreshStorageState();
     return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::approveAndPublishAsset(
+    QString handle)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (!isAssetIdentifier(handle))
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=asset-handle-invalid"));
+
+    const QString review = modules().palace_core.reviewAsset(
+        handle, QStringLiteral("approve"));
+    if (review.startsWith(QStringLiteral("rejected=")))
+        return rememberStorageReceipt(review);
+
+    const QString publication = modules().palace_core.publishAsset(handle);
+    refreshStorageState();
+    return rememberStorageReceipt(publication);
 }
 
 QString LogosPalaceUiBackend::assignRoomBackground(
@@ -595,6 +875,19 @@ QString LogosPalaceUiBackend::mvpStorageBundleStatus()
     return rememberStorageReceipt(result);
 }
 
+QString LogosPalaceUiBackend::trackStorageBundle()
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+
+    m_storageBundlePollCount = 0;
+    m_storageBundleTracking = true;
+    setStorageBundleWorkflowStatus(QStringLiteral("state=tracking"));
+    driveStorageBundle();
+    return rememberStorageReceipt(
+        QStringLiteral("ok;storage-bundle-tracking=1"));
+}
+
 QString LogosPalaceUiBackend::fetchMvpStorageBundle(
     QString catalogBase64)
 {
@@ -654,6 +947,166 @@ QString LogosPalaceUiBackend::connectStoragePeer(
         peerId, addressesJson);
     refreshStorageState();
     return rememberStorageReceipt(result);
+}
+
+QString LogosPalaceUiBackend::prepareExistingPalaceStorage(
+    QString catalogBase64,
+    QString peerId,
+    QString addressesJson,
+    bool attachPeer)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (catalogBase64.isEmpty() || catalogBase64.toUtf8().size() > 16 * 1024)
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=storage-catalog-invalid"));
+    if (attachPeer
+        && (peerId.isEmpty() || addressesJson.isEmpty()
+            || addressesJson.toUtf8().size() > 64 * 1024)) {
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=storage-peer-endpoint-required"));
+    }
+
+    const QString storage = modules().palace_core.connectStorage();
+    if (storage.startsWith(QStringLiteral("rejected=")))
+        return rememberStorageReceipt(storage);
+
+    if (attachPeer) {
+        const QString peer = modules().palace_core.connectStoragePeer(
+            peerId, addressesJson);
+        if (peer.startsWith(QStringLiteral("rejected=")))
+            return rememberStorageReceipt(peer);
+    }
+
+    const QString catalog = modules().palace_core.fetchMvpStorageBundle(
+        catalogBase64);
+    refreshStorageState();
+    return rememberStorageReceipt(catalog);
+}
+
+QString LogosPalaceUiBackend::preparePalaceOnboarding(
+    QString mode,
+    QString password,
+    QString displayName,
+    QString palaceAddress,
+    QString catalogBase64,
+    QString peerId,
+    QString addressesJson)
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+
+    const bool create = mode == QStringLiteral("create");
+    const bool join = mode == QStringLiteral("join");
+    const bool recover = mode == QStringLiteral("recover");
+    if (!create && !join && !recover)
+        return rememberLezReceipt(
+            QStringLiteral("rejected=onboarding-mode-invalid"));
+    if ((join || recover) && !isPalaceAddress(palaceAddress))
+        return rememberLezReceipt(
+            QStringLiteral("rejected=invalid-palace-uri"));
+
+    const QString lez = modules().palace_core.startLez(password);
+    refreshLezState();
+    if (lez.startsWith(QStringLiteral("rejected=")))
+        return rememberLezReceipt(lez);
+
+    const QString identity = modules().palace_core.createIdentity(
+        displayName);
+    refreshLezState();
+    if (identity.startsWith(QStringLiteral("rejected=")))
+        return rememberLezReceipt(identity);
+
+    if (create)
+    {
+        setOnboardingWorkflowStatus(
+            QStringLiteral("state=authoring-rooms"));
+        return rememberLezReceipt(
+            QStringLiteral("ok;phase=authoring-rooms"));
+    }
+
+    return resumeExistingPalace(
+        palaceAddress, catalogBase64, peerId, addressesJson, join);
+}
+
+QString LogosPalaceUiBackend::beginPalaceCreation(QString title)
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    if (title.trimmed().isEmpty() || title.toUtf8().size() > 128)
+        return rememberLezReceipt(
+            QStringLiteral("rejected=palace-title-invalid"));
+
+    m_onboardingWorkflowTracking = true;
+    m_onboardingWorkflowExistingPalace = false;
+    m_onboardingWorkflowObserved = false;
+    m_onboardingWorkflowPollCount = 0;
+    m_onboardingWorkflowPhase = QStringLiteral(
+        "checking-room-setup");
+    m_onboardingWorkflowTitle = title.trimmed();
+    m_onboardingWorkflowPalaceUri.clear();
+    m_onboardingWorkflowActionId.clear();
+    m_onboardingWorkflowInitialRoomReady = false;
+    m_onboardingWorkflowAwaitingInitialRoom = false;
+    setOnboardingWorkflowStatus(
+        QStringLiteral("state=checking-room-setup"));
+    driveOnboardingWorkflow();
+    return rememberLezReceipt(
+        QStringLiteral("ok;workflow=palace-creation"));
+}
+
+QString LogosPalaceUiBackend::resumePalaceOnboarding()
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    if (m_onboardingWorkflowPhase.isEmpty())
+        return rememberLezReceipt(
+            QStringLiteral("rejected=onboarding-workflow-not-started"));
+
+    m_onboardingWorkflowTracking = true;
+    m_onboardingWorkflowPollCount = 0;
+    setOnboardingWorkflowStatus(
+        QStringLiteral("state=") + m_onboardingWorkflowPhase);
+    driveOnboardingWorkflow();
+    return rememberLezReceipt(
+        QStringLiteral("ok;workflow=palace-onboarding-resumed"));
+}
+
+QString LogosPalaceUiBackend::resumeExistingPalace(
+    QString palaceAddress,
+    QString catalogBase64,
+    QString peerId,
+    QString addressesJson,
+    bool attachPeer)
+{
+    if (!isContextReady())
+        return rememberStorageReceipt(unavailableReceipt());
+    if (!isPalaceAddress(palaceAddress))
+        return rememberStorageReceipt(
+            QStringLiteral("rejected=invalid-palace-uri"));
+
+    const QString storage = prepareExistingPalaceStorage(
+        catalogBase64, peerId, addressesJson, attachPeer);
+    if (storage.startsWith(QStringLiteral("rejected=")))
+        return rememberStorageReceipt(storage);
+
+    m_onboardingWorkflowTracking = true;
+    m_onboardingWorkflowExistingPalace = true;
+    m_onboardingWorkflowObserved = false;
+    m_onboardingWorkflowPollCount = 0;
+    m_onboardingWorkflowPhase = QStringLiteral(
+        "fetching-storage-catalog");
+    m_onboardingWorkflowPalaceUri = palaceAddress;
+    m_onboardingWorkflowCatalog = catalogBase64;
+    m_onboardingWorkflowPeerId = peerId;
+    m_onboardingWorkflowAddressesJson = addressesJson;
+    m_onboardingWorkflowAttachPeer = attachPeer;
+    m_onboardingWorkflowInitialRoomReady = false;
+    m_onboardingWorkflowAwaitingInitialRoom = false;
+    setOnboardingWorkflowStatus(
+        QStringLiteral("state=fetching-storage-catalog;") + storage);
+    driveOnboardingWorkflow();
+    return rememberStorageReceipt(storage);
 }
 
 QString LogosPalaceUiBackend::markStorageMaterialized()
@@ -732,6 +1185,22 @@ QString LogosPalaceUiBackend::registerPalaceUser()
     refreshLezState();
     refreshPalaceState();
     return rememberLezReceipt(result);
+}
+
+QString LogosPalaceUiBackend::trackPalaceRegistration()
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+
+    m_palaceRegistrationActionId.clear();
+    m_palaceRegistrationObserved = false;
+    m_palaceRegistrationPollCount = 0;
+    m_palaceRegistrationTracking = true;
+    setPalaceRegistrationWorkflowStatus(
+        QStringLiteral("state=tracking;action=none;registration=pending"));
+    drivePalaceRegistration();
+    return rememberLezReceipt(
+        QStringLiteral("ok;palace-registration-tracking=1"));
 }
 
 QString LogosPalaceUiBackend::refreshPalace()
@@ -936,6 +1405,27 @@ QString LogosPalaceUiBackend::actionStatus(QString actionId)
     return rememberLezReceipt(result);
 }
 
+QString LogosPalaceUiBackend::trackDurableAction(QString actionId)
+{
+    if (!isContextReady())
+        return rememberLezReceipt(unavailableReceipt());
+    if (!isActionId(actionId) || actionId.size() > 20)
+        return rememberLezReceipt(
+            QStringLiteral("rejected=palace-action-invalid"));
+
+    m_durableActionId = actionId;
+    m_durableActionObserved = false;
+    m_durableActionPollCount = 0;
+    m_durableActionTracking = true;
+    setDurableActionStatus(
+        QStringLiteral("state=tracking;action=") + actionId
+        + QStringLiteral(";durable=submitted_to_lez"));
+    driveDurableAction();
+    return rememberLezReceipt(
+        QStringLiteral("ok;action=") + actionId
+        + QStringLiteral(";tracking=1"));
+}
+
 QString LogosPalaceUiBackend::unavailableReceipt() const
 {
     return QStringLiteral("rejected=core-not-ready");
@@ -957,6 +1447,495 @@ QString LogosPalaceUiBackend::rememberLezReceipt(const QString& receipt)
 {
     setLastActionReceipt(receipt);
     return receipt;
+}
+
+void LogosPalaceUiBackend::driveStorageBundle()
+{
+    if (!m_storageBundleTracking || !isContextReady())
+        return;
+    if (m_storageBundlePollCount >= kMaximumStorageBundlePolls) {
+        m_storageBundleTracking = false;
+        setStorageBundleWorkflowStatus(
+            QStringLiteral("rejected=storage-bundle-poll-budget"));
+        return;
+    }
+
+    ++m_storageBundlePollCount;
+    const QString result = modules().palace_core.mvpStorageBundleStatus();
+    refreshStorageState();
+    setStorageBundleWorkflowStatus(result);
+
+    const QString state = statusValue(result, QStringLiteral("state"));
+    if (result.startsWith(QStringLiteral("rejected="))
+        || state == QStringLiteral("degraded")
+        || state == QStringLiteral("verified")
+        || state == QStringLiteral("retained")) {
+        m_storageBundleTracking = false;
+    }
+}
+
+void LogosPalaceUiBackend::drivePalaceRegistration()
+{
+    if (!m_palaceRegistrationTracking || !isContextReady())
+        return;
+    if (m_palaceRegistrationPollCount >= kMaximumPalaceRegistrationPolls) {
+        m_palaceRegistrationTracking = false;
+        setPalaceRegistrationWorkflowStatus(
+            QStringLiteral("rejected=palace-identity-poll-budget"));
+        return;
+    }
+
+    ++m_palaceRegistrationPollCount;
+    if (m_palaceRegistrationActionId.isEmpty()) {
+        const QString result = modules().palace_core.registerPalaceUser();
+        refreshLezState();
+        refreshPalaceState();
+        setPalaceRegistrationWorkflowStatus(result);
+
+        if (result.startsWith(QStringLiteral("rejected="))) {
+            if (!isRetryableDurableActionReceipt(result))
+                m_palaceRegistrationTracking = false;
+            return;
+        }
+        if (statusValue(result, QStringLiteral("registration"))
+                == QStringLiteral("already")) {
+            m_palaceRegistrationTracking = false;
+            return;
+        }
+
+        const QString actionId = statusValue(
+            result, QStringLiteral("action"));
+        if (!isActionId(actionId)) {
+            m_palaceRegistrationTracking = false;
+            setPalaceRegistrationWorkflowStatus(
+                QStringLiteral("rejected=palace-identity-action-missing"));
+            return;
+        }
+        m_palaceRegistrationActionId = actionId;
+    }
+
+    const QString result = m_palaceRegistrationObserved
+        ? modules().palace_core.reconcilePalaceTransition(
+              m_palaceRegistrationActionId)
+        : modules().palace_core.observePalaceTransition(
+              m_palaceRegistrationActionId);
+    refreshLezState();
+    refreshPalaceState();
+    setPalaceRegistrationWorkflowStatus(result);
+
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        if (!isRetryableDurableActionReceipt(result))
+            m_palaceRegistrationTracking = false;
+        return;
+    }
+
+    if (statusValue(result, QStringLiteral("durable"))
+            == QStringLiteral("observed")) {
+        m_palaceRegistrationObserved = true;
+    }
+    const QString durable = statusValue(
+        result, QStringLiteral("durable"));
+    const QString completion = statusValue(
+        result, QStringLiteral("completion"));
+    if (durable == QStringLiteral("finalized")
+        || completion == QStringLiteral("local-committed")
+        || durable == QStringLiteral("rejected")
+        || durable == QStringLiteral("expired")
+        || durable == QStringLiteral("orphaned")) {
+        m_palaceRegistrationTracking = false;
+    }
+}
+
+void LogosPalaceUiBackend::setOnboardingWorkflowFailure(
+    const QString& receipt)
+{
+    m_onboardingWorkflowTracking = false;
+    setOnboardingWorkflowStatus(receipt);
+}
+
+void LogosPalaceUiBackend::setAssetImportFailure(
+    const QString& receipt)
+{
+    setAssetImportStatus(
+        QStringLiteral("state=failed;session=")
+        + m_assetImportSession + QLatin1Char(';') + receipt);
+}
+
+void LogosPalaceUiBackend::resetAssetImportTracking()
+{
+    m_assetImportTracking = false;
+    m_assetImportSession.clear();
+    m_assetImportExpectedSequence = 0;
+    m_assetImportByteLength = 0;
+    m_assetImportBytes = 0;
+}
+
+bool LogosPalaceUiBackend::isRetryableOnboardingOpenReceipt(
+    const QString& receipt) const
+{
+    return isRetryableDurableActionReceipt(receipt)
+        || (statusValue(receipt, QStringLiteral("palace"))
+                == QStringLiteral("rejected")
+            && statusValue(receipt, QStringLiteral("reason"))
+                == QStringLiteral("local-committed-initialize-not-found"));
+}
+
+void LogosPalaceUiBackend::resetOnboardingWorkflowTracking()
+{
+    m_onboardingWorkflowTracking = false;
+    m_onboardingWorkflowObserved = false;
+    m_onboardingWorkflowPollCount = 0;
+    m_onboardingWorkflowActionId.clear();
+}
+
+void LogosPalaceUiBackend::driveOnboardingWorkflow()
+{
+    if (!m_onboardingWorkflowTracking || !isContextReady())
+        return;
+    if (m_onboardingWorkflowPollCount >=
+        kMaximumOnboardingWorkflowPolls) {
+        setOnboardingWorkflowFailure(
+            QStringLiteral("rejected=onboarding-workflow-poll-budget"));
+        return;
+    }
+    ++m_onboardingWorkflowPollCount;
+
+    const auto publish = [this](const QString& phase,
+                                const QString& receipt) {
+        QString status = QStringLiteral("state=") + phase;
+        if (!receipt.isEmpty())
+            status += QLatin1Char(';') + receipt;
+        setOnboardingWorkflowStatus(status);
+    };
+    const auto retryOrFail = [this](const QString& receipt,
+                                    bool retryable) {
+        if (retryable)
+            setOnboardingWorkflowStatus(
+                QStringLiteral("state=") + m_onboardingWorkflowPhase
+                + QLatin1Char(';') + receipt);
+        else
+            setOnboardingWorkflowFailure(receipt);
+    };
+    const auto actionFinished = [](const QString& receipt) {
+        const QString durable = statusValue(
+            receipt, QStringLiteral("durable"));
+        const QString completion = statusValue(
+            receipt, QStringLiteral("completion"));
+        return durable == QStringLiteral("finalized")
+            || completion == QStringLiteral("local-committed");
+    };
+
+    if (m_onboardingWorkflowExistingPalace) {
+        if (m_onboardingWorkflowPhase
+                == QStringLiteral("fetching-storage-catalog")) {
+            const QString result = modules().palace_core
+                .mvpStorageBundleStatus();
+            refreshStorageState();
+            setStorageBundleWorkflowStatus(result);
+            publish(m_onboardingWorkflowPhase, result);
+            const QString state = statusValue(
+                result, QStringLiteral("state"));
+            if (result.startsWith(QStringLiteral("rejected="))
+                || state == QStringLiteral("degraded")) {
+                setOnboardingWorkflowFailure(result);
+                return;
+            }
+            if (state == QStringLiteral("verified")
+                || state == QStringLiteral("retained")) {
+                m_onboardingWorkflowPhase =
+                    QStringLiteral("opening-palace");
+            } else {
+                return;
+            }
+        }
+
+        if (m_onboardingWorkflowPhase
+                == QStringLiteral("opening-palace")) {
+            const QString result = modules().palace_core.openPalace(
+                m_onboardingWorkflowPalaceUri);
+            refreshPalaceState();
+            refreshLezState();
+            publish(m_onboardingWorkflowPhase, result);
+            const QString palace = statusValue(
+                result, QStringLiteral("palace"));
+            if (result.startsWith(QStringLiteral("rejected="))
+                || palace == QStringLiteral("rejected")
+                || palace == QStringLiteral("degraded")) {
+                retryOrFail(result, isRetryableOnboardingOpenReceipt(result));
+                return;
+            }
+            if (palace != QStringLiteral("open"))
+                return;
+            m_onboardingWorkflowPhase =
+                QStringLiteral("registering-palace-identity");
+        }
+
+        if (m_onboardingWorkflowPhase
+                == QStringLiteral("registering-palace-identity")) {
+            const QString result = modules().palace_core
+                .registerPalaceUser();
+            refreshLezState();
+            refreshPalaceState();
+            publish(m_onboardingWorkflowPhase, result);
+            if (result.startsWith(QStringLiteral("rejected="))) {
+                retryOrFail(result,
+                            isRetryableDurableActionReceipt(result));
+                return;
+            }
+            if (statusValue(result, QStringLiteral("registration"))
+                    == QStringLiteral("already")) {
+                m_onboardingWorkflowTracking = false;
+                m_onboardingWorkflowPhase = QStringLiteral("complete");
+                publish(m_onboardingWorkflowPhase, result);
+                return;
+            }
+            const QString actionId = statusValue(
+                result, QStringLiteral("action"));
+            if (!isActionId(actionId)) {
+                setOnboardingWorkflowFailure(
+                    QStringLiteral("rejected=palace-identity-action-missing"));
+                return;
+            }
+            m_onboardingWorkflowActionId = actionId;
+            m_onboardingWorkflowObserved = false;
+            m_onboardingWorkflowPhase =
+                QStringLiteral("confirming-palace-identity");
+            return;
+        }
+
+        if (m_onboardingWorkflowPhase
+                == QStringLiteral("confirming-palace-identity")) {
+            const QString result = m_onboardingWorkflowObserved
+                ? modules().palace_core.reconcilePalaceTransition(
+                      m_onboardingWorkflowActionId)
+                : modules().palace_core.observePalaceTransition(
+                      m_onboardingWorkflowActionId);
+            refreshLezState();
+            refreshPalaceState();
+            publish(m_onboardingWorkflowPhase, result);
+            if (result.startsWith(QStringLiteral("rejected="))) {
+                retryOrFail(result,
+                            isRetryableDurableActionReceipt(result));
+                return;
+            }
+            if (statusValue(result, QStringLiteral("durable"))
+                    == QStringLiteral("observed"))
+                m_onboardingWorkflowObserved = true;
+            if (actionFinished(result)) {
+                m_onboardingWorkflowTracking = false;
+                m_onboardingWorkflowPhase = QStringLiteral("complete");
+                publish(m_onboardingWorkflowPhase, result);
+            }
+            return;
+        }
+        return;
+    }
+
+    if (m_onboardingWorkflowPhase
+            == QStringLiteral("checking-room-setup")) {
+        const QString result = modules().palace_core
+            .mvpStorageBundleStatus();
+        refreshStorageState();
+        setStorageBundleWorkflowStatus(result);
+        publish(m_onboardingWorkflowPhase, result);
+        const QString state = statusValue(result, QStringLiteral("state"));
+        if (result.startsWith(QStringLiteral("rejected="))
+            || state == QStringLiteral("degraded")) {
+            setOnboardingWorkflowFailure(result);
+            return;
+        }
+        if (state != QStringLiteral("verified")
+            && state != QStringLiteral("retained"))
+            return;
+        m_onboardingWorkflowPhase = QStringLiteral("creating-palace");
+    }
+
+    if (m_onboardingWorkflowPhase
+            == QStringLiteral("creating-palace")) {
+        const QString result = modules().palace_core.createPalace(
+            m_onboardingWorkflowTitle);
+        refreshLezState();
+        refreshPalaceState();
+        publish(m_onboardingWorkflowPhase, result);
+        if (result.startsWith(QStringLiteral("rejected="))) {
+            retryOrFail(result, isRetryableDurableActionReceipt(result));
+            return;
+        }
+        const QString palaceUri = statusValue(
+            result, QStringLiteral("palace_uri"));
+        if (!isPalaceAddress(palaceUri)) {
+            setOnboardingWorkflowFailure(
+                QStringLiteral("rejected=palace-uri-missing"));
+            return;
+        }
+        m_onboardingWorkflowPalaceUri = palaceUri;
+        m_onboardingWorkflowActionId = QStringLiteral("0");
+        m_onboardingWorkflowObserved = false;
+        m_onboardingWorkflowAwaitingInitialRoom = false;
+        m_onboardingWorkflowPhase = QStringLiteral("confirming-creation");
+        return;
+    }
+
+    const bool confirmingCreation = m_onboardingWorkflowPhase
+        == QStringLiteral("confirming-creation");
+    const bool confirmingInitialRoom = m_onboardingWorkflowPhase
+        == QStringLiteral("confirming-initial-room-state");
+    if (confirmingCreation || confirmingInitialRoom) {
+        const QString result = m_onboardingWorkflowObserved
+            ? modules().palace_core.reconcilePalaceTransition(
+                  m_onboardingWorkflowActionId)
+            : modules().palace_core.observePalaceTransition(
+                  m_onboardingWorkflowActionId);
+        refreshLezState();
+        refreshPalaceState();
+        publish(m_onboardingWorkflowPhase, result);
+        if (result.startsWith(QStringLiteral("rejected="))) {
+            retryOrFail(result, isRetryableDurableActionReceipt(result));
+            return;
+        }
+        if (statusValue(result, QStringLiteral("durable"))
+                == QStringLiteral("observed"))
+            m_onboardingWorkflowObserved = true;
+        if (!actionFinished(result))
+            return;
+        if (confirmingCreation) {
+            m_onboardingWorkflowPhase =
+                QStringLiteral("preparing-initial-room-state");
+            m_onboardingWorkflowObserved = false;
+            return;
+        }
+        m_onboardingWorkflowInitialRoomReady = true;
+        m_onboardingWorkflowAwaitingInitialRoom = false;
+        m_onboardingWorkflowPhase = QStringLiteral("opening-created-palace");
+        m_onboardingWorkflowObserved = false;
+        return;
+    }
+
+    if (m_onboardingWorkflowPhase
+            == QStringLiteral("preparing-initial-room-state")) {
+        const QString result = modules().palace_core.openPalace(
+            m_onboardingWorkflowPalaceUri);
+        refreshPalaceState();
+        refreshLezState();
+        publish(m_onboardingWorkflowPhase, result);
+        const QString palace = statusValue(
+            result, QStringLiteral("palace"));
+        if (result.startsWith(QStringLiteral("rejected="))
+            || palace == QStringLiteral("rejected")
+            || palace == QStringLiteral("degraded")) {
+            retryOrFail(result, isRetryableOnboardingOpenReceipt(result));
+            return;
+        }
+        if (palace == QStringLiteral("open"))
+            m_onboardingWorkflowPhase =
+                QStringLiteral("creating-initial-room-state");
+        return;
+    }
+
+    if (m_onboardingWorkflowPhase
+            == QStringLiteral("creating-initial-room-state")) {
+        const QString result = modules().palace_core
+            .createInitialRoomState();
+        refreshLezState();
+        refreshPalaceState();
+        publish(m_onboardingWorkflowPhase, result);
+        if (result.startsWith(QStringLiteral("rejected="))) {
+            setOnboardingWorkflowFailure(result);
+            return;
+        }
+        if (statusValue(result, QStringLiteral("initial_room_state"))
+                == QStringLiteral("ready")) {
+            m_onboardingWorkflowInitialRoomReady = true;
+            m_onboardingWorkflowPhase =
+                QStringLiteral("opening-created-palace");
+            return;
+        }
+        const QString actionId = statusValue(
+            result, QStringLiteral("action"));
+        if (!isActionId(actionId)) {
+            setOnboardingWorkflowFailure(
+                QStringLiteral("rejected=initial-room-state-action"));
+            return;
+        }
+        m_onboardingWorkflowActionId = actionId;
+        m_onboardingWorkflowObserved = false;
+        m_onboardingWorkflowAwaitingInitialRoom = true;
+        m_onboardingWorkflowPhase =
+            QStringLiteral("confirming-initial-room-state");
+        return;
+    }
+
+    if (m_onboardingWorkflowPhase
+            == QStringLiteral("opening-created-palace")) {
+        const QString result = modules().palace_core.openPalace(
+            m_onboardingWorkflowPalaceUri);
+        refreshPalaceState();
+        refreshLezState();
+        publish(m_onboardingWorkflowPhase, result);
+        const QString palace = statusValue(
+            result, QStringLiteral("palace"));
+        if (result.startsWith(QStringLiteral("rejected="))
+            || palace == QStringLiteral("rejected")
+            || palace == QStringLiteral("degraded")) {
+            retryOrFail(result, isRetryableOnboardingOpenReceipt(result));
+            return;
+        }
+        if (palace != QStringLiteral("open"))
+            return;
+        if (m_onboardingWorkflowInitialRoomReady) {
+            resetOnboardingWorkflowTracking();
+            m_onboardingWorkflowPhase = QStringLiteral("complete");
+            publish(m_onboardingWorkflowPhase, result);
+        } else {
+            m_onboardingWorkflowPhase =
+                QStringLiteral("preparing-initial-room-state");
+        }
+    }
+}
+
+void LogosPalaceUiBackend::driveDurableAction()
+{
+    if (!m_durableActionTracking || !isContextReady())
+        return;
+    if (m_durableActionPollCount >= kMaximumDurableActionPolls) {
+        m_durableActionTracking = false;
+        setDurableActionStatus(
+            QStringLiteral("rejected=palace-action-poll-budget"));
+        return;
+    }
+
+    ++m_durableActionPollCount;
+    const QString result = m_durableActionObserved
+        ? modules().palace_core.reconcilePalaceTransition(
+              m_durableActionId)
+        : modules().palace_core.observePalaceTransition(
+              m_durableActionId);
+    refreshLezState();
+
+    if (result.startsWith(QStringLiteral("rejected="))) {
+        setDurableActionStatus(result);
+        if (!isRetryableDurableActionReceipt(result))
+            m_durableActionTracking = false;
+        return;
+    }
+
+    setDurableActionStatus(result);
+    if (statusValue(result, QStringLiteral("durable"))
+            == QStringLiteral("observed")) {
+        m_durableActionObserved = true;
+    }
+
+    const QString durable = statusValue(
+        result, QStringLiteral("durable"));
+    const QString completion = statusValue(
+        result, QStringLiteral("completion"));
+    if (durable == QStringLiteral("finalized")
+        || completion == QStringLiteral("local-committed")
+        || durable == QStringLiteral("rejected")
+        || durable == QStringLiteral("expired")
+        || durable == QStringLiteral("orphaned")) {
+        m_durableActionTracking = false;
+    }
 }
 
 QString LogosPalaceUiBackend::rememberModerationReceipt(
@@ -1026,12 +2005,12 @@ void LogosPalaceUiBackend::refreshDeliveryState()
         modules().palace_core.participantProjection());
 }
 
-void LogosPalaceUiBackend::refreshDeliveryNodeEvidence()
+void LogosPalaceUiBackend::refreshDeliveryNodeStatus()
 {
     if (!isContextReady())
         return;
-    setDeliveryNodeEvidence(
-        modules().palace_core.deliveryNodeEvidence());
+    setDeliveryNodeStatus(
+        modules().palace_core.deliveryNodeStatus());
 }
 
 void LogosPalaceUiBackend::refreshStorageState()

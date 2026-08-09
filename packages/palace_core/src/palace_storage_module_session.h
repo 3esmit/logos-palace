@@ -275,7 +275,7 @@ public:
         const std::string& destinationPath,
         std::uint64_t maxBytes,
         std::uint32_t chunkBytes = 0U);
-    // Gate3 bootstrap seam: fetch a LEZ-finalized Palace manifest CID into a
+    // Catalog bootstrap seam: fetch a LEZ-finalized Palace manifest CID into a
     // bounded temporary destination before catalog structure is known.
     StorageModuleSessionTransition beginBootstrapFetch(
         const std::string& domainOperationId,

@@ -11,26 +11,6 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Network)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
 string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 
-option(
-    PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE
-    "Build test-only Delivery and Storage acceptance fixtures"
-    OFF
-)
-
-set(PALACE_DELIVERY_ACCEPTANCE_SOURCES)
-set(PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS)
-if(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    list(
-        APPEND PALACE_DELIVERY_ACCEPTANCE_SOURCES
-        tests/fixtures/palace_delivery_acceptance_fixture.h
-        tests/fixtures/palace_delivery_acceptance_fixture.cpp
-    )
-    list(
-        APPEND PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS
-        tests/fixtures
-    )
-endif()
-
 logos_module(
     NAME ${MODULE_NAME}
     SOURCES
@@ -40,8 +20,6 @@ logos_module(
         src/palace_sha256.cpp
         src/palace_initial_authoring.h
         src/palace_initial_authoring.cpp
-        src/palace_application_round_trip.h
-        src/palace_application_round_trip.cpp
         src/palace_authority.h
         src/palace_authority.cpp
         src/palace_delivery.h
@@ -50,7 +28,6 @@ logos_module(
         src/palace_delivery_session.cpp
         src/palace_delivery_bridge.h
         src/palace_delivery_bridge.cpp
-        ${PALACE_DELIVERY_ACCEPTANCE_SOURCES}
         src/palace_callback_lifetime.h
         src/palace_projection.h
         src/palace_projection.cpp
@@ -123,13 +100,6 @@ logos_module(
         src/palace_core_impl.cpp
     INCLUDE_DIRS
         src
-        ${PALACE_DELIVERY_ACCEPTANCE_INCLUDE_DIRS}
 )
 
 target_link_libraries(${MODULE_NAME}_module_plugin PRIVATE OpenSSL::Crypto Qt6::Core Qt6::Gui Qt6::Network)
-if(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    target_compile_definitions(
-        ${MODULE_NAME}_module_plugin
-        PRIVATE PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE=1
-    )
-endif()

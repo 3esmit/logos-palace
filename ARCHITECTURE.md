@@ -34,7 +34,8 @@ logos_palace_ui
 
 The concrete package names are `logos_palace_ui`, `palace_core`, `palace_vm`,
 `delivery_module`, `storage_module`, and `lez_core`. `palace_core` has one
-production build path, which Gate 3 uses with production identities.
+production build path. Test fixtures are compiled only by the contract-test
+target under `packages/palace_core/tests`.
 
 ## Module responsibilities
 
@@ -44,6 +45,27 @@ Owns presentation and user input. It calls only the generated `palace_core`
 surface. Dynamic images are opaque verified handles resolved by Basecamp; QML
 does not receive arbitrary local paths, network clients, wallet handles, or
 signing keys.
+
+The QML composition root coordinates focused product surfaces:
+
+- `onboarding/` presents explicit Create and Join flows;
+- `room/` owns the room canvas, participant projection, toolbar, speech, and
+  chat controls;
+- `admin/` owns capability-driven room, asset, people, prop, and diagnostics
+  panels;
+- `components/` contains shared readiness, status, and empty-state visuals.
+
+`PalaceUiController` in the generated UI backend owns refresh scheduling,
+bounded onboarding and asset-import workflows, durable-action and
+Palace-identity observation/reconciliation, retry classification, and
+cancellation on teardown. `LogosPalaceUiBackend` exposes semantic LEZ,
+identity, Storage-preparation, Storage-bundle, registration, and asset-import
+commands used by Create, Join, Recover, and authoring. QML presents workflow
+state and submits product intent; it does not invoke Core stage sequencing,
+durable-action, Storage-bundle, or registration observation loops.
+
+The UI exposes human node and recovery labels. LEZ, Storage, and Delivery
+receipts remain secondary diagnostics; they are not the user-facing workflow.
 
 ### `palace_core`
 
@@ -61,6 +83,16 @@ Owns the trust-bearing composition:
 
 External results are validated at their owning boundary before changing
 user-visible or persisted state.
+
+Application behavior is split into typed, independently tested boundaries
+where state ownership is already clear: `PalaceInitialAuthoring` builds create
+and initial-room instructions, `AssetAuthoringCatalog` owns staged asset
+state, Storage catalog/session classes own verified content lifecycle,
+`PalaceRoomTransitionCoordinator` owns crash-safe room entry, and the LEZ
+authority/coordinator/replay classes own durable action and finality state.
+`PalaceCoreImpl` remains the outer universal-module composition boundary that
+connects those services to platform callbacks and converts typed results to
+the existing string surface; it is not a second application state model.
 
 ### `palace_vm`
 
@@ -142,7 +174,10 @@ verified handle. Publication revalidates the handle; UI-provided paths are
 never accepted.
 
 Core stages a verified PNG atomically in an owner-only, per-instance producer
-root after a bounded full decode. Basecamp accepts only the lowercase
+root after a bounded full decode. The UI controller owns the import session,
+byte budget, chunk sequence, commit, and cancellation boundary; the file
+bridge supplies only the selected opaque capability and immutable chunk bytes.
+Basecamp accepts only the lowercase
 SHA-256-addressed `image://basecamp-verified/...` handle from a declared direct
 Core dependency. It proves canonical producer-root containment and rechecks
 the encoded digest, PNG signature/structure, decode, 4096-pixel dimension
@@ -197,94 +232,14 @@ projection, and intent removal in order; startup keeps participant writes
 blocked until both journal observations agree and recovery completes.
 Finalized bundles restore transactionally. A strict finalized-history scanner
 and pure rebuild seam exist, but automatic missing-bundle reconstruction is
-still an integration/release gate.
+still an integration/release blocker.
 
-## Release orchestration and process ownership
+## Product validation
 
-The full runner has one deep release-control boundary:
+The supported compiled story is [`scripts/run-palace-e2e.sh`](scripts/run-palace-e2e.sh). It receives runtime and asset inputs explicitly, installs independent Basecamp profiles, drives normal UI controls, and writes one path-free user-story report plus local screenshots. The report covers operator startup, onboarding, authoring, room interaction, administration, durable door transition, provider shutdown, and restart recovery.
 
-```text
-owner-only program/root lock
-  -> exact flock supervisor (sole lock descriptor)
-  -> pdeath-kill-coupled immutable runner
-  -> prior-claim scope retirement
-  -> versioned active-run claim
-  -> planned transient scope + stop-before-exec barrier
-  -> attested gate command
-  -> exact unit/slice cleanup and unload
-  -> strict report reopening
-  -> completed claim
-  -> allowlist-only public evidence
-```
+Unit tests cover Core and VM contracts. QML/component checks cover the composition root and focused product surfaces. Binary audit checks ensure released Core/UI artifacts contain no fixture identities, embedded assets, or test-only commands. Public-testnet finality, creator-removal retention, and reconstruction evidence remain separate work tracked by issue #2.
 
-The mutable launcher archives the clean Git source into one Nix store snapshot
-and hands off through pinned `flock`, `setpriv`, and Bash executables. The
-canonical `0600` lock and active claim live in the fixed, mode-`0700`
-`/var/tmp/logos-palace-<uid>` directory. The supervisor alone owns the lock
-descriptor. The immutable runner, release mutators, gates, workers, and
-Basecamp processes reject an inherited lock descriptor. Parent PID/start-time,
-executable, exact argv, file identity, kernel lock row, descriptor ownership,
-and contention are reopened before claim mutation.
-
-Standalone Gate 1 and Gate 2 launchers apply the same exclusion invariant to
-their artifact directory. Before scope creation, the attestor reopens the
-exact supervisor-to-runner parent chain, both start times, effective UIDs,
-executables, complete argument vectors, lock device/inode, and file mode. It
-requires exactly one matching descriptor in the `flock` supervisor, none in
-the runner or attestor, one exact `FLOCK` row in `/proc/locks`, and an
-independent contention failure. A second bounded read rejects PID reuse,
-reparenting, argv replacement, descriptor movement, or lock replacement
-during attestation.
-
-Immediately after lock attestation and before any release-state mutation, the
-immutable runner securely reopens the prior active claim. A v2 claim causes
-its exact run slice to be killed if populated, emptied, stopped, and unloaded.
-A legacy claim passes only with no claim-bound process. Malformed or
-cross-owner state fails closed.
-
-Each Gate 1–4 attempt is planned durably before `systemd-run`. A shell barrier
-stops the scope before the gate command can execute; the runner then proves
-the exact unit is a direct child of the per-run slice and contains only the
-stopped leader. Unit-addressed release reopens the PID start time, cgroup, and
-sole-member proof before signaling the unit. The leader then becomes a
-parent-death guardian holding close-on-exec descriptors for the exact
-`cgroup.kill` and `cgroup.procs` files; loss of the lock-coupled runner kills
-the complete gate scope. After its direct gate child exits, the guardian reads
-membership twice. Any member other than the guardian causes an exact cgroup
-kill and a failing guardian exit before signal-handler removal or descriptor
-close, so a daemon cannot survive guardian disarm. A launch marker is removed
-only after matching attestation.
-
-Harness-owned child identity is captured as PID plus `/proc/<pid>/stat` start
-time. When Gate 1–3 must terminate a direct child, a helper compiled from this
-repository calls `pidfd_open`, reopens and compares that start time, then calls
-`pidfd_send_signal`. Destructive cleanup never targets a remembered numeric
-PID or process group. A child that does not exit within the bounded wait makes
-the gate fail; the enclosing exact cgroup remains responsible for descendant
-or daemon residue. Gate 4 requests graceful worker shutdown and likewise
-rejects residue instead of signaling a stored numeric identity.
-
-On interruption, the runner kills and unloads the exact slice, records a
-nonzero or unknown outcome, archives the attempt, and creates a new unit for
-the retry. If exact scope cleanup itself fails, the signal or transition path
-exits immediately without waiting on a numeric background PID or continuing
-report work. A passing report is reusable only when no launch marker remains
-and its scope evidence proves status zero, no residue, and an unloaded slice.
-
-These `systemd` and cgroup controls belong to the Linux acceptance and release
-evidence harness. They do not participate in Palace state transitions,
-contracts, module APIs, persisted schemas, or normal Basecamp runtime
-composition.
-
-The active claim binds source commit, snapshot NAR, runner digest, runtime
-manifest, run directory, GC root, and process-scope identity. Safe pre-Gate-3
-roll-forward retires the predecessor slice and brackets replacement with two
-claim-bound process scans. Gate-3-entered claims cannot roll forward, except
-for allowlisted audited pre-public-write failures whose immutable source,
-reports, and retirement certificate all match exact digests. That recovery
-retains predecessor-local state and still rejects every other entered claim.
-Completed claims bind the compiled report digest and must reopen all evidence
-before public projection.
 
 ## Trust and failure model
 
@@ -299,10 +254,8 @@ before public projection.
   rejected state; cached data is never silently promoted.
 - Removing the creator must not remove finalized records or independently
   retained active content.
-- The release controller assumes the local Unix account and immutable Nix
-  store are trusted. It defends against crashes, stale PIDs, PID reuse,
-  escaped descendants, symlink/path replacement, malformed evidence, and
-  concurrent launch attempts; it is not a hostile same-UID sandbox.
+- The local runner assumes the local Unix account and immutable Nix store are
+  trusted; it is not a hostile same-UID sandbox.
 
 ## Current integration limits
 
@@ -318,16 +271,3 @@ before public projection.
 - Testnet keys, dependency forks, and the deployed program are not
   production-audited.
 - Private rooms and private LEZ state are out of scope for this MVP.
-
-## Release evidence
-
-Unit and contract tests verify seams; portable LGX builds verify packaging.
-Gate 1–3 scripts exercise progressively broader compiled Basecamp slices.
-Release completion still requires one recorded clean-source run covering all
-MVP behavior, hostile inputs, restart/rebuild, creator removal, and
-latency/resource measurements. The full runner accepts a runtime-gate pass
-only after exact claim-bound process cleanup. It requires ten exact decoded
-Gate 4–6 PNG screenshots plus one separately bound Gate 3 Moderation screenshot
-and publishes sanitized evidence only after durable run completion.
-Interrupted-attempt history remains local and is not projected. No individual
-gate should be presented as the final result.

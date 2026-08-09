@@ -19,9 +19,6 @@
 
 #include "palace_action_journal.h"
 #include "palace_callback_lifetime.h"
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-#include "palace_delivery_acceptance_fixture.h"
-#endif
 #include "palace_delivery_bridge.h"
 #include "palace_delivery_identity_store.h"
 #include "palace_delivery_session.h"
@@ -409,15 +406,11 @@ class PalaceCoreImpl : public LogosModuleContext {
 public:
     ~PalaceCoreImpl() override;
 
-    std::string applicationRoundTrip(
-        const std::string& payload) const;
     std::string enterRoom(const std::string& roomId);
     std::string previewSpot(const std::string& spotId);
     std::string useSpot(const std::string& spotId);
     std::string reconcileSpot();
     std::string spotStatus();
-    std::string vmTurnMetrics(const std::string& actionId,
-                              const std::string& phase);
     std::string startLez(const std::string& password);
     std::string lezStatus() const;
     std::string createIdentity(const std::string& displayName);
@@ -442,7 +435,7 @@ public:
                               std::int64_t roomEpoch);
     std::string deliverySessionStatus();
     std::string participantProjection();
-    std::string deliveryNodeEvidence();
+    std::string deliveryNodeStatus();
     std::string say(const std::string& text);
     std::string move(std::int64_t x, std::int64_t y);
     std::string wearProp(const std::string& propId);
@@ -454,8 +447,9 @@ public:
     // external node lifecycle.
     std::string connectStorage();
     std::string storageSessionStatus();
-    // Multi-node mesh: peerId + SPR after Storage is running. Gate 3 uses SPR
-    // as bootstrap-node for peer B/C and peerId for explicit loopback dials.
+    // Multi-node mesh: peerId + SPR after Storage is running. The room content
+    // flow uses SPR as bootstrap-node for peer B/C and peerId for explicit
+    // loopback dials.
     std::string storagePeerEndpoint();
     // Dial an explicit peer (JSON array of multiaddrs). Completes async via
     // storageConnect; success here only means the connect command was sent.
@@ -944,9 +938,6 @@ private:
     palace::AuthorityProjection m_deliveryAuthority;
     std::unique_ptr<palace::PalaceDeliverySession> m_deliverySession;
     std::unique_ptr<palace::DeliverySessionStore> m_deliverySessionStore;
-#if defined(PALACE_ENABLE_DELIVERY_ACCEPTANCE_FIXTURE)
-    palace::DeliveryAcceptanceIdentity m_deliveryAcceptanceIdentity;
-#endif
     palace::PalaceDeliveryIdentity m_deliveryIdentity;
     std::unique_ptr<palace::PalaceDeliveryIdentityRegistration>
         m_deliveryIdentityRegistration;
@@ -1058,7 +1049,7 @@ private:
     // revive local authoring previews while recovery waits for a new graph.
     bool m_storageMvpCatalogStale = false;
     // When true, network/cache MVP fetch dispatch is deferred so the
-    // gate3FetchBundle receipt can return before downloadToUrlV2 blocks on
+    // Catalog-fetch receipt can return before downloadToUrlV2 blocks on
     // storage_download_manifest / GetProviders.
     bool m_storageMvpFetchDispatchPending = false;
     bool m_storageMvpColocatedMaterialized = false;

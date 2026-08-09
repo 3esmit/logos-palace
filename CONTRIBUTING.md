@@ -35,7 +35,7 @@ first. If the fix is absent, keep the fork patch focused and link its issue and
 pull request when updating the pin.
 
 Do not commit credentials, recovery phrases, private keys, node data, generated
-build directories, acceptance artifacts, or local-only project material.
+build directories, E2E artifacts, or local-only project material.
 
 ## Build and checks
 
@@ -59,15 +59,24 @@ nix build \
   .#checks.x86_64-linux.palace-core-contracts
 ```
 
-Run non-live acceptance-control seams:
+Run production boundary and UI checks:
 
 ```sh
-nix build .#checks.x86_64-linux.palace-acceptance-seams
-```
+nix build \
+  .#checks.x86_64-linux.palace-core-production-fixture-audit
 
-Process-control changes also require the live host commands under
-[Build and test](README.md#build-and-test). Those checks use the running
-per-user systemd manager and cannot run inside the Nix build sandbox.
+node --test \
+  tests/palace_ui_lifecycle.test.mjs \
+  tests/basecamp_local_mvp_runner.test.mjs \
+  tests/palace_asset_inputs.test.mjs
+
+qmllint -I packages/logos_palace_ui/src/qml \
+  packages/logos_palace_ui/src/qml/Main.qml \
+  packages/logos_palace_ui/src/qml/components/*.qml \
+  packages/logos_palace_ui/src/qml/onboarding/*.qml \
+  packages/logos_palace_ui/src/qml/room/*.qml \
+  packages/logos_palace_ui/src/qml/admin/*.qml
+```
 
 Run Palace program checks:
 
@@ -89,42 +98,28 @@ Build the complete MVP pre-alpha archive locally:
 ```sh
 rzup install cargo-risczero 3.0.5
 rzup install r0vm 3.0.5
-PALACE_RELEASE_VERSION=v0.1.0-pre-alpha.1 \
+PALACE_RELEASE_VERSION=v0.2.0-pre-alpha.1 \
   ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 ```
 
-The archive includes six LGX packages, `palace.bin`, `palace-image-id`, and a
-checksum manifest. Logos Control UI remains a separate operator add-on.
+The archive includes the three Palace-owned LGX packages, `palace.bin`,
+`palace-image-id`, and a checksum manifest. Delivery, Storage, LEZ Core, and
+Logos Control remain release-index dependencies; Logos Control UI is a
+separate operator add-on.
 
-## Compiled acceptance
-
-Run the narrowest relevant Basecamp harness:
-
-```sh
-./scripts/run-basecamp-gate1.sh
-./scripts/run-basecamp-gate2.sh
-```
-
-The scripts fetch pinned dependencies, use temporary user directories, install
-unsigned development LGXs there, and write ignored evidence under
-`.artifacts/`. Production scenarios three and four are claim-bound and must
-run through the full runner. Never describe a package build or one scenario as
-full MVP acceptance. Pull requests must identify the source snapshot,
-executed checks, and remaining runtime behavior.
-
-The full runner has materially different effects:
+## Compiled local user story
 
 ```sh
-./scripts/run-basecamp-mvp.sh
+PALACE_E2E_ASSET_INPUT_ROOT=/path/to/asset-inputs \
+PALACE_E2E_ASSET_MANIFEST=/path/to/asset-inputs/manifest-v1.json \
+./scripts/run-palace-e2e.sh .artifacts/e2e
 ```
 
-It registers public testnet identities and submits irreversible public-testnet
-LEZ actions to one fixed, initially uninitialized Palace root. It holds a
-canonical owner-only program/root lock, retires any exact prior v2 run scope
-before release-state mutation, and records one immutable source snapshot.
-After production Storage-scenario evidence exists, continue only with the exact resume
-command and run directory printed by the runner. Review and sanitize reports,
-logs, public account and peer IDs, timings, and screenshots before publication.
+The launcher installs explicit package inputs into independent Basecamp
+profiles, starts Storage and LEZ through Logos Control, drives Create/Join,
+asset authoring, room interaction, moderation, door transition, and restart
+recovery, then writes one ignored report plus local screenshots. Public-testnet
+finality remains tracked separately by issue #2.
 
 ## Documentation
 
@@ -144,7 +139,7 @@ Use focused Conventional Commits where practical:
 feat(core): publish verified Storage assets
 fix(program): reject unauthorized state transitions
 test(delivery): cover replay after restart
-docs: document Basecamp acceptance limits
+docs: document Basecamp release limits
 ```
 
 Do not include credentials, local paths, private project notes, generated

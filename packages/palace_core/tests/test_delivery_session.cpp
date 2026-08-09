@@ -322,6 +322,7 @@ LOGOS_TEST(delivery_session_switches_online_room_and_persists_canonical_room) {
     LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
     bringOnline(session);
     CanonicalVerifier verifier;
+    CanonicalSigner signer("carol-key");
 
     LOGOS_ASSERT_TRUE(session.receive(
         roomTopic(), wire(envelope(
@@ -361,7 +362,6 @@ LOGOS_TEST(delivery_session_switches_online_room_and_persists_canonical_room) {
             palace::DeliveryKind::PresenceHello, "Bob")),
         1050, verifier).accepted);
 
-    CanonicalSigner signer("carol-key");
     const palace::DeliverySessionTransition published = session.publish(
         "lounge-message", palace::DeliveryKind::Speech, "hello", 1050, 30,
         signer, verifier);
@@ -396,6 +396,7 @@ LOGOS_TEST(delivery_session_validates_before_live_projection_mutation) {
     session.replaceAllowedProps({{"test-prop", "cid-test-prop"}});
     bringOnline(session);
     CanonicalVerifier verifier;
+    CanonicalSigner signer("carol-key");
 
     LOGOS_ASSERT_TRUE(session.receive(
         roomTopic(), wire(envelope(
@@ -491,6 +492,7 @@ LOGOS_TEST(delivery_session_reconciles_finalized_user_ban_from_live_projection) 
     LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
     bringOnline(session);
     CanonicalVerifier verifier;
+    CanonicalSigner signer("carol-key");
 
     LOGOS_ASSERT_TRUE(session.receive(
         roomTopic(), wire(envelope(
@@ -506,6 +508,10 @@ LOGOS_TEST(delivery_session_reconciles_finalized_user_ban_from_live_projection) 
         1050, verifier);
     LOGOS_ASSERT_TRUE(buffered.accepted);
     LOGOS_ASSERT_FALSE(buffered.projectionChanged);
+    LOGOS_ASSERT_TRUE(session.publish(
+        "queued-before-authority-rebuild", palace::DeliveryKind::Speech,
+        "queued", 1050, 30, signer, verifier).accepted);
+    LOGOS_ASSERT_EQ(session.outboxSize(), static_cast<std::size_t>(1));
 
     palace::AuthoritySnapshotV1 banned = authoritySnapshot();
     banned.bans.push_back({
@@ -514,6 +520,12 @@ LOGOS_TEST(delivery_session_reconciles_finalized_user_ban_from_live_projection) 
 
     LOGOS_ASSERT_TRUE(session.reconcileAuthority());
     LOGOS_ASSERT_TRUE(session.participantSnapshot().empty());
+    LOGOS_ASSERT_EQ(session.outboxSize(), static_cast<std::size_t>(0));
+    const palace::DeliverySessionTransition bannedPublish = session.publish(
+        "rejected-after-authority-rebuild", palace::DeliveryKind::Speech,
+        "blocked", 1051, 30, signer, verifier);
+    LOGOS_ASSERT_FALSE(bannedPublish.accepted);
+    LOGOS_ASSERT_EQ(bannedPublish.reason, std::string("sender-banned"));
     LOGOS_ASSERT_FALSE(session.reconcileAuthority());
 
     LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1052));
@@ -863,6 +875,34 @@ LOGOS_TEST(delivery_session_restart_restores_sequences_outbox_not_live_presence)
     LOGOS_ASSERT_EQ(decoded.envelope.senderSequence,
                     static_cast<std::uint64_t>(3));
     std::filesystem::remove_all(directory);
+}
+
+LOGOS_TEST(delivery_session_rebinds_when_finalized_room_epoch_advances) {
+    palace::AuthorityProjection authority;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(authoritySnapshot(), 1000));
+    palace::PalaceDeliverySession session(authority);
+    LOGOS_ASSERT_TRUE(session.configure(sessionConfig()));
+    bringOnline(session);
+
+    palace::AuthoritySnapshotV1 advanced = authoritySnapshot();
+    advanced.rooms[0].roomEpoch = 11;
+    LOGOS_ASSERT_TRUE(authority.replaceFinalized(advanced, 1001));
+
+    const palace::DeliverySessionTransition rebound =
+        session.rebindRoom("atrium", 11);
+    LOGOS_ASSERT_TRUE(rebound.accepted);
+    LOGOS_ASSERT_EQ(rebound.commands.size(), static_cast<std::size_t>(1));
+    LOGOS_ASSERT_EQ(
+        static_cast<int>(rebound.commands.front().kind),
+        static_cast<int>(palace::DeliverySessionCommandKind::Subscribe));
+    LOGOS_ASSERT_EQ(
+        rebound.commands.front().contentTopic,
+        palace::deriveRoomTopic("logos.test", "palace-1", "atrium", 11));
+    LOGOS_ASSERT_EQ(session.configuration().roomEpoch,
+                    static_cast<std::int64_t>(11));
+    LOGOS_ASSERT_TRUE(session.subscriptionResult(true).accepted);
+    LOGOS_ASSERT_EQ(palace::deliverySessionStateName(session.state()),
+                    std::string("online"));
 }
 
 LOGOS_TEST(delivery_session_restart_can_wait_for_authority_before_rebinding) {
