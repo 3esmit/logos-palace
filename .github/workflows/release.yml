@@ -67,6 +67,8 @@ jobs:
         run: node --test tests/*.test.mjs
 
       - name: Build the release archive
+        env:
+          RISC0_BUILD_LOCKED: "1"
         run: ./scripts/package-prealpha-release.sh .artifacts/prealpha-release
 
       - name: Verify archive contents
