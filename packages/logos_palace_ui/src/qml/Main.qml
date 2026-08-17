@@ -1086,12 +1086,26 @@ Item {
         return null
     }
 
+    function findNamedAncestor(item, name) {
+        var candidate = item
+        while (candidate) {
+            if (candidate.objectName === name)
+                return candidate
+            candidate = candidate.parent
+        }
+        return null
+    }
+
     function ensureAdminControlVisible(objectName) {
         var name = String(objectName || "")
-        var content = findNamedDescendant(root, "palaceAdminContent")
         var control = findNamedDescendant(root, name)
-        if (name.length === 0 || !content || !control)
+        if (name.length === 0 || !control)
             return "missing"
+        var content = findNamedAncestor(control, "palaceAdminContent")
+        if (!content)
+            content = findNamedAncestor(control, "palaceBackgroundGrid")
+        if (!content)
+            return "no-scroll-container"
         var contentItem = content.contentItem
         if (!contentItem)
             return "missing-content"

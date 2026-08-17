@@ -100,6 +100,11 @@ canonical_regular PALACE_LOCAL_MVP_CONTROL_LGX
 canonical_regular PALACE_LOCAL_MVP_CORE_LGX
 canonical_regular PALACE_LOCAL_MVP_UI_LGX
 
+basecamp_lib_dir="$(realpath -e -- "$(dirname -- "${PALACE_LOCAL_MVP_BASECAMP}")/../lib" 2>/dev/null || true)"
+if [ -n "${basecamp_lib_dir}" ] && [ -d "${basecamp_lib_dir}" ]; then
+  export LD_LIBRARY_PATH="${basecamp_lib_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
 qt_mcp="$(realpath -e -- "${LOGOS_QT_MCP}" 2>/dev/null || true)"
 if [ -z "${qt_mcp}" ] || [ "${LOGOS_QT_MCP}" != "${qt_mcp}" ] \
   || [ -L "${LOGOS_QT_MCP}" ] || [ ! -d "${qt_mcp}/test-framework" ]; then

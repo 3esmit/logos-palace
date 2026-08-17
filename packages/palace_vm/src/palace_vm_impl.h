@@ -22,7 +22,7 @@ public:
                             const std::string& allowedRooms,
                             bool roomLocked,
                             bool canMutateSharedState,
-                            std::int64_t instructionBudget);
+                            int64_t instructionBudget);
 
     // Compatibility entry point retained for callers compiled against the
     // initial phase API. It rejects because direct finalized execution lacks
@@ -35,7 +35,7 @@ public:
                                      const std::string& allowedRooms,
                                      bool roomLocked,
                                      bool canMutateSharedState,
-                                     std::int64_t instructionBudget);
+                                     int64_t instructionBudget);
 
     // Issues and durably records a provisional turn under one ordered LEZ
     // action. Provisional execution never emits navigation.
@@ -49,7 +49,7 @@ public:
         const std::string& allowedRooms,
         bool roomLocked,
         bool canMutateSharedState,
-        std::int64_t instructionBudget);
+        int64_t instructionBudget);
 
     // Palace Core calls this only after LEZ finality. The exact action,
     // provisional receipt, script, policy, and state must match the durable
@@ -66,7 +66,7 @@ public:
         const std::string& allowedRooms,
         bool roomLocked,
         bool canMutateSharedState,
-        std::int64_t instructionBudget);
+        int64_t instructionBudget);
 
     std::string finalityStatus(const std::string& actionId);
     std::string vmTurnMetrics(const std::string& actionId,

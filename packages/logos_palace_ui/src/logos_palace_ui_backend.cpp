@@ -523,10 +523,10 @@ QString LogosPalaceUiBackend::fetchPngDerivative(QString sourceCid,
     const QString result = modules().palace_core.fetchPngDerivative(
         sourceCid,
         derivativeCid,
-        QVariant::fromValue(static_cast<qulonglong>(byteLength)),
+        static_cast<qulonglong>(byteLength),
         contentSha256,
-        QVariant::fromValue(static_cast<uint>(width)),
-        QVariant::fromValue(static_cast<uint>(height)));
+        static_cast<qulonglong>(width),
+        static_cast<qulonglong>(height));
     refreshStorageState();
     return rememberStorageReceipt(result);
 }
@@ -583,8 +583,7 @@ QString LogosPalaceUiBackend::appendAssetStageChunk(
     const QString result =
         modules().palace_core.appendAssetStageChunk(
             sessionId,
-            QVariant::fromValue(
-                static_cast<qulonglong>(sequence)),
+            static_cast<qulonglong>(sequence),
             base64Chunk);
     refreshStorageState();
     return rememberStorageReceipt(result);
@@ -674,8 +673,7 @@ QString LogosPalaceUiBackend::appendAssetImportChunk(
 
     const QString result = modules().palace_core.appendAssetStageChunk(
         m_assetImportSession,
-        QVariant::fromValue(static_cast<qulonglong>(
-            m_assetImportExpectedSequence)),
+        static_cast<qulonglong>(m_assetImportExpectedSequence),
         base64Chunk);
     if (result.startsWith(QStringLiteral("rejected="))) {
         setAssetImportFailure(result);
@@ -837,10 +835,8 @@ QString LogosPalaceUiBackend::assignPropAsset(
         modules().palace_core.assignPropAsset(
             propId,
             handle,
-            QVariant::fromValue(
-                static_cast<qulonglong>(anchorX)),
-            QVariant::fromValue(
-                static_cast<qulonglong>(anchorY)),
+            static_cast<qulonglong>(anchorX),
+            static_cast<qulonglong>(anchorY),
             layer);
     refreshStorageState();
     return rememberStorageReceipt(result);
