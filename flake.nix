@@ -2,16 +2,18 @@
   description = "Logos Palace public two-room Basecamp MVP";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/8e4ea1c1d0e523cea46850f8fd9466dd35af7cc1";
+    logos-module-builder.url = "github:3esmit/logos-module-builder/1afad12";
     nixpkgs.follows = "logos-module-builder/nixpkgs";
 
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
     basecamp.url = "github:3esmit/logos-basecamp/4313ef96a20887552b1dced32d41347a3c16944b";
     basecamp.flake = false;
-    delivery_module.url = "github:3esmit/logos-delivery-module/delivery_module-v0.1.10";
-    delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
-    storage_module.url = "github:3esmit/logos-storage-module/storage_module-v2.3.0";
-    lez_core.url = "github:3esmit/logos-execution-zone-module/lez_core-v0.4.0-alpha.3";
+    delivery_module.url = "github:3esmit/logos-delivery-module/b6af671";
+    delivery_module.inputs.logos-module-builder.url = "github:3esmit/logos-module-builder?rev=324b459c3f7b59171d249f3ccbcc362403b3fcaf";
+    storage_module.url = "github:3esmit/logos-storage-module/753dc2c";
+    storage_module.inputs.logos-module-builder.follows = "logos-module-builder";
+    lez_core.url = "github:3esmit/logos-execution-zone-module/62b8a89";
+    lez_core.inputs.logos-module-builder.follows = "logos-module-builder";
   };
 
   outputs = inputs@{ nixpkgs, logos-module-builder, ... }:

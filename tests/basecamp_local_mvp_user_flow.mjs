@@ -850,10 +850,13 @@ function participantById(value, userId, label) {
 }
 
 async function openView(session, label, rootName) {
-  await session.app.waitFor(
-    async () => { await session.app.click(label); },
-    { timeout: 90_000, interval: 500, description: `${session.label} ${label} launcher` },
-  );
+  const launcherName = {
+    "Logos Control": "sidebar.app.logos_control_ui",
+    "Logos Palace": "sidebar.app.logos_palace_ui",
+  }[label];
+  if (!launcherName) throw new Error(`Unsupported launcher label: ${label}`);
+  const launcher = await session.findOne("objectName", launcherName, `${label} launcher`);
+  await session.clickObject(launcher, `${label} launcher`);
   return session.findOne("objectName", rootName, `${label} root`);
 }
 
@@ -873,7 +876,7 @@ async function startStorageThroughControl(session, port, discoveryPort, dataDir,
   const configInput = await session.findOne("objectName", "storageConfig", "Storage config");
   const startButton = await session.findOne("objectName", "startStorage", "Storage start");
   const config = {
-    "log-level": "INFO", "listen-ip": "127.0.0.1", nat: "none",
+    "log-level": "INFO", "listen-ip": "127.0.0.1", nat: "extip:127.0.0.1",
     "listen-port": port, "disc-port": discoveryPort, "no-bootstrap-node": true,
     "data-dir": resolve(dataDir),
   };
@@ -1004,7 +1007,23 @@ async function importAsset(session, root, file) {
 }
 
 async function approveAndPublish(session, root, asset) {
-  await session.clickNamed(`palaceAssetApprove-${asset.handle}`, `approve ${asset.label}`);
+  await session.invokeRootMethod(
+    root,
+    "ensureAdminControlVisible",
+    [`palaceAssetApprove-${asset.handle}`],
+  );
+  const approveButton = await session.findOne(
+    "objectName",
+    `palaceAssetApprove-${asset.handle}`,
+    `approve ${asset.label}`,
+  );
+  await session.waitForProperty(
+    approveButton,
+    (state) => state.enabled === true,
+    `approve ${asset.label} enabled`,
+    30_000,
+  );
+  await session.clickObject(approveButton, `approve ${asset.label}`);
   await session.waitForProperty(root, (state) => {
     if (isRejected(state.invocationError)) throw new Error(`asset publication rejected: ${state.invocationError}`);
     let catalog;
@@ -1046,7 +1065,18 @@ async function createCreatorPalace(session) {
   } else if (state.onboardingPhase !== "authoring-rooms") {
     throw new Error(`creator unexpected onboarding phase: ${state.onboardingPhase}`);
   }
-  await session.clickNamed("palaceConnectStorage", "connect creator Storage");
+  const storageButton = await session.findOne(
+    "objectName",
+    "palaceConnectStorage",
+    "connect creator Storage",
+  );
+  await session.waitForProperty(
+    storageButton,
+    (state) => state.enabled === true,
+    "creator Storage button enabled",
+    120_000,
+  );
+  await session.clickObject(storageButton, "connect creator Storage");
   await session.waitForProperty(root, (value) => statusValue(value.storageStatus, "storage") === "running", "creator Storage connection", 120_000);
   const imported = [];
   for (const background of roomBackgrounds) {

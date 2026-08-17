@@ -51,7 +51,7 @@ struct LegacyDirectRootEntry {
 // These are durable Palace state locations from the pre-profile layout.
 // They may be upgraded only into the release profile. Local development must
 // never inherit them because it has a different sequencer trust boundary.
-constexpr std::array<LegacyDirectRootEntry, 20> kLegacyDirectRootEntries{{
+constexpr std::array<LegacyDirectRootEntry, 21> kLegacyDirectRootEntries{{
     {"projection-v1", LegacyDirectRootEntryKind::RegularFile},
     {"action-journal-v1", LegacyDirectRootEntryKind::RegularFile},
     {"action-journal-v2", LegacyDirectRootEntryKind::RegularFile},
@@ -66,6 +66,7 @@ constexpr std::array<LegacyDirectRootEntry, 20> kLegacyDirectRootEntries{{
     {"storage-mvp-catalog-v1", LegacyDirectRootEntryKind::RegularFile},
     {"lez-wallet-config-v1.json", LegacyDirectRootEntryKind::RegularFile},
     {"lez-wallet-storage-v1.json", LegacyDirectRootEntryKind::RegularFile},
+    {"lez-wallet-statistics-v1.json", LegacyDirectRootEntryKind::RegularFile},
     {"palace-core-vm-turn-v1", LegacyDirectRootEntryKind::RegularFile},
     {"verified_assets", LegacyDirectRootEntryKind::Directory},
     {"storage", LegacyDirectRootEntryKind::Directory},

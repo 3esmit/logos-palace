@@ -577,6 +577,7 @@ struct LezWalletPaths {
     std::string reason;
     QString config;
     QString storage;
+    QString statistics;
     bool storageExists = false;
 };
 
@@ -585,25 +586,28 @@ LezWalletPaths prepareLezWalletPaths(
     const std::string& expected)
 {
     if (persistenceRoot.empty())
-        return {false, "missing-instance-root", {}, {}, false};
+        return {false, "missing-instance-root", {}, {}, {}, false};
     if (expected.empty() || expected.size() > 16U * 1024U)
-        return {false, "invalid-wallet-config", {}, {}, false};
+        return {false, "invalid-wallet-config", {}, {}, {}, false};
 
     const QString root = QDir::cleanPath(
         QFileInfo(QString::fromStdString(persistenceRoot))
             .absoluteFilePath());
     if (root.isEmpty() || QFileInfo(root).isSymLink())
-        return {false, "unsafe-instance-root", {}, {}, false};
+        return {false, "unsafe-instance-root", {}, {}, {}, false};
     if (!QDir().mkpath(root) || !QFileInfo(root).isDir())
-        return {false, "instance-root-unavailable", {}, {}, false};
+        return {false, "instance-root-unavailable", {}, {}, {}, false};
 
     const QString config = QDir(root).filePath(
         QStringLiteral("lez-wallet-config-v1.json"));
     const QString storage = QDir(root).filePath(
         QStringLiteral("lez-wallet-storage-v1.json"));
+    const QString statistics = QDir(root).filePath(
+        QStringLiteral("lez-wallet-statistics-v1.json"));
     if (!isUnder(QFileInfo(config).absoluteFilePath(), root)
-        || !isUnder(QFileInfo(storage).absoluteFilePath(), root)) {
-        return {false, "wallet-path-escape", {}, {}, false};
+        || !isUnder(QFileInfo(storage).absoluteFilePath(), root)
+        || !isUnder(QFileInfo(statistics).absoluteFilePath(), root)) {
+        return {false, "wallet-path-escape", {}, {}, {}, false};
     }
 
     const QFileInfo configInfo(config);
@@ -611,12 +615,12 @@ LezWalletPaths prepareLezWalletPaths(
         if (configInfo.isSymLink() || !configInfo.isFile()
             || configInfo.size() < 0
             || static_cast<std::uint64_t>(configInfo.size()) > 16U * 1024U) {
-            return {false, "unsafe-wallet-config", {}, {}, false};
+            return {false, "unsafe-wallet-config", {}, {}, {}, false};
         }
         QFile input(config);
         if (!input.open(QIODevice::ReadOnly)
             || input.readAll().toStdString() != expected) {
-            return {false, "wallet-config-drift", {}, {}, false};
+            return {false, "wallet-config-drift", {}, {}, {}, false};
         }
     } else {
         QSaveFile output(config);
@@ -632,20 +636,26 @@ LezWalletPaths prepareLezWalletPaths(
             || !QFile::setPermissions(
                 config,
                 QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
-            return {false, "wallet-config-write-failed", {}, {}, false};
+            return {false, "wallet-config-write-failed", {}, {}, {}, false};
         }
     }
 
     const QFileInfo storageInfo(storage);
     if (storageInfo.exists()
         && (storageInfo.isSymLink() || !storageInfo.isFile())) {
-        return {false, "unsafe-wallet-storage", {}, {}, false};
+        return {false, "unsafe-wallet-storage", {}, {}, {}, false};
+    }
+    const QFileInfo statisticsInfo(statistics);
+    if (statisticsInfo.exists()
+        && (statisticsInfo.isSymLink() || !statisticsInfo.isFile())) {
+        return {false, "unsafe-wallet-statistics", {}, {}, {}, false};
     }
     return {
         true,
         "accepted",
         config,
         storage,
+        statistics,
         storageInfo.exists(),
     };
 }
@@ -3367,15 +3377,16 @@ std::string PalaceCoreImpl::startLez(const std::string& password)
     if (!m_lezWalletOpened) {
         const std::string configPath = paths.config.toStdString();
         const std::string storagePath = paths.storage.toStdString();
+        const std::string statisticsPath = paths.statistics.toStdString();
         if (paths.storageExists) {
             const std::int64_t opened = modules().lez_core.open(
-                configPath, storagePath, &callError);
+                configPath, storagePath, statisticsPath, &callError);
             if (!callError.ok() || opened != 0)
                 return "rejected=lez-wallet-open";
             m_lezWalletState = "opened";
         } else {
             std::string mnemonic = modules().lez_core.create_new(
-                configPath, storagePath, password, &callError);
+                configPath, storagePath, statisticsPath, password, &callError);
             const bool created = callError.ok() && !mnemonic.empty();
             cleanse(mnemonic);
             if (!created)
@@ -5793,9 +5804,13 @@ std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
                                                 const std::string& derivativeCid,
                                                 std::uint64_t byteLength,
                                                 const std::string& contentSha256,
-                                                std::uint32_t width,
-                                                std::uint32_t height)
+                                                std::uint64_t width,
+                                                std::uint64_t height)
 {
+    if (width > std::numeric_limits<std::uint32_t>::max()
+        || height > std::numeric_limits<std::uint32_t>::max()) {
+        return "rejected=invalid-asset-dimensions";
+    }
     drainStorageCallbacks();
     if (!isContextReady() || !m_verifiedAssetStore
         || !m_storageSession.running()) {
@@ -5817,8 +5832,8 @@ std::string PalaceCoreImpl::fetchPngDerivative(const std::string& sourceCid,
     reference.derivativeCid = derivativeCid;
     reference.byteLength = byteLength;
     reference.mediaType = "image/png";
-    reference.width = width;
-    reference.height = height;
+    reference.width = static_cast<std::uint32_t>(width);
+    reference.height = static_cast<std::uint32_t>(height);
     reference.technicalProfile = "palace-png-v1";
     reference.contentSha256 = contentSha256;
     const auto pending = m_storageAssets.begin(reference, canonicalDownloadsDirectory.toStdString());
@@ -6256,8 +6271,8 @@ std::string PalaceCoreImpl::assignRoomBackground(
 std::string PalaceCoreImpl::assignPropAsset(
     const std::string& propId,
     const std::string& handle,
-    std::uint32_t anchorX,
-    std::uint32_t anchorY,
+    std::uint64_t anchorX,
+    std::uint64_t anchorY,
     const std::string& layer)
 {
     const AssetAuthoringAuthorityStatus authority =
@@ -6265,12 +6280,16 @@ std::string PalaceCoreImpl::assignPropAsset(
     if (!authority.canAuthorAssets) {
         return "rejected=asset-authoring-" + authority.reason;
     }
+    if (anchorX > std::numeric_limits<std::uint32_t>::max()
+        || anchorY > std::numeric_limits<std::uint32_t>::max()) {
+        return "rejected=prop-anchor-invalid";
+    }
     const palace::AssetAuthoringResult result =
         m_assetAuthoring.assignProp(
             propId,
             handle,
-            anchorX,
-            anchorY,
+            static_cast<std::uint32_t>(anchorX),
+            static_cast<std::uint32_t>(anchorY),
             layer,
             authority.draftCreatorAccountIdToBind);
     if (!result.accepted)

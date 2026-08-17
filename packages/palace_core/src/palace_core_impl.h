@@ -432,12 +432,12 @@ public:
     std::string subscribeRoom(const std::string& networkId,
                               const std::string& palaceId,
                               const std::string& roomId,
-                              std::int64_t roomEpoch);
+                              int64_t roomEpoch);
     std::string deliverySessionStatus();
     std::string participantProjection();
     std::string deliveryNodeStatus();
     std::string say(const std::string& text);
-    std::string move(std::int64_t x, std::int64_t y);
+    std::string move(int64_t x, int64_t y);
     std::string wearProp(const std::string& propId);
     std::string removeProp(const std::string& propId);
     std::string refreshPresence();
@@ -461,17 +461,17 @@ public:
     std::string markStorageMaterialized();
     std::string fetchPngDerivative(const std::string& sourceCid,
                                    const std::string& derivativeCid,
-                                   std::uint64_t byteLength,
+                                   uint64_t byteLength,
                                    const std::string& contentSha256,
-                                   std::uint32_t width,
-                                   std::uint32_t height);
+                                   uint64_t width,
+                                   uint64_t height);
     std::string assetStatus(const std::string& derivativeCid) const;
     std::string publishVerifiedPng(const std::string& handle);
     std::string publicationStatus(const std::string& handle) const;
     std::string beginAssetStage(const std::string& label);
     std::string appendAssetStageChunk(
         const std::string& sessionId,
-        std::uint64_t sequence,
+        uint64_t sequence,
         const std::string& canonicalBase64);
     std::string commitAssetStage(
         const std::string& sessionId);
@@ -489,8 +489,8 @@ public:
     std::string assignPropAsset(
         const std::string& propId,
         const std::string& handle,
-        std::uint32_t anchorX,
-        std::uint32_t anchorY,
+        uint64_t anchorX,
+        uint64_t anchorY,
         const std::string& layer);
     std::string publishMvpStorageBundle();
     std::string mvpStorageBundleStatus();
