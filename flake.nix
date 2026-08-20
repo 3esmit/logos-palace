@@ -8,7 +8,7 @@
     # Pinned by flake.lock. Prefer maintained forks for runtime dependencies.
     basecamp.url = "github:3esmit/logos-basecamp/4313ef96a20887552b1dced32d41347a3c16944b";
     basecamp.flake = false;
-    delivery_module.url = "github:3esmit/logos-delivery-module/b6af671";
+    delivery_module.url = "github:3esmit/logos-delivery-module/9287a3412976e4af171df66d0feeb4555179a60d";
     delivery_module.inputs.logos-module-builder.url = "github:3esmit/logos-module-builder?rev=324b459c3f7b59171d249f3ccbcc362403b3fcaf";
     storage_module.url = "github:3esmit/logos-storage-module/753dc2c";
     storage_module.inputs.logos-module-builder.follows = "logos-module-builder";
